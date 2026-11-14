@@ -1,24 +1,32 @@
 # 本次验收记录
 
-日期：2026-11-14。
+日期：2026-11-14。已完成今天确认的基础设施及实际建库任务。
 
-已完成：
+## Git 与依赖
 
-- 本地 `main` 初始化空提交；`codex`、`grok` 从该提交创建，开发提交均位于 `codex`。
-- GitHub SSH 认证成功，origin 使用 SSH；未执行 push。
-- Python 3.12 独立虚拟环境、依赖安装及 `uv.lock`。
-- Ruff lint / format 检查通过；9 项单元测试通过。
-- 37 张业务表的字段合同、UUID/时间约定、枚举长度及复合外键检查通过。
-- 独立 Alembic DDL 可离线编译；SQLAlchemy mapper 和 PostgreSQL DDL 编译通过。
-- 本机 HTTP `/health/live`、`/docs` 返回 200。
-- Windows Uvicorn 事件循环回归测试已复现旧方案失败，并验证显式 SelectorEventLoop 修复。
+- 本地 `main` 初始化空提交，`codex`、`grok` 从该提交创建；全部开发提交均位于 `codex`，未执行 push。
+- GitHub SSH 认证成功，origin 为 `git@github.com:ggwenling/Study_Platform.git`。
+- Python 3.12 独立虚拟环境、uv 依赖安装及 `uv.lock` 已完成。
+- `.env`、虚拟环境和安装缓存已被 Git 忽略，凭据没有提交。
 
-尚待本机管理员步骤及实际 PostgreSQL 验收：
+## 数据库与 Windows 环境
 
-- 首次 C++ 工具安装因已有残缺 Build Tools 注册记录失败；脚本已增加官方 repair / modify 流程。
-- UAC 已由用户处理，PostgreSQL 服务已启动；PowerShell 5 的中文 JSON 编码问题已修复，脚本已进入 Build Tools repair 阶段。
-- pgvector 尚未完成编译安装；`root` 与用户提供的两组候选密码均未通过认证，正等待管理员账号确认；项目数据库尚未创建。
-- 实际 Alembic upgrade/downgrade、数据库约束/权限/向量测试及 checkpointer setup、持久化往返尚未运行。
-- 9 项集成测试当前因未启用测试数据库而跳过；不能将其计为通过。
+- PostgreSQL 18.3 服务已启动，已有其他数据库予以保留。
+- 通过官方维护流程修复现有 Build Tools，安装 MSVC/SDK，实际编译并安装 pgvector 0.8.7。
+- 安装脚本的 PowerShell 5 中文 JSON 解码与含空格路径引用问题已修复，并通过实际执行验证。
+- 独立 `study_platform`、`study_platform_test` 数据库及业务/Graph 运行角色已创建，时区为 UTC。
+- 两个数据库均实际启用 `vector 0.8.7`、`citext 1.8`，Alembic 已升级到 `0001_initial_schema`。
+- 两个数据库均有 37 张 `study` 业务表（不含 Alembic 版本表），以及官方 setup 创建的 4 张 `study_graph` 内部表。
+- `users.status` 从文档的 VARCHAR(16) 调整为 VARCHAR(24)，以容纳原文档声明的 `pending_verification`。
 
-管理员步骤完成后，应更新此记录，并在独立测试数据库完成全部集成测试后再确认实际数据库任务完成。
+## 验收结果
+
+在 `backend` 中启用 `RUN_DB_TESTS=1` 执行 `uv run pytest -q`：**19 passed**。
+
+- 9 项单元测试：健康检查、数据库字段合同、UUID/时间约定、枚举长度、复合外键和 Windows SelectorEventLoop 回归。
+- 10 项集成测试：37 表实际结构与模型一致、Alembic 无漂移、CITEXT 和待验证状态写入、跨 owner/跨 Quiz 外键拒绝、current/active 约束、1024 维向量和余弦查询、业务与 Graph 权限隔离、checkpoint 跨连接持久化。
+- 迁移往返测试只在随机创建的临时空库执行 upgrade → downgrade → upgrade，完成后删除该临时库；没有对开发库或长期测试库执行降级。
+- 实际 HTTP `/health/live`、`/health/ready`、`/docs` 均返回 200。
+- Ruff lint 与 format 检查通过。HTTP 验收用的临时 API 进程已停止；PostgreSQL 服务保持运行。
+
+业务接口、鉴权、RAG、前端，以及复杂业务服务规则属于后续任务；边界见 `database-rules.md`。

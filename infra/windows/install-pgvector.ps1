@@ -67,7 +67,8 @@ try {
     $env:PGROOT = $PGROOT
     Push-Location $Source
     try {
-        & cmd.exe /d /s /c "`"`"$devcmd`" -arch=x64 -host_arch=x64 && nmake /F Makefile.win && nmake /F Makefile.win install`""
+        $env:VSDEVCMD = $devcmd
+        & cmd.exe /d /c 'call "%VSDEVCMD%" -arch=x64 -host_arch=x64 && nmake /F Makefile.win && nmake /F Makefile.win install'
         if ($LASTEXITCODE -ne 0) { throw 'Build or installation failed; inspect target files before retrying.' }
     } finally { Pop-Location }
     foreach ($path in @('lib\vector.dll', 'share\extension\vector.control', 'share\extension\vector--0.8.7.sql')) {
