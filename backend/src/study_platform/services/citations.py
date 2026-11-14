@@ -36,6 +36,12 @@ def citation_dto(db, citation) -> dict:
         ),
         "原文",
     )
+    if locator.get("table_path"):
+        label = " / ".join(
+            f"表格 {part['table']}，第 {part['row']} 行，第 {part['column']} 列"
+            for part in locator["table_path"]
+        )
+        label += f"，段落 {locator['cell_paragraph']}"
     base = f"/api/v1/material-versions/{version.id}"
     page = locator.get("page", locator.get("image"))
     preview = f"{base}/preview"

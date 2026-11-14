@@ -133,7 +133,7 @@ export const api = {
   overview: () => request<Dashboard>('/dashboard/overview'),
   search: (q: string, cursor?: string) => request<Page<SearchItem>>('/search' + query({ q, cursor })),
   capabilities: () => request<Capabilities>('/capabilities'),
-  turn: (conversationId: string, turnId: string) => request<Turn>(turnPath(conversationId, turnId)),
+  turn: (conversationId: string, turnId: string, signal?: AbortSignal) => request<Turn>(turnPath(conversationId, turnId), { signal }),
   cancelTurn: (conversationId: string, turnId: string) => request<Turn>(turnPath(conversationId, turnId) + '/cancel', json('POST')),
 }
 function turnPath(conversationId: string, turnId: string) { return `/conversations/${pathId(conversationId)}/turns/${pathId(turnId)}` }

@@ -28,11 +28,35 @@ export default function LiveChat({ id }: { id: string }) {
   const scroll = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
   const live = chat.cached[id] ?? []
-  const messages = [...new Map([...saved, ...live].map((message) => [message.id, message])).values()]
-    .filter((message) => message.role !== 'system_summary')
+  const rows = new Map(saved.filter((message) => message.conversation_id === id).map((message) => [message.id, message]))
+  for (const message of live) {
+    const stored = rows.get(message.id)
+    const generating = chat.active?.conversationId === id && chat.active.turnId === message.turn_id
+    const storedTerminal = stored && !['pending', 'streaming'].includes(stored.status)
+    if (!storedTerminal || generating) rows.set(message.id, message)
+  }
+  const messages = [...rows.values()].filter((message) => message.role !== 'system_summary')
+    .sort((a, b) => a.sequence_no - b.sequence_no)
   const latest = messages.at(-1)
   const focused = messages.find((message) => message.id === selectedId) ?? [...messages].reverse().find((message) => message.role === 'assistant')
   const activeHere = chat.active?.conversationId === id
+  const recovering = [...new Set(messages.filter((message) => !chat.busy && message.role === 'assistant'
+    && ['pending', 'streaming'].includes(message.status) && message.turn_id !== chat.active?.turnId
+    && !chat.recoveryErrors[message.turn_id!]).map((message) => message.turn_id).filter(Boolean))].join(',')
+
+  useEffect(() => {
+    if (chat.active?.conversationId === id) {
+      // Retry reuses message ids. Drop the previous attempt's saved terminal
+      // snapshot before the active attempt finishes and loses its live priority.
+      setSaved((current) => current.filter((message) => message.role !== 'assistant' || message.turn_id !== chat.active?.turnId))
+    }
+  }, [id, chat.active?.conversationId, chat.active?.turnId])
+
+  useEffect(() => {
+    if (!user || !recovering) return
+    const cleanups = recovering.split(',').map((turnId) => chat.recover(id, turnId))
+    return () => { for (const cleanup of cleanups) cleanup() }
+  }, [id, user, recovering, chat.recover])
 
   useEffect(() => {
     if (!user) return
@@ -110,7 +134,9 @@ export default function LiveChat({ id }: { id: string }) {
                     <>
                       <div className="answer">
                         {message.content && <MarkdownContent>{message.content}</MarkdownContent>}
-                        {statusText[message.status] && <p className="muted" role="status">{statusText[message.status]}</p>}
+                        {message.turn_id && chat.recoveryErrors[message.turn_id] && ['pending', 'streaming'].includes(message.status)
+                          ? <p className="muted" role="status">暂时无法确认生成状态。<Button size="sm" variant="secondary" onClick={() => chat.recover(id, message.turn_id!)}>重新查询状态</Button></p>
+                          : statusText[message.status] && <p className="muted" role="status">{statusText[message.status]}</p>}
                       </div>
                       <div className="citation-list">
                         {message.citations.map((citation) => (

@@ -67,6 +67,16 @@ def test_citation_snapshot_and_unavailable_sources(monkeypatch, tmp_path):
     assert citation_dto(db, citation)["preview_url"].endswith("/preview")
     page.touch()
     assert citation_dto(db, citation)["preview_url"].endswith("/pages/3")
+    citation.locator = {
+        "table_path": [
+            {"table": 2, "row": 1, "column": 3},
+            {"table": 1, "row": 2, "column": 1},
+        ],
+        "cell_paragraph": 2,
+    }
+    assert citation_dto(db, citation)["location_label"] == (
+        "表格 2，第 1 行，第 3 列 / 表格 1，第 2 行，第 1 列，段落 2"
+    )
     material.deleted_at = datetime.now(UTC)
     dto = citation_dto(db, citation)
     assert dto["availability"] == "unavailable"

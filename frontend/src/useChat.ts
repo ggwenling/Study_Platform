@@ -1,10 +1,28 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { api, retryTurn, streamChat } from '@/api/client'
-import type { ChatRequest, Citation, Message, Scope } from '@/api/types'
+import type { ChatRequest, Citation, Message, Scope, Turn } from '@/api/types'
 
 type Active = { conversationId: string; turnId: string; assistantId: string }
 type Pending = { body: ChatRequest; key: string }
+type Recovery = { abort: AbortController; promise: Promise<void> }
+const terminal = (status: string) => ['completed', 'failed', 'stopped', 'cancelled'].includes(status)
+
+// A turn can expire before its message snapshot has caught up.
+function turnMessages(turn: Turn): Message[] {
+  const status = turn.status === 'cancelled' ? 'stopped' : turn.status
+  return turn.messages.map((message) => message.role === 'assistant' && terminal(status)
+    ? { ...message, status: status as Message['status'] } : message)
+}
+
+function pause(signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', finish); resolve() }
+    const timer = setTimeout(finish, 2000)
+    signal.addEventListener('abort', finish, { once: true })
+    if (signal.aborted) finish()
+  })
+}
 
 export function useChat(refresh: () => void, report: (error: unknown) => void) {
   const navigate = useNavigate()
@@ -13,8 +31,16 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
   const [cached, setCached] = useState<Record<string, Message[]>>({})
   const [busy, setBusy] = useState(false)
   const [pending, setPending] = useState<Pending | null>(null)
+  const [recoveryErrors, setRecoveryErrors] = useState<Record<string, boolean>>({})
+  const recoveries = useRef(new Map<string, Recovery>())
+  const callbacks = useRef({ refresh, report })
+  callbacks.current = { refresh, report }
 
-  useEffect(() => () => { controller.current?.abort() }, [])
+  useEffect(() => () => {
+    controller.current?.abort()
+    for (const recovery of recoveries.current.values()) recovery.abort.abort()
+    recoveries.current.clear()
+  }, [])
 
   function merge(id: string, messages: Message[]) {
     setCached((current) => {
@@ -24,8 +50,67 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
     })
   }
 
+  // Read-only recovery: never resubmit a request or start another paid generation.
+  const startRecovery = useCallback((conversationId: string, turnId: string): Recovery => {
+    const existing = recoveries.current.get(turnId)
+    if (existing) return existing
+    const abort = new AbortController()
+    const recovery = { abort, promise: Promise.resolve() }
+    recoveries.current.set(turnId, recovery)
+    setRecoveryErrors((current) => ({ ...current, [turnId]: false }))
+    recovery.promise = (async () => {
+      let timedOut = false
+      const deadline = setTimeout(() => { timedOut = true; abort.abort() }, 120_000)
+      try {
+        while (!abort.signal.aborted) {
+          try {
+            const saved = await api.turn(conversationId, turnId, abort.signal)
+            if (abort.signal.aborted) return
+            merge(conversationId, turnMessages(saved))
+            if (terminal(saved.status)) {
+              callbacks.current.refresh()
+              return
+            }
+          } catch (error) {
+            if (abort.signal.aborted) return
+            if (error instanceof Error && 'status' in error && [401, 403, 404].includes(Number(error.status))) throw error
+          }
+          await pause(abort.signal)
+        }
+      } catch (error) {
+        if (!abort.signal.aborted) {
+          setRecoveryErrors((current) => ({ ...current, [turnId]: true }))
+          callbacks.current.report(error)
+        }
+      } finally {
+        clearTimeout(deadline)
+        if (recoveries.current.get(turnId) === recovery) {
+          recoveries.current.delete(turnId)
+          if (timedOut) setRecoveryErrors((current) => ({ ...current, [turnId]: true }))
+        }
+      }
+    })()
+    return recovery
+  }, [])
+
+  const recover = useCallback((conversationId: string, turnId: string) => {
+    const recovery = startRecovery(conversationId, turnId)
+    return () => {
+      if (recoveries.current.get(turnId) === recovery) {
+        recoveries.current.delete(turnId)
+        recovery.abort.abort()
+      }
+    }
+  }, [startRecovery])
+
   async function run(request: Pending | null, retry?: { conversationId: string; turnId: string }) {
     if (controller.current) return false
+    // A retry reuses the same turn/message ids; discard the older recovery first.
+    if (retry) {
+      recoveries.current.get(retry.turnId)?.abort.abort()
+      recoveries.current.delete(retry.turnId)
+      setRecoveryErrors((current) => ({ ...current, [retry.turnId]: false }))
+    }
     const abort = new AbortController()
     controller.current = abort
     setBusy(true)
@@ -49,6 +134,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
       const events = retry ? retryTurn(retry.conversationId, retry.turnId, abort.signal)
         : streamChat(request!.body, request!.key, abort.signal)
       for await (const event of events) {
+        if (abort.signal.aborted) return false
         if (event.type === 'meta') {
           current = { conversationId: event.conversation_id, turnId: event.turn_id, assistantId: event.assistant_message_id }
           scope = event.scope
@@ -75,20 +161,20 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
       }
       if (current) {
         // Replace transient data with the stored messages and their canonical order.
-        const saved = await api.turn(current.conversationId, current.turnId)
-        merge(current.conversationId, saved.messages)
+        const recovery = startRecovery(current.conversationId, current.turnId)
+        const cancel = () => recovery.abort.abort()
+        abort.signal.addEventListener('abort', cancel, { once: true })
+        try { await recovery.promise } finally { abort.signal.removeEventListener('abort', cancel) }
       }
       return true
     } catch (error) {
       if (abort.signal.aborted) return false
       report(error)
       if (current) {
-        try {
-          const saved = await api.turn(current.conversationId, current.turnId)
-          merge(current.conversationId, saved.messages)
-        } catch {
-          assistant('failed')
-        }
+        const recovery = startRecovery(current.conversationId, current.turnId)
+        const cancel = () => recovery.abort.abort()
+        abort.signal.addEventListener('abort', cancel, { once: true })
+        try { await recovery.promise } finally { abort.signal.removeEventListener('abort', cancel) }
       } else if (request && (error instanceof TypeError || (error instanceof Error && 'retryable' in error && error.retryable))) {
         setPending(request)
       }
@@ -104,23 +190,34 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
   }
 
   async function stop(conversationId: string, turnId: string) {
+    const ownStream = active?.turnId === turnId
+    if (controller.current && !ownStream) return
+    recoveries.current.get(turnId)?.abort.abort()
+    recoveries.current.delete(turnId)
+    // Hold the operation lock until cancellation settles, so its response cannot
+    // overwrite a retry that reuses the same assistant message id.
+    const stopping = new AbortController()
+    controller.current?.abort()
+    controller.current = stopping
+    setBusy(true)
+    setActive(null)
     try {
       const saved = await api.cancelTurn(conversationId, turnId)
-      merge(conversationId, saved.messages)
-      if (active?.turnId === turnId) {
-        controller.current?.abort()
-        controller.current = null
-        setBusy(false)
-        setActive(null)
-      }
+      if (stopping.signal.aborted) return
+      merge(conversationId, turnMessages(saved))
       refresh()
     } catch (error) {
-      report(error)
+      if (!stopping.signal.aborted) report(error)
+    } finally {
+      if (!stopping.signal.aborted) {
+        controller.current = null
+        setBusy(false)
+      }
     }
   }
 
   return {
-    active, busy, cached, stop, pending,
+    active, busy, cached, stop, pending, recover, recoveryErrors,
     send: (body: ChatRequest) => run({ body, key: crypto.randomUUID() }),
     resend: () => pending && run(pending),
     retry: (conversationId: string, turnId: string) => run(null, { conversationId, turnId }),

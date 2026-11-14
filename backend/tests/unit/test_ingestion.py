@@ -40,6 +40,51 @@ def test_docx_paragraph_numbers_preserve_empty_paragraphs(tmp_path, monkeypatch)
     ]
 
 
+def test_docx_table_only_text_and_merged_cells(tmp_path, monkeypatch):
+    path = tmp_path / "source"
+    doc = Document()
+    table = doc.add_table(rows=1, cols=2)
+    table.cell(0, 0).merge(table.cell(0, 1)).text = "merged fact"
+    doc.save(path)
+    monkeypatch.setattr(ingestion, "source_path", lambda _: path)
+    version = SimpleNamespace(
+        id=uuid4(),
+        source_mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    assert list(ingestion.extract(version, tmp_path, lambda _: None)) == [
+        (
+            "merged fact",
+            {"table_path": [{"table": 1, "row": 1, "column": 1}], "cell_paragraph": 1},
+        )
+    ]
+
+
+def test_docx_body_and_nested_tables_follow_document_order(tmp_path, monkeypatch):
+    path = tmp_path / "source"
+    doc = Document()
+    doc.add_paragraph("before")
+    cell = doc.add_table(rows=1, cols=1).cell(0, 0)
+    cell.paragraphs[0].text = "cell before"
+    cell.add_table(rows=1, cols=1).cell(0, 0).text = "nested"
+    cell.add_paragraph("cell after")
+    doc.add_paragraph("after")
+    doc.save(path)
+    monkeypatch.setattr(ingestion, "source_path", lambda _: path)
+    version = SimpleNamespace(
+        id=uuid4(),
+        source_mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    outer = {"table": 1, "row": 1, "column": 1}
+    nested = {"table": 1, "row": 1, "column": 1}
+    assert list(ingestion.extract(version, tmp_path, lambda _: None)) == [
+        ("before", {"paragraph": 1}),
+        ("cell before", {"table_path": [outer], "cell_paragraph": 1}),
+        ("nested", {"table_path": [outer, nested], "cell_paragraph": 1}),
+        ("cell after", {"table_path": [outer], "cell_paragraph": 3}),
+        ("after", {"paragraph": 2}),
+    ]
+
+
 def test_image_format_validation_and_ocr_locations(tmp_path, monkeypatch):
     path = tmp_path / "source"
     Image.new("RGB", (20, 10), "white").save(path, format="PNG")

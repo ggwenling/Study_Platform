@@ -15,7 +15,7 @@ uv sync --locked
 uv run python -m study_platform.cli.bootstrap_database --admin-user postgres
 ```
 
-也可复制根目录 `.env.example` 为 `.env`，自行准备数据库和角色。填写数据库连接、`DEEPSEEK_API_KEY` 和 `EMBEDDING_API_KEY`；不要提交 `.env`。聊天默认使用 `deepseek-flash`，向量默认使用 `qwen3.7-text-embedding-flash`（1024 维）。请确保对应账户有权限和余额；服务不会切换到其他模型。
+脚本会生成随机的 `AUTH_JWT_SECRET`；还需填写 `DEEPSEEK_API_KEY` 和 `EMBEDDING_API_KEY`。也可复制根目录 `.env.example` 为 `.env`，自行准备数据库和角色，填写数据库连接、模型密钥及至少 32 字节的随机 `AUTH_JWT_SECRET`（例如用 `python -c "import secrets; print(secrets.token_urlsafe(32))"` 生成）。不要提交 `.env`。聊天默认使用 `deepseek-flash`，向量默认使用 `qwen3.7-text-embedding-flash`（1024 维）。请确保对应账户有权限和余额；服务不会切换到其他模型。
 
 ```powershell
 uv run alembic upgrade head

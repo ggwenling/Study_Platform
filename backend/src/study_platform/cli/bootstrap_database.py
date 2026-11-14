@@ -95,6 +95,7 @@ def main() -> None:
         ).render_as_string(hide_password=False)
 
     values = {
+        "AUTH_JWT_SECRET": secrets.token_urlsafe(32),
         "DATABASE_URL": url("study_app", roles["study_app"], databases[0], "postgresql+psycopg"),
         "GRAPH_DATABASE_URL": url("study_graph", roles["study_graph"], databases[0], "postgresql"),
         "MIGRATION_DATABASE_URL": url(
