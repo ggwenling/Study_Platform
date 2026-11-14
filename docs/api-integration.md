@@ -6,6 +6,16 @@ API 根路径为 `/api/v1`，交互式接口定义见 `/docs`。示例假设浏�
 
 `POST /auth/register` 接收 `{email, password, display_name}`，`POST /auth/login` 接收 `{email, password}`；成功后服务设置 HttpOnly 的 `study_session` 和可读取的 `study_csrf` Cookie。`GET /me` 获取当前用户，`POST /auth/logout` 退出。登录和注册也会检查 Origin。除登录注册外，写请求需要 Cookie、`X-CSRF-Token`（值为 `study_csrf`）和受允许的 Origin；GET 不需要 CSRF 头。部署 HTTPS 时配置 `COOKIE_SECURE=true`。
 
+登录弹窗可根据 `401` 响应的 `code` 定位输入框。本地联调时在仓库根目录 `.env` 中设置 `LOGIN_DETAILED_ERRORS=true` 并重启后端。公开部署保留默认的 `false`，避免通过错误响应判断邮箱是否对应可登录账号。
+
+| 错误码 | 提示 | 对应输入框 |
+| --- | --- | --- |
+| `invalid_account` | 此邮箱对应的账号不可登录 | 邮箱。未注册、已禁用和已删除账号共用此提示。 |
+| `invalid_password` | 密码错误 | 密码。邮箱对应可登录账号时才返回。 |
+| `invalid_credentials` | 邮箱或密码错误 | 表单通用提示。关闭分项提示时返回。 |
+
+缺少字段或格式错误返回 `422 validation_error`。凭据校验失败时不设置新的会话 Cookie。
+
 在 `frontend/src` 下可直接导入 `./api/client` 中的 `api`、`uploadMaterial`、`streamChat` 和 `retryTurn`。Vite 已配置 `/api` 转发到本地后端。客户端会携带 Cookie，并给写请求添加 CSRF 请求头。完整路径及响应字段见 [OpenAPI 契约](../contracts/frontend.openapi.json)。
 
 业务错误返回 `{code, message, request_id, retryable}`。401 引导登录，403 检查 CSRF 和 Origin，404 表示资源不可访问。

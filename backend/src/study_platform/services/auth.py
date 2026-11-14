@@ -29,12 +29,16 @@ def check_origin(request: Request) -> None:
         raise ApiError(403, "origin_forbidden", "请求来源不被允许")
 
 
+def account_can_login(user: User | None) -> bool:
+    return user is not None and user.status == "active" and user.deleted_at is None
+
+
 def credentials_valid(user: User | None, password: str) -> bool:
     try:
         valid = hasher.verify(user.password_hash if user else _dummy_hash, password)
     except (VerificationError, InvalidHashError):
         valid = False
-    return bool(valid and user and user.status == "active" and user.deleted_at is None)
+    return valid and account_can_login(user)
 
 
 def create_session(db: Session, user: User, response: Response) -> None:

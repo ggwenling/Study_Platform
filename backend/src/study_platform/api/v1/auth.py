@@ -13,6 +13,7 @@ from study_platform.core.errors import ApiError
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import User
 from study_platform.services.auth import (
+    account_can_login,
     check_csrf,
     check_origin,
     create_session,
@@ -29,6 +30,13 @@ class UserDTO(BaseModel):
     email: str
     display_name: str
     avatar_url: str | None = None
+
+
+class LoginErrorDTO(BaseModel):
+    code: str
+    message: str
+    request_id: str
+    retryable: bool
 
 
 class LoginBody(BaseModel):
@@ -68,7 +76,7 @@ def user_payload(user: User) -> dict:
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     session = find_session(db, request)
     user = db.get(User, session.user_id) if session else None
-    if not user or user.status != "active" or user.deleted_at is not None:
+    if user is None or not account_can_login(user):
         raise ApiError(401, "unauthenticated", "请先登录")
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         check_csrf(request, session)
@@ -102,13 +110,31 @@ def register(
     return user_payload(user)
 
 
-@router.post("/auth/login", response_model=UserDTO)
+@router.post(
+    "/auth/login",
+    response_model=UserDTO,
+    responses={
+        401: {
+            "model": LoginErrorDTO,
+            "description": (
+                "凭据错误。默认返回 invalid_credentials。启用 LOGIN_DETAILED_ERRORS 后，"
+                "账号不可登录返回 invalid_account，密码错误返回 invalid_password。"
+            ),
+        },
+        403: {"model": LoginErrorDTO, "description": "请求来源不被允许。"},
+        422: {"model": LoginErrorDTO, "description": "请求字段缺失或格式不正确。"},
+    },
+)
 def login(
     body: LoginBody, request: Request, response: Response, db: Session = Depends(get_db)
 ) -> dict:
     check_origin(request)
     user = db.scalar(select(User).where(User.email == body.email))
     if not credentials_valid(user, body.password):
+        if request.app.state.settings.login_detailed_errors:
+            if not account_can_login(user):
+                raise ApiError(401, "invalid_account", "此邮箱对应的账号不可登录")
+            raise ApiError(401, "invalid_password", "密码错误")
         raise ApiError(401, "invalid_credentials", "邮箱或密码错误")
     create_session(db, user, response)
     return user_payload(user)

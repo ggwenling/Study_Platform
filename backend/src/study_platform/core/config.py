@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     storage_dir: Path = Path(__file__).resolve().parents[4] / ".local" / "storage"
     session_ttl_seconds: int = 604800
     cookie_secure: bool = False
+    login_detailed_errors: bool = False
     allowed_origins: list[str] = [
         "http://localhost:5173", "http://127.0.0.1:5173",
         "http://localhost:8000", "http://127.0.0.1:8000",

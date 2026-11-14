@@ -139,12 +139,32 @@
               }
             }
           },
-          "422": {
-            "description": "Validation Error",
+          "401": {
+            "description": "凭据错误。默认返回 invalid_credentials。启用 LOGIN_DETAILED_ERRORS 后，账号不可登录返回 invalid_account，密码错误返回 invalid_password。",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/LoginErrorDTO"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "请求来源不被允许。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginErrorDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求字段缺失或格式不正确。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginErrorDTO"
                 }
               }
             }
@@ -2063,6 +2083,34 @@
           "password"
         ],
         "title": "LoginBody"
+      },
+      "LoginErrorDTO": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "retryable": {
+            "type": "boolean",
+            "title": "Retryable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id",
+          "retryable"
+        ],
+        "title": "LoginErrorDTO"
       },
       "MaterialPage": {
         "properties": {
