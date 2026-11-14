@@ -184,6 +184,12 @@ class AiWorkflowRun(Base):
         sa.CheckConstraint(
             "jsonb_typeof(source_scope) = 'object'", name="ck_ai_workflow_runs_source_scope_json"
         ),
+        sa.CheckConstraint("answer_mode IN ('knowledge_only', 'with_general')", name="ck_ai_workflow_runs_answer_mode"),
+        sa.ForeignKeyConstraint(["knowledge_base_id", "owner_user_id"],
+            ["study.knowledge_bases.id", "study.knowledge_bases.owner_user_id"],
+            name="fk_ai_workflow_runs_knowledge_base_owner", ondelete="RESTRICT", use_alter=True),
+        sa.Index("ix_ai_workflow_runs_active_rag", "conversation_id", unique=True,
+            postgresql_where=sa.text("status IN ('created', 'running') AND source_scope->>'intent' IN ('qa', 'summary')")),
         sa.CheckConstraint("jsonb_typeof(usage) = 'object'", name="ck_ai_workflow_runs_usage_json"),
         sa.CheckConstraint(
             "status IN ('created', 'running', 'awaiting_student', 'completed', 'failed', 'cancelled')",
@@ -245,11 +251,15 @@ class AiWorkflowRun(Base):
     )
     owner_user_id = sa.Column("owner_user_id", postgresql.UUID(as_uuid=True), nullable=False)
     conversation_id = sa.Column("conversation_id", postgresql.UUID(as_uuid=True), nullable=True)
+    knowledge_base_id = sa.Column("knowledge_base_id", postgresql.UUID(as_uuid=True), nullable=True)
+    answer_mode = sa.Column("answer_mode", sa.String(24), nullable=True)
+    lease_expires_at = sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True)
+    fencing = sa.Column("fencing", sa.BigInteger(), nullable=False, server_default=sa.text("0"))
     job_id = sa.Column("job_id", postgresql.UUID(as_uuid=True), nullable=True)
-    graph_name = sa.Column("graph_name", sa.String(64), nullable=False)
-    graph_version = sa.Column("graph_version", sa.String(50), nullable=False)
-    thread_id = sa.Column("thread_id", sa.String(128), nullable=False)
-    checkpoint_namespace = sa.Column("checkpoint_namespace", sa.String(128), nullable=False)
+    graph_name = sa.Column("graph_name", sa.String(64), nullable=True)
+    graph_version = sa.Column("graph_version", sa.String(50), nullable=True)
+    thread_id = sa.Column("thread_id", sa.String(128), nullable=True)
+    checkpoint_namespace = sa.Column("checkpoint_namespace", sa.String(128), nullable=True)
     last_checkpoint_id = sa.Column("last_checkpoint_id", sa.String(256), nullable=True)
     status = sa.Column("status", sa.String(24), nullable=False)
     source_scope = sa.Column(

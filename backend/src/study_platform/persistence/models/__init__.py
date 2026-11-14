@@ -13,6 +13,7 @@ from .identity import (
     User,
     UserSession,
 )
+from .knowledge import KnowledgeBase
 from .learning import (
     Flashcard,
     FlashcardDeck,
@@ -51,6 +52,7 @@ from .quizzes import (
 )
 
 __all__ = [
+    "KnowledgeBase",
     "User",
     "UserSession",
     "Course",

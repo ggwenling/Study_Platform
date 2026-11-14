@@ -57,13 +57,20 @@ def user_and_course(db):
         db, m.User, email=f"{uuid4()}@example.test", password_hash="hash", display_name="Test"
     )
     course = insert(db, m.Course, owner_user_id=owner, name="Course")
+    insert(db, m.KnowledgeBase, id=course, owner_user_id=owner, name="Course")
     return owner, course
 
 
 def material_and_version(db):
     owner, course = user_and_course(db)
     material = insert(
-        db, m.Material, owner_user_id=owner, course_id=course, title="M", kind="notes"
+        db,
+        m.Material,
+        owner_user_id=owner,
+        course_id=course,
+        knowledge_base_id=course,
+        title="M",
+        kind="notes",
     )
     version = insert(
         db,
@@ -84,7 +91,7 @@ def test_schema_matches_metadata(db):
     expected = {
         table.name: table for table in Base.metadata.tables.values() if table.schema == "study"
     }
-    assert len(expected) == 37
+    assert len(expected) == 38
     assert set(inspector.get_table_names(schema="study")) - {"alembic_version"} == set(expected)
     for name, table in expected.items():
         actual = {column["name"]: column for column in inspector.get_columns(name, schema="study")}
@@ -160,9 +167,17 @@ def test_users_citext_and_pending(db):
 
 def test_material_rejects_other_course_owner(db):
     _, course = user_and_course(db)
-    other, _ = user_and_course(db)
+    other, other_kb = user_and_course(db)
     with pytest.raises(IntegrityError) as error, db.begin_nested():
-        insert(db, m.Material, owner_user_id=other, course_id=course, title="M", kind="notes")
+        insert(
+            db,
+            m.Material,
+            owner_user_id=other,
+            course_id=course,
+            knowledge_base_id=other_kb,
+            title="M",
+            kind="notes",
+        )
     assert error.value.orig.diag.constraint_name == "fk_materials_course_id_owner_user_id"
 
 

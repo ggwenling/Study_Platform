@@ -54,7 +54,7 @@ class Conversation(Base):
         server_default=sa.text("gen_random_uuid()"),
     )
     owner_user_id = sa.Column("owner_user_id", postgresql.UUID(as_uuid=True), nullable=False)
-    course_id = sa.Column("course_id", postgresql.UUID(as_uuid=True), nullable=False)
+    course_id = sa.Column("course_id", postgresql.UUID(as_uuid=True), nullable=True)
     title = sa.Column("title", sa.String(200), nullable=True)
     mode = sa.Column("mode", sa.String(16), nullable=False, server_default=sa.text("'normal'"))
     scope_snapshot = sa.Column(
@@ -103,6 +103,8 @@ class Message(Base):
             use_alter=True,
         ),
         sa.Index("ix_messages_conversation_created", "conversation_id", "created_at", unique=False),
+        sa.Index("ix_messages_user_run", "workflow_run_id", unique=True,
+                 postgresql_where=sa.text("role = 'user' AND workflow_run_id IS NOT NULL")),
         sa.Index("ix_messages_workflow_run", "workflow_run_id", unique=False),
         sa.Index(
             "ix_messages_assistant_run",

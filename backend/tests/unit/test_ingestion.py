@@ -1,0 +1,113 @@
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from docx import Document
+from PIL import Image
+
+from study_platform.services import ingestion
+
+
+def test_text_line_locators_and_chunk_overlap(tmp_path, monkeypatch):
+    path = tmp_path / "source"
+    path.write_text("first\n\nthird\n", encoding="utf-8")
+    monkeypatch.setattr(ingestion, "source_path", lambda _: path)
+    version = SimpleNamespace(id=uuid4(), source_mime="text/plain")
+    assert list(ingestion.extract(version, tmp_path, lambda _: None)) == [
+        ("first", {"line": 1}),
+        ("third", {"line": 3}),
+    ]
+    parts = list(ingestion.chunks("a" * 900))
+    assert list(map(len, parts)) == [800, 220]
+    assert parts[0][-120:] == parts[1][:120]
+
+
+def test_docx_paragraph_numbers_preserve_empty_paragraphs(tmp_path, monkeypatch):
+    path = tmp_path / "source"
+    doc = Document()
+    doc.add_paragraph("first")
+    doc.add_paragraph("")
+    doc.add_paragraph("third")
+    doc.save(path)
+    monkeypatch.setattr(ingestion, "source_path", lambda _: path)
+    version = SimpleNamespace(
+        id=uuid4(),
+        source_mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    assert list(ingestion.extract(version, tmp_path, lambda _: None)) == [
+        ("first", {"paragraph": 1}),
+        ("third", {"paragraph": 3}),
+    ]
+
+
+def test_image_format_validation_and_ocr_locations(tmp_path, monkeypatch):
+    path = tmp_path / "source"
+    Image.new("RGB", (20, 10), "white").save(path, format="PNG")
+    monkeypatch.setattr(ingestion, "source_path", lambda _: path)
+    monkeypatch.setattr(ingestion, "get_settings", lambda: SimpleNamespace(max_image_pixels=1000))
+    line = {"text": "hello", "box": [[1, 2], [3, 4]], "confidence": 0.9}
+    monkeypatch.setattr(ingestion, "ocr_image", lambda _: [line])
+    version = SimpleNamespace(id=uuid4(), source_mime="image/png")
+    assert list(ingestion.extract(version, tmp_path, lambda _: None)) == [
+        ("hello", {"image": 1, "ocr": [line]})
+    ]
+    assert (tmp_path / "page-1.png").is_file()
+    version.source_mime = "image/jpeg"
+    with pytest.raises(ValueError, match="Invalid image"):
+        list(ingestion.extract(version, tmp_path, lambda _: None))
+
+
+def test_stale_or_cancelled_worker_cannot_publish():
+    from datetime import timedelta
+
+    class Database:
+        def __init__(self, job):
+            self.job = job
+
+        def execute(self, _):
+            return SimpleNamespace(first=lambda: (uuid4(), uuid4()))
+
+        def scalar(self, statement):
+            entity = statement.column_descriptions[0]["entity"]
+            if entity in (ingestion.KnowledgeBase, ingestion.Material):
+                return SimpleNamespace(deleted_at=None)
+            return self.job
+
+    job = SimpleNamespace(
+        status="running",
+        fencing=2,
+        cancel_requested_at=None,
+        lease_expires_at=ingestion.now() + timedelta(minutes=1),
+    )
+    with pytest.raises(ingestion.LostLease):
+        ingestion.locked_job(Database(job), uuid4(), 1)
+    job.cancel_requested_at = ingestion.now()
+    with pytest.raises(ingestion.LostLease):
+        ingestion.locked_job(Database(job), uuid4(), 2)
+    job.cancel_requested_at = None
+    job.lease_expires_at = ingestion.now() - timedelta(seconds=1)
+    with pytest.raises(ingestion.LostLease):
+        ingestion.locked_job(Database(job), uuid4(), 2)
+
+
+def test_scanned_pdf_renders_page_and_keeps_original(tmp_path, monkeypatch):
+    path = tmp_path / "source"
+    Image.new("RGB", (200, 100), "white").save(path, format="PDF", resolution=72)
+    original = path.read_bytes()
+    monkeypatch.setattr(ingestion, "source_path", lambda _: path)
+    monkeypatch.setattr(ingestion, "get_settings", lambda: SimpleNamespace(max_pdf_pages=50))
+    observed = []
+
+    def fake_ocr(image):
+        observed.append(image.size)
+        return [{"text": "text", "box": [[1, 2], [3, 4]], "confidence": 0.9}]
+
+    monkeypatch.setattr(ingestion, "ocr_image", fake_ocr)
+    version = SimpleNamespace(id=uuid4(), source_mime="application/pdf", page_count=None)
+    result = list(ingestion.extract(version, tmp_path, lambda _: None))
+    assert version.page_count == 1
+    assert result[0][1]["page"] == 1
+    assert result[0][1]["ocr"][0]["box"] == [[1, 2], [3, 4]]
+    assert observed == [(556, 278)]
+    assert (tmp_path / "page-1.png").is_file()
+    assert path.read_bytes() == original

@@ -166,6 +166,11 @@ class Material(Base):
             ondelete="RESTRICT",
             use_alter=True,
         ),
+        sa.ForeignKeyConstraint(
+            ["knowledge_base_id", "owner_user_id"],
+            ["study.knowledge_bases.id", "study.knowledge_bases.owner_user_id"],
+            name="fk_materials_knowledge_base_owner", ondelete="RESTRICT", use_alter=True,
+        ),
         sa.Index(
             "ix_materials_owner_created", "owner_user_id", sa.text("created_at DESC"), unique=False
         ),
@@ -183,7 +188,8 @@ class Material(Base):
         server_default=sa.text("gen_random_uuid()"),
     )
     owner_user_id = sa.Column("owner_user_id", postgresql.UUID(as_uuid=True), nullable=False)
-    course_id = sa.Column("course_id", postgresql.UUID(as_uuid=True), nullable=False)
+    knowledge_base_id = sa.Column("knowledge_base_id", postgresql.UUID(as_uuid=True), nullable=False)
+    course_id = sa.Column("course_id", postgresql.UUID(as_uuid=True), nullable=True)
     title = sa.Column("title", sa.String(512), nullable=False)
     kind = sa.Column("kind", sa.String(24), nullable=False)
     status = sa.Column("status", sa.String(20), nullable=False, server_default=sa.text("'active'"))
