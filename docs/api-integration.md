@@ -39,6 +39,10 @@ API 根路径为 `/api/v1`，交互式接口定义见 `/docs`。示例假设浏�
 
 ## 对话、引用与恢复
 
+知识库同时作为侧栏项目文件夹。会话的 `project_knowledge_base_id` 表示固定整理归属，独立于每轮检索范围：`POST /conversations` 可指定该字段；`GET /conversations?project_knowledge_base_id=<UUID>` 分页读取项目会话；列表和详情均返回该字段。首页首次发送会自动归入所选知识库，后续切换知识库不改变归属。删除知识库后会话转为未分类，历史消息保留。
+
+`0004_project_conversations` 迁移只将单一有效知识库的旧会话自动归档；多库、空会话及已删除知识库的会话保留未分类。升级后重启 API。
+
 可先 `POST /conversations` 创建对话，也可在首次聊天省略 `conversation_id`。每轮 `POST /chat/stream` 使用 JSON：
 
 ```json

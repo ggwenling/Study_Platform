@@ -55,7 +55,7 @@ it('publishes the fields consumed by the frontend', () => {
     AuthDTO: ['user', 'access_token'],
     KnowledgeBaseDTO: ['id', 'name', 'description', 'created_at', 'updated_at'],
     KnowledgeBasePage: ['items', 'next_cursor'],
-    ConversationDTO: ['id', 'title', 'created_at', 'updated_at'],
+    ConversationDTO: ['id', 'title', 'project_knowledge_base_id', 'created_at', 'updated_at'],
     ConversationPage: ['items', 'next_cursor'],
     MessagePage: ['items', 'next_cursor'],
     MaterialPage: ['items', 'next_cursor'],

@@ -21,7 +21,7 @@ chunk_embeddings: chunk_id model_profile_id embedding embedding_sha256 created_a
 knowledge_points: id course_id parent_id canonical_name description subject_tag difficulty source confidence status created_at updated_at
 knowledge_point_sources: id knowledge_point_id chunk_id material_version_id index_version_id evidence_span confidence created_at
 source_questions: id material_version_id section_id ordinal question_type stem options reference_answer solution locator confidence created_at
-conversations: id owner_user_id course_id title mode scope_snapshot created_at updated_at deleted_at
+conversations: id owner_user_id course_id project_knowledge_base_id title mode scope_snapshot created_at updated_at deleted_at
 messages: id conversation_id role content status sequence_no model_profile prompt_version workflow_run_id usage created_at updated_at
 message_citations: id message_id chunk_id material_version_id index_version_id locator quote_sha256 ordinal created_at
 notes: id owner_user_id course_id title note_type content_md generated_content_md edit_revision edited_at status source_scope generator_profile prompt_version created_at updated_at deleted_at

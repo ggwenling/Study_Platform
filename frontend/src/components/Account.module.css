@@ -9,7 +9,7 @@
 .card h2 { color: #f4f4f4; font-weight: 650; font-size: 22px; }
 .card p { font-size: 13px; }
 .form { display: grid; gap: 8px; padding-inline: 14px; }
-.form input { background: #141414; }
+.form input[name="password"], .form input[name="confirmation"] { background: transparent; }
 .form .submit { width: 100%; background: #f4f4f4; color: #151515; }
 .forgot, .footer { display: flex; align-items: center; gap: 5px; font-size: 13px; }
 .forgot { justify-content: flex-end; margin-top: -6px; }

@@ -97,7 +97,7 @@ export function Account({ open, onOpenChange, onLogin, mode, setMode, next, rese
   }
 
   return <Dialog open={open} onOpenChange={(value) => { if (!busy) onOpenChange(value) }}>
-    <DialogContent className={styles.card} overlayClassName={styles.overlay} title={titles[mode]} description={descriptions[mode]}
+    <DialogContent gentle className={styles.card} overlayClassName={styles.overlay} title={titles[mode]} description={descriptions[mode]}
       headerStart={<div className={styles.brand}><BookOpen size={24} aria-hidden="true" /><strong>知循</strong><span>KnowLoop</span></div>}
       closeLabel="关闭登录窗口"
       onOpenAutoFocus={(event) => {

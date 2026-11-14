@@ -85,8 +85,30 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
                     assert extensions == {"vector", "citext"}
                     assert ("study_graph" in inspector.get_schema_names()) == upgraded
 
+            command.upgrade(config, "0003_bearer_auth")
+            with engine.begin() as connection:
+                owner = connection.scalar(sa.text("""INSERT INTO study.users(email, password_hash, display_name)
+                    VALUES ('migration@example.test', 'unused', 'Migration') RETURNING id"""))
+                kb_ids = [connection.scalar(sa.text("""INSERT INTO study.knowledge_bases(owner_user_id, name)
+                    VALUES (:owner, :name) RETURNING id"""), {"owner": owner, "name": name}) for name in ("A", "B", "Deleted")]
+                connection.execute(sa.text("UPDATE study.knowledge_bases SET deleted_at=now() WHERE id=:id"), {"id": kb_ids[2]})
+                conversations = []
+                for libraries in ([kb_ids[0]], kb_ids[:2], [], [kb_ids[2]]):
+                    conversation = connection.scalar(sa.text("""INSERT INTO study.conversations(owner_user_id, mode)
+                        VALUES (:owner, 'normal') RETURNING id"""), {"owner": owner})
+                    conversations.append(conversation)
+                    for kb in libraries:
+                        connection.execute(sa.text("""INSERT INTO study.ai_workflow_runs(owner_user_id, conversation_id, knowledge_base_id, status)
+                            VALUES (:owner, :conversation, :kb, 'completed')"""), {"owner": owner, "conversation": conversation, "kb": kb})
             command.upgrade(config, "head")
+            with engine.connect() as connection:
+                for conversation, expected_project in zip(conversations, [kb_ids[0], None, None, None], strict=True):
+                    assert connection.scalar(sa.text("SELECT project_knowledge_base_id FROM study.conversations WHERE id=:id"), {"id": conversation}) == expected_project
             check(True)
+            with engine.begin() as connection:
+                for table in ("ai_workflow_runs", "conversations", "knowledge_bases"):
+                    connection.execute(sa.text(f"DELETE FROM study.{table} WHERE owner_user_id=:owner"), {"owner": owner})
+                connection.execute(sa.text("DELETE FROM study.users WHERE id=:owner"), {"owner": owner})
             command.downgrade(config, "base")
             check(False)
             command.upgrade(config, "head")

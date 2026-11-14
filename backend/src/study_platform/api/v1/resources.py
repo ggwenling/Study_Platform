@@ -70,6 +70,7 @@ class ConversationBody(BaseModel):
 
 class ConversationDTO(BaseModel):
     id: UUID
+    project_knowledge_base_id: UUID | None
     title: str | None
     created_at: datetime
     updated_at: datetime
@@ -127,7 +128,11 @@ def kb_dto(kb):
 
 
 def conversation_dto(row):
-    return {k: getattr(row, k) for k in ("id", "title", "created_at", "updated_at")}
+    return {k: getattr(row, k) for k in ("id", "title", "project_knowledge_base_id", "created_at", "updated_at")}
+
+
+class CreateConversationBody(ConversationBody):
+    project_knowledge_base_id: UUID | None = None
 
 
 def owned_conversation(db, user, conversation_id, *, lock=False):
@@ -220,6 +225,9 @@ def delete_knowledge_base(
         raise ApiError(404, "not_found", "Resource not found")
     now = datetime.now(UTC)
     row.deleted_at = now
+    db.execute(sa.update(Conversation).where(
+        Conversation.owner_user_id == user.id, Conversation.project_knowledge_base_id == row.id,
+    ).values(project_knowledge_base_id=None))
     materials = db.scalars(
         sa.select(Material)
         .where(Material.knowledge_base_id == row.id)
@@ -274,28 +282,36 @@ def delete_knowledge_base(
 def list_conversations(
     limit: int = Query(20, ge=1, le=100),
     cursor: UUID | None = None,
+    project_knowledge_base_id: UUID | None = None,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    if project_knowledge_base_id:
+        owned_kb(db, user, project_knowledge_base_id)
     rows, next_cursor = page_rows(
         db,
         sa.select(Conversation).where(
-            Conversation.owner_user_id == user.id, Conversation.deleted_at.is_(None)
+            Conversation.owner_user_id == user.id, Conversation.deleted_at.is_(None),
+            *([Conversation.project_knowledge_base_id == project_knowledge_base_id] if project_knowledge_base_id else []),
         ),
         Conversation,
         limit,
         cursor,
         user.id,
+        scope=(lambda row: row.project_knowledge_base_id == project_knowledge_base_id) if project_knowledge_base_id else None,
     )
     return {"items": [conversation_dto(r) for r in rows], "next_cursor": next_cursor}
 
 
 @router.post("/conversations", response_model=ConversationDTO, status_code=201)
 def create_conversation(
-    body: ConversationBody, db: Session = Depends(get_db), user=Depends(get_current_user)
+    body: CreateConversationBody, db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
+    if body.project_knowledge_base_id:
+        owned_kb(db, user, body.project_knowledge_base_id, lock=True)
     row = Conversation(
-        owner_user_id=user.id, course_id=None, title=body.title, mode="normal", scope_snapshot=[]
+        owner_user_id=user.id, course_id=None, title=body.title, mode="normal", scope_snapshot=[],
+        project_knowledge_base_id=body.project_knowledge_base_id,
     )
     db.add(row)
     db.commit()

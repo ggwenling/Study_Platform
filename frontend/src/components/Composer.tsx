@@ -8,7 +8,7 @@ import { useWorkspace } from '../WorkspaceData'
 import { Button } from '@/components/arc/button/button'
 import { Select } from '@/components/arc/select/select'
 import { Switch } from '@/components/arc/switch/switch'
-import { Textarea } from '@/components/arc/textarea/textarea'
+import { FadingTextarea } from './FadingTextarea'
 import { Tooltip } from '@/components/arc/tooltip/tooltip'
 
 const demoLibrary = [{ value: 'product', label: '产品资料库' }]
@@ -125,7 +125,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
       {!demo && capabilities?.rag === false && <p className="composer-hint">服务器尚未配置问答模型。</p>}
       {summary && <Select label="摘要资料" value={materialId} onValueChange={setMaterialId} options={ready.map(({ id, title }) => ({ value: id, label: title }))} placeholder="选择已就绪资料" />}
       <div className="composer-field">
-        <Textarea
+        <FadingTextarea
           label="提问"
           className="composer-input"
           placeholder={summary ? '你希望提炼哪些内容？' : demo || conversationId ? '向你的知识库提问…' : '向你的资料提问…'}

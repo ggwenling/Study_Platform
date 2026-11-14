@@ -740,6 +740,23 @@
               ],
               "title": "Cursor"
             }
+          },
+          {
+            "name": "project_knowledge_base_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Knowledge Base Id"
+            }
           }
         ],
         "responses": {
@@ -781,7 +798,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ConversationBody"
+                "$ref": "#/components/schemas/CreateConversationBody"
               }
             }
           }
@@ -2248,6 +2265,18 @@
             "format": "uuid",
             "title": "Id"
           },
+          "project_knowledge_base_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Knowledge Base Id"
+          },
           "title": {
             "anyOf": [
               {
@@ -2273,6 +2302,7 @@
         "type": "object",
         "required": [
           "id",
+          "project_knowledge_base_id",
           "title",
           "created_at",
           "updated_at"
@@ -2307,6 +2337,31 @@
           "next_cursor"
         ],
         "title": "ConversationPage"
+      },
+      "CreateConversationBody": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "default": "新对话"
+          },
+          "project_knowledge_base_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Knowledge Base Id"
+          }
+        },
+        "type": "object",
+        "title": "CreateConversationBody"
       },
       "DashboardDTO": {
         "properties": {

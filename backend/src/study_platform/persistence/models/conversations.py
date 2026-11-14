@@ -9,6 +9,12 @@ from study_platform.persistence.base import Base
 class Conversation(Base):
     __tablename__ = "conversations"
     __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["project_knowledge_base_id", "owner_user_id"],
+            ["study.knowledge_bases.id", "study.knowledge_bases.owner_user_id"],
+            name="fk_conversations_project_owner", ondelete="RESTRICT", use_alter=True,
+        ),
+        sa.Index("ix_conversations_owner_project_created", "owner_user_id", "project_knowledge_base_id", sa.text("created_at DESC")),
         sa.UniqueConstraint("id", "owner_user_id", name="uq_conversations_id_owner_user_id"),
         sa.CheckConstraint(
             "jsonb_typeof(scope_snapshot) = 'array'", name="ck_conversations_scope_snapshot_json"
@@ -55,6 +61,7 @@ class Conversation(Base):
     )
     owner_user_id = sa.Column("owner_user_id", postgresql.UUID(as_uuid=True), nullable=False)
     course_id = sa.Column("course_id", postgresql.UUID(as_uuid=True), nullable=True)
+    project_knowledge_base_id = sa.Column(postgresql.UUID(as_uuid=True), nullable=True)
     title = sa.Column("title", sa.String(200), nullable=True)
     mode = sa.Column("mode", sa.String(16), nullable=False, server_default=sa.text("'normal'"))
     scope_snapshot = sa.Column(

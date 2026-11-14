@@ -137,6 +137,8 @@ def test_scope_switch_excludes_old_history_and_enforces_owner(chat_db):
     second, _, _ = chat.prepare(s.owner, request(s.kb_b, conv), uuid4().hex)
     scope, chunks, history = chat.context(second)
     assert scope["knowledge_base_id"] == str(s.kb_b)
+    with s.factory() as db:
+        assert db.get(Conversation, conv).project_knowledge_base_id == s.kb_a
     assert chunks == [] and history == []
     with pytest.raises(ApiError) as error:
         chat.turn(s.outsider, conv, second)

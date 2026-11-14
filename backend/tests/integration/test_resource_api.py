@@ -60,6 +60,30 @@ def signup(http):
     return UUID(result.json()["user"]["id"])
 
 
+def test_project_conversation_ownership_paging_and_library_deletion(resource_client):
+    http, _ = resource_client
+    signup(http)
+    kb = http.post("/knowledge-bases", json={"name": "Project"}).json()["id"]
+    other = http.post("/knowledge-bases", json={"name": "Other"}).json()["id"]
+    first = http.post("/conversations", json={"project_knowledge_base_id": kb}).json()
+    second = http.post("/conversations", json={"project_knowledge_base_id": kb}).json()
+    outside = http.post("/conversations", json={"project_knowledge_base_id": other}).json()
+    params = {"project_knowledge_base_id": kb, "limit": 1}
+    page = http.get("/conversations", params=params).json()
+    assert len(page["items"]) == 1 and page["next_cursor"]
+    assert page["items"][0]["project_knowledge_base_id"] == kb
+    next_page = http.get("/conversations", params={**params, "cursor": page["next_cursor"]}).json()
+    assert {page["items"][0]["id"], next_page["items"][0]["id"]} == {first["id"], second["id"]}
+    assert http.get("/conversations", params={**params, "cursor": outside["id"]}).status_code == 400
+    owner_headers = dict(http.headers)
+    signup(http)
+    assert http.post("/conversations", json={"project_knowledge_base_id": kb}).status_code == 404
+    assert http.get("/conversations", params=params).status_code == 404
+    http.headers.update(owner_headers)
+    assert http.delete(f"/knowledge-bases/{kb}").status_code == 204
+    assert http.get(f'/conversations/{first["id"]}').json()["project_knowledge_base_id"] is None
+
+
 def test_resources_ownership_pagination_and_tombstones(resource_client):
     http, db = resource_client
     owner = signup(http)

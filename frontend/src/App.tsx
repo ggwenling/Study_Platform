@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { ArrowUpRight, BookOpen, ChevronRight, History, Layers, MessageCircle, PanelLeft, Search, Settings } from 'lucide-react'
+import { BookOpen, ChevronRight, History, Layers, MessageCircle, PanelLeft, Search, Settings } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { Button } from '@/components/arc/button/button'
@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogTrigger } from '@/components/arc/dialog/di
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { Home } from './components/Home'
+import { ProjectNavigation } from './components/ProjectNavigation'
 import { Account } from './components/Account'
 import type { AccountMode } from './components/Account'
 import { WorkspaceData, useWorkspace } from './WorkspaceData'
@@ -151,7 +152,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
   sessionState: 'loading' | 'ready' | 'error'
   retrySession: () => void
 }) {
-  const { user, recent, loading, notify, report, requireLogin } = useWorkspace()
+  const { user, notify, report, requireLogin } = useWorkspace()
   const [navOpen, setNavOpen] = useState(() => !window.matchMedia('(max-width: 480px)').matches)
   const [searchOpen, setSearchOpen] = useState(false)
   const navigate = useNavigate()
@@ -196,18 +197,8 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             {navigation.map(({ label, path, icon: Icon }) => (
               <NavLink key={path} to={path} end><Icon size={21} strokeWidth={1.7} />{label}</NavLink>
             ))}
-            {isChat && (
-              <DialogTrigger asChild>
-                <Button variant="ghost" className="sidebar-search"><Search size={21} strokeWidth={1.7} />搜索会话</Button>
-              </DialogTrigger>
-            )}
           </nav>
-          <section className="recent">
-            <h2>最近对话</h2>
-            {!recent.length && <p>{loading ? '正在读取…' : user ? '暂无最近对话' : '登录后查看最近对话'}</p>}
-            {recent.slice(0, 6).map((conversation) => <NavLink key={conversation.id} className="recent-link" to={`/chat/${conversation.id}`}>{conversation.title || '未命名对话'}</NavLink>)}
-            <NavLink to="/chat/demo" className="demo-link">查看示例会话 <ArrowUpRight size={14} /></NavLink>
-          </section>
+          <ProjectNavigation />
           {isChat && <div className="workspace-label"><DropdownMenu label={user?.display_name || '个人空间'} icon={<span className="account-avatar">{user?.display_name.slice(0, 1) || 'K'}</span>} items={accountItems} /></div>}
         </div>
       </aside>

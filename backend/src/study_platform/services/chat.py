@@ -130,7 +130,7 @@ def prepare(owner: UUID, data: dict, key: str):
                 raise ApiError(409, "conversation_busy", "会话已有正在生成的回答")
         else:
             conv = Conversation(id=uuid4(), owner_user_id=owner, title=data["content"][:80],
-                                mode="normal", scope_snapshot=[])
+                                mode="normal", scope_snapshot=[], project_knowledge_base_id=kb.id)
             db.add(conv)
             db.flush()
         selected = data.get("material_ids")
