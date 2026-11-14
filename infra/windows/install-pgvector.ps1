@@ -41,9 +41,8 @@ try {
         if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'Build Tools installer signature is not valid Microsoft Corporation signature.' }
         $installPath = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools'
         $instances = @()
-        if (Test-Path -LiteralPath $vswhere) { $instances = @(& $vswhere -all -products '*' -format json -utf8 | ConvertFrom-Json) }
-        $existing = @($instances | Where-Object { $_.installationPath -eq $installPath -and $_.productId -eq 'Microsoft.VisualStudio.Product.BuildTools' })
-        if ($existing.Count -gt 0) {
+        if (Test-Path -LiteralPath $vswhere) { $instances = @(& $vswhere -all -products '*' -property installationPath) }
+        if ($instances -contains $installPath) {
             Set-Status 'repairing-build-tools' 'Repairing the existing incomplete Build Tools instance'
             $setup = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
             $process = Start-Process -FilePath $setup -ArgumentList "repair --installPath `"$installPath`" --quiet --norestart" -WindowStyle Hidden -Wait -PassThru

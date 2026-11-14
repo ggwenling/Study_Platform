@@ -16,8 +16,8 @@
 尚待本机管理员步骤及实际 PostgreSQL 验收：
 
 - 首次 C++ 工具安装因已有残缺 Build Tools 注册记录失败；脚本已增加官方 repair / modify 流程。
-- 修复脚本的 Windows UAC 提升请求尚待用户处理，PostgreSQL 服务仍停止。
-- pgvector 尚未完成编译安装，管理员账号尚未验证，项目数据库尚未创建。
+- UAC 已由用户处理，PostgreSQL 服务已启动；PowerShell 5 的中文 JSON 编码问题已修复，脚本已进入 Build Tools repair 阶段。
+- pgvector 尚未完成编译安装；`root` 与用户提供的两组候选密码均未通过认证，正等待管理员账号确认；项目数据库尚未创建。
 - 实际 Alembic upgrade/downgrade、数据库约束/权限/向量测试及 checkpointer setup、持久化往返尚未运行。
 - 9 项集成测试当前因未启用测试数据库而跳过；不能将其计为通过。
 
