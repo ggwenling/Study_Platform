@@ -4,7 +4,7 @@
 
 ## Git 与依赖
 
-- 本地 `main` 初始化空提交，`codex`、`grok` 从该提交创建；全部开发提交均位于 `codex`，未执行 push。
+- 本地 `main` 初始化空提交，`codex`、`grok` 从该提交创建；全部开发提交均位于 `codex`，基础设施验收时尚未执行 push。
 - GitHub SSH 认证成功，origin 为 `git@github.com:ggwenling/Study_Platform.git`。
 - Python 3.12 独立虚拟环境、uv 依赖安装及 `uv.lock` 已完成。
 - `.env`、虚拟环境和安装缓存已被 Git 忽略，凭据没有提交。
