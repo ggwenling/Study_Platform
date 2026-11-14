@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { api, retryTurn, streamChat } from '@/api/client'
-import type { ChatRequest, Citation, Message, Scope, Turn } from '@/api/types'
+import type { ChatPhase, ChatRequest, Citation, Message, Scope, Turn } from '@/api/types'
 
-type Active = { conversationId: string; turnId: string; assistantId: string }
+type Active = { conversationId: string; turnId: string; assistantId: string; phase: ChatPhase | null }
 type Pending = { body: ChatRequest; key: string }
 type Recovery = { abort: AbortController; promise: Promise<void> }
 const terminal = (status: string) => ['completed', 'failed', 'stopped', 'cancelled'].includes(status)
@@ -116,10 +116,18 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
     setBusy(true)
     setPending(null)
     let current: Active | null = null
+    let replay = false
+    let receivedPhase = false
     let scope: Scope | null = null
     let answer = ''
     let citations: Citation[] = []
     const createdAt = new Date().toISOString()
+
+    function phase(value: ChatPhase | null) {
+      if (!current || current.phase === value) return
+      current = { ...current, phase: value }
+      setActive(current)
+    }
 
     function assistant(status: Message['status']) {
       if (!current) return
@@ -136,7 +144,8 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
       for await (const event of events) {
         if (abort.signal.aborted) return false
         if (event.type === 'meta') {
-          current = { conversationId: event.conversation_id, turnId: event.turn_id, assistantId: event.assistant_message_id }
+          replay = Boolean(event.replay)
+          current = { conversationId: event.conversation_id, turnId: event.turn_id, assistantId: event.assistant_message_id, phase: replay ? null : 'working' }
           scope = event.scope
           setActive(current)
           if (request) {
@@ -149,17 +158,26 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
           assistant('streaming')
           if (request && !request.body.conversation_id) void navigate(`/chat/${event.conversation_id}`)
           refresh()
+        } else if (event.type === 'phase') {
+          if (!replay && event.turn_id === current?.turnId) {
+            receivedPhase = true
+            phase(event.phase)
+          }
         } else if (event.type === 'delta') {
+          if (event.turn_id !== current?.turnId) continue
+          if (!replay && !receivedPhase) phase('composing')
           answer += event.delta
           assistant('streaming')
         } else if (event.type === 'sources') {
           citations = event.citations
           assistant('streaming')
-        } else if ((event.type === 'done' || event.type === 'stopped') && event.message) {
-          merge(event.message.conversation_id, [event.message])
+        } else if ((event.type === 'done' || event.type === 'stopped') && event.turn_id === current?.turnId) {
+          phase(null)
+          if (event.message) merge(event.message.conversation_id, [event.message])
         }
       }
       if (current) {
+        phase(null)
         // Replace transient data with the stored messages and their canonical order.
         const recovery = startRecovery(current.conversationId, current.turnId)
         const cancel = () => recovery.abort.abort()
@@ -169,6 +187,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
       return true
     } catch (error) {
       if (abort.signal.aborted) return false
+      phase(null)
       report(error)
       if (current) {
         const recovery = startRecovery(current.conversationId, current.turnId)

@@ -1,6 +1,7 @@
 """Real PostgreSQL RAG isolation and fenced-turn regressions; no provider calls."""
 
 import asyncio
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -179,8 +180,59 @@ def test_no_evidence_stream_never_calls_cloud(chat_db, monkeypatch):
 
     events = asyncio.run(consume())
     assert any("event: done" in event for event in events)
+    assert [payload(e)["phase"] for e in events if e.startswith("event: phase")] == [
+        "working", "searching", "working",
+    ]
     conv = conversation_for(s, run)
     assert chat.turn(s.owner, conv, run)["messages"][-1]["citations"] == []
+
+    async def replay():
+        return [e async for e in chat.stream(s.owner, run, fence, replay=True)]
+
+    replayed = asyncio.run(replay())
+    assert payload(replayed[0])["replay"] is True
+    assert not any(e.startswith("event: phase") for e in replayed)
+
+
+def payload(frame):
+    return json.loads(frame.split("data: ", 1)[1])
+
+
+@pytest.mark.parametrize("intent", ["qa", "summary"])
+def test_stream_reports_phases_at_real_execution_boundaries(chat_db, monkeypatch, intent):
+    s = chat_db
+    evidence = seed_evidence(s)
+    events = []
+
+    def phases():
+        return [e["phase"] for e in events if e["type"] == "phase"]
+
+    def retrieve(scope, content):
+        assert phases() == ["working", "searching"]
+        return [evidence]
+
+    async def chunks():
+        assert phases()[-1] == "composing"
+        yield SimpleNamespace(content="Answer [S1]", usage_metadata=None)
+
+    monkeypatch.setattr(chat, "retrieve", retrieve)
+    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=lambda _: chunks()))
+    data = request(s.kb_a)
+    if intent == "summary":
+        data.update(intent=intent, material_ids=[str(evidence["material_id"])])
+    run, fence, _ = chat.prepare(s.owner, data, uuid4().hex)
+
+    async def consume():
+        async for frame in chat.stream(s.owner, run, fence):
+            events.append(payload(frame))
+
+    asyncio.run(consume())
+    expected = ["working", "searching", "composing", "working"] if intent == "qa" else [
+        "working", "composing", "working",
+    ]
+    assert phases() == expected
+    assert events[-1]["type"] == "done"
+    assert events[0]["replay"] is False
 
 
 def seed_evidence(s):

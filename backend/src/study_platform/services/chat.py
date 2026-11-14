@@ -416,7 +416,8 @@ async def stream(owner, run_id, fence, replay=False):
         return
     user, assistant = state["messages"]
     meta = event("meta", conversation_id=conv_id, turn_id=run_id, user_message_id=user["id"],
-                 assistant_message_id=assistant["id"], scope=state["scope"])
+                 assistant_message_id=assistant["id"], scope=state["scope"],
+                 replay=replay or state["status"] != "running")
     if replay or state["status"] != "running":
         yield meta
         if assistant["content"]:
@@ -437,12 +438,14 @@ async def stream(owner, run_id, fence, replay=False):
     iterator = None
     try:
         yield meta
+        yield event("phase", turn_id=run_id, phase="working")
         scope, chunks, history = await run_in_threadpool(context, run_id)
         if scope["intent"] == "summary":
             evidence = chunks
             if len(evidence) > 40 or sum(len(c["text"]) for c in evidence) > 24000:
                 raise ApiError(422, "summary_scope_too_large", "所选资料过长，请减少摘要资料范围")
         else:
+            yield event("phase", turn_id=run_id, phase="searching")
             evidence = await run_in_threadpool(retrieve, scope, scope["content"])
         if not evidence and scope["answer_mode"] == "knowledge_only":
             content = "当前资料不足，无法根据所选知识库回答。请补充相关资料或调整提问。"
@@ -451,6 +454,7 @@ async def stream(owner, run_id, fence, replay=False):
             if not await run_in_threadpool(checkpoint, run_id, fence, content):
                 yield await ended_event(owner, conv_id, run_id)
                 return
+            yield event("phase", turn_id=run_id, phase="composing")
             iterator = chat_model().astream(prompt(scope, evidence, history)).__aiter__()
             last_save = time.monotonic()
             while True:
@@ -473,6 +477,7 @@ async def stream(owner, run_id, fence, replay=False):
                         yield await ended_event(owner, conv_id, run_id)
                         return
                     last_save = time.monotonic()
+        yield event("phase", turn_id=run_id, phase="working")
         if not content.strip():
             raise ApiError(502, "model_response_empty", "模型未返回内容", retryable=True)
         citations = cited_chunks(content, evidence)

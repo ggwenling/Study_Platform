@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { BookOpen, Copy, FileText, Folder, PanelRight } from 'lucide-react'
+import { Copy, FileText, Folder, PanelRight } from 'lucide-react'
 import { Link } from 'react-router'
 import { api } from '@/api/client'
 import type { Citation, Conversation, Message } from '@/api/types'
@@ -11,6 +11,7 @@ import { useWorkspace } from '../WorkspaceData'
 import { Composer } from './Composer'
 import { MarkdownContent } from './MarkdownContent'
 import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
+import { AssistantActivity, activityLabels } from './AssistantActivity'
 
 const time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const statusText = { pending: '等待生成…', streaming: '正在生成…', stopped: '已停止', failed: '回答失败', completed: '' }
@@ -107,7 +108,7 @@ export default function LiveChat({ id }: { id: string }) {
   }
 
   return (
-    <div className="chat" data-sources={panel}>
+    <div className="chat live-chat" data-sources={panel}>
       <section className="chat-main" aria-label="会话">
         <header className="chat-header">
           <h1>{conversation?.title || live.find((item) => item.role === 'user')?.content.slice(0, 80) || '对话'}</h1>
@@ -123,10 +124,14 @@ export default function LiveChat({ id }: { id: string }) {
             {messages.map((message) => {
               const isUser = message.role === 'user'
               const stopped = message.status === 'stopped' || message.status === 'failed'
+              const phase = !isUser && ['pending', 'streaming'].includes(message.status)
+                && chat.active?.assistantId === message.id ? chat.active.phase : null
+              const status = phase ? activityLabels[phase] : ['pending', 'streaming'].includes(message.status)
+                ? '正在确认生成状态…' : statusText[message.status]
               return (
                 <article key={message.id} className={`message ${isUser ? 'user-message' : 'ai-message'}`} aria-label={isUser ? '用户消息' : 'AI 消息'}>
                   <div className="message-meta">
-                    <span className="message-avatar">{isUser ? '你' : <BookOpen size={17} />}</span>
+                    {isUser ? <span className="message-avatar">你</span> : <AssistantActivity phase={phase} />}
                     <span>{isUser ? '你' : '知循'}</span><time dateTime={message.created_at}>{time.format(new Date(message.created_at))}</time>
                   </div>
                   {message.scope && <span className="pill"><Folder size={13} />{message.scope.knowledge_base_name} · {message.scope.answer_mode === 'with_general' ? '通用知识补充' : '仅知识库'}</span>}
@@ -136,7 +141,7 @@ export default function LiveChat({ id }: { id: string }) {
                         {message.content && <MarkdownContent>{message.content}</MarkdownContent>}
                         {message.turn_id && chat.recoveryErrors[message.turn_id] && ['pending', 'streaming'].includes(message.status)
                           ? <p className="muted" role="status">暂时无法确认生成状态。<Button size="sm" variant="secondary" onClick={() => chat.recover(id, message.turn_id!)}>重新查询状态</Button></p>
-                          : statusText[message.status] && <p className="muted" role="status">{statusText[message.status]}</p>}
+                          : <p className="muted activity-status" role="status" aria-live="polite">{status}</p>}
                       </div>
                       <div className="citation-list">
                         {message.citations.map((citation) => (

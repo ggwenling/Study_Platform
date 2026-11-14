@@ -1,0 +1,23 @@
+.assistant-activity {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  display: grid;
+  place-items: center;
+  color: inherit;
+}
+
+.live-chat .ai-message .message-meta { min-height: 64px; }
+.live-chat .ai-message .message-meta > span:nth-child(2) { white-space: nowrap; }
+.live-chat .ai-message .message-meta time { margin-left: auto; }
+.live-chat .ai-message { width: min(100%, 900px); }
+.live-chat .ai-message > .pill { margin-left: 73px; }
+.live-chat .ai-message .answer { padding-left: 73px; }
+.live-chat .ai-message .citation-list { margin-left: 73px; }
+.live-chat .activity-status { min-height: 1.75em; }
+
+@media (max-width: 760px) {
+  .live-chat .ai-message > .pill,
+  .live-chat .ai-message .citation-list { margin-left: 0; }
+  .live-chat .ai-message .answer { padding-left: 0; }
+}

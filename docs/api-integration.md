@@ -58,7 +58,9 @@ API 根路径为 `/api/v1`，交互式接口定义见 `/docs`。示例假设浏�
 
 请求需要 `Authorization: Bearer <access_token>` 和 `Idempotency-Key`。同一次提交在响应丢失后可以复用原请求和键。已结束的轮次会重放结果，进行中的轮次返回 409。`answer_mode` 默认 `knowledge_only`，用户可选 `with_general`。`intent` 为 `qa` 或 `summary`。问答省略 `material_ids` 时检索当前库已就绪的资料。摘要须明确选择已就绪资料，上限为 40 个分块且总计 24,000 字符。每轮保存自己的知识库与索引范围，切库后原消息仍可查看。资源仅对所属用户可访问，删除后历史引用可能标为不可用。
 
-这是 **POST SSE**：用 `fetch` 读取 `text/event-stream`，不能直接用仅支持 GET 的 `EventSource`。事件为 `meta`、`delta`、`sources`、`done`、`stopped` 或 `error`；`meta` 包含 `conversation_id` 和 `turn_id`，应立即保存以便恢复。`delta` 逐段追加，`sources` 的 citations 含位置与引用 ID，`done` 提供最终消息。可通过 `GET /sources/{citation_id}` 查看来源，相关原件和预览 URL 也需要鉴权。
+这是 **POST SSE**：用 `fetch` 读取 `text/event-stream`，不能直接用仅支持 GET 的 `EventSource`。事件为 `meta`、`phase`、`delta`、`sources`、`done`、`stopped` 或 `error`；`meta` 包含 `conversation_id` 和 `turn_id`，应立即保存以便恢复。`delta` 逐段追加，`sources` 的 citations 含位置与引用 ID，`done` 提供最终消息。可通过 `GET /sources/{citation_id}` 查看来源，相关原件和预览 URL 也需要鉴权。
+
+`phase` 格式为 `{ "type": "phase", "turn_id": "UUID", "phase": "searching" }`，由真实执行阶段触发：`working` 表示准备上下文或校验与保存回答，`searching` 表示检索资料（含查询向量生成），`composing` 表示模型输出阶段。当前模型关闭深度思考，不发送 `solving`；前端为其保留类型和展示映射。阶段仅用于当前请求的临时视觉反馈，不写入历史记录或 GET 轮次结果。`meta.replay=true` 表示重放已结束结果，不播放动画；重放不发送阶段事件。旧客户端可忽略新增字段与事件。完成、停止、错误或断线后立即结束动画，恢复查询只显示文字状态，不根据旧阶段猜测当前进度。
 
 ```ts
 import { streamChat } from './api/client'

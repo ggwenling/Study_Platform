@@ -14,6 +14,8 @@ vi.mock('./WorkspaceData', () => ({ useWorkspace: () => workspace.value }))
 vi.mock('./components/Composer', () => ({ Composer: () => null }))
 vi.mock('./components/MarkdownContent', () => ({ MarkdownContent: ({ children }: { children: React.ReactNode }) => <span>{children}</span> }))
 vi.mock('./components/ProtectedMaterial', () => ({ DownloadMaterial: () => null, MaterialPage: () => null }))
+// Exercise the chat lifecycle independently of Canvas rendering (checked in a browser).
+vi.mock('thinking-orbs', () => ({ ThinkingOrb: ({ state, size, theme }: { state: string; size: number; theme: string }) => <canvas data-phase={state} data-size={size} data-theme={theme} /> }))
 
 const scope: Scope = { knowledge_base_id: 'k', knowledge_base_name: '知识库', answer_mode: 'knowledge_only', index_version_ids: [] }
 const message = (status: Message['status'], content = '保存的回答'): Message => ({ id: 'a', conversation_id: 'c', turn_id: 't', role: 'assistant', sequence_no: 2, status, content, citations: [], scope, created_at: '2026-01-01T00:00:00Z' })
@@ -43,7 +45,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.useFakeTimers()
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   node = document.createElement('div')
   document.body.append(node)
@@ -56,6 +58,140 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); node.remove(); vi.useRealTimers() })
 
 describe('disconnected chat recovery', () => {
+  it('shows real phases, ignores another turn and removes the orb before final recovery', async () => {
+    view = true
+    const search = deferred<void>()
+    const compose = deferred<void>()
+    const finish = deferred<void>()
+    const saved = deferred<Turn>()
+    vi.mocked(api.turn).mockReturnValue(saved.promise)
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      yield meta
+      await search.promise
+      yield { type: 'phase', turn_id: 't', phase: 'searching' }
+      yield { type: 'phase', turn_id: 'other', phase: 'solving' }
+      await compose.promise
+      yield { type: 'phase', turn_id: 't', phase: 'composing' }
+      yield { type: 'delta', turn_id: 't', delta: '正文' }
+      await finish.promise
+      yield { type: 'done', turn_id: 't', message: message('completed', '正文'), scope }
+    })
+    await render()
+    let sent!: Promise<boolean>
+    await act(async () => { sent = chat.send({ knowledge_base_id: 'k', content: '问题' }) })
+    expect(node.querySelector('canvas')?.dataset).toMatchObject({ phase: 'working', size: '64', theme: 'auto' })
+    await act(async () => search.resolve())
+    expect(node.querySelector('canvas')?.dataset.phase).toBe('searching')
+    expect(node.textContent).toContain('正在检索资料')
+    await act(async () => compose.resolve())
+    expect(node.querySelector('canvas')?.dataset.phase).toBe('composing')
+    expect(node.textContent).toContain('正在生成回答')
+    await act(async () => finish.resolve())
+    expect(node.querySelector('canvas')).toBeNull()
+    expect(chat.busy).toBe(true)
+    await act(async () => { saved.resolve(turn('completed')); await sent })
+    expect(node.querySelector('canvas')).toBeNull()
+  })
+
+  it('removes the orb immediately on stream failure and never animates recovery snapshots', async () => {
+    view = true
+    const fail = deferred<void>()
+    const saved = deferred<Turn>()
+    vi.mocked(api.turn).mockReturnValue(saved.promise)
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      yield meta
+      yield { type: 'phase', turn_id: 't', phase: 'searching' }
+      await fail.promise
+      throw new TypeError('disconnected')
+    })
+    await render()
+    let sent!: Promise<boolean>
+    await act(async () => { sent = chat.send({ knowledge_base_id: 'k', content: '问题' }) })
+    expect(node.querySelector('canvas')).not.toBeNull()
+    await act(async () => fail.resolve())
+    expect(node.querySelector('canvas')).toBeNull()
+    expect(node.textContent).toContain('正在确认生成状态')
+    await act(async () => { saved.resolve(turn('failed')); await sent })
+    expect(node.querySelector('canvas')).toBeNull()
+  })
+
+  it('does not animate replayed answers', async () => {
+    view = true
+    const finish = deferred<void>()
+    vi.mocked(api.turn).mockResolvedValue(turn('completed'))
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      yield { ...meta, replay: true }
+      yield { type: 'delta', turn_id: 't', delta: '历史答案' }
+      await finish.promise
+      yield { type: 'done', turn_id: 't', message: message('completed'), scope }
+    })
+    await render()
+    let sent!: Promise<boolean>
+    await act(async () => { sent = chat.send({ knowledge_base_id: 'k', content: '问题' }) })
+    expect(node.querySelector('canvas')).toBeNull()
+    await act(async () => { finish.resolve(); await sent })
+  })
+
+  it('uses text streaming as the composing fallback for older servers', async () => {
+    view = true
+    const finish = deferred<void>()
+    vi.mocked(api.turn).mockResolvedValue(turn('completed'))
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      yield meta
+      yield { type: 'delta', turn_id: 't', delta: '正文' }
+      await finish.promise
+      yield { type: 'done', turn_id: 't', message: message('completed'), scope }
+    })
+    await render()
+    let sent!: Promise<boolean>
+    await act(async () => { sent = chat.send({ knowledge_base_id: 'k', content: '问题' }) })
+    expect(node.querySelector('canvas')?.dataset.phase).toBe('composing')
+    await act(async () => { finish.resolve(); await sent })
+  })
+
+  it('unmounts the orb and aborts the stream on account replacement', async () => {
+    view = true
+    const late = deferred<void>()
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      yield meta
+      await late.promise
+      yield { type: 'phase', turn_id: 't', phase: 'composing' }
+    })
+    await render()
+    let sent!: Promise<boolean>
+    await act(async () => { sent = chat.send({ knowledge_base_id: 'k', content: '问题' }) })
+    const signal = vi.mocked(streamChat).mock.calls[0][2]!
+    expect(node.querySelector('canvas')).not.toBeNull()
+    await act(async () => root.render(<Harness key="new-account" />))
+    expect(signal.aborted).toBe(true)
+    expect(node.querySelector('canvas')).toBeNull()
+    await act(async () => { late.resolve(); await sent })
+    expect(chat.active).toBeNull()
+    expect(chat.cached).toEqual({})
+  })
+
+  it('stops the orb before cancellation responds and ignores aborted late phases', async () => {
+    view = true
+    const late = deferred<void>()
+    const cancelled = deferred<Turn>()
+    vi.mocked(api.cancelTurn).mockReturnValue(cancelled.promise)
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      yield meta
+      await late.promise
+      yield { type: 'phase', turn_id: 't', phase: 'solving' }
+    })
+    await render()
+    let sent!: Promise<boolean>
+    await act(async () => { sent = chat.send({ knowledge_base_id: 'k', content: '问题' }) })
+    expect(node.querySelector('canvas')).not.toBeNull()
+    let stopped!: Promise<void>
+    await act(async () => { stopped = chat.stop('c', 't') })
+    expect(node.querySelector('canvas')).toBeNull()
+    await act(async () => { late.resolve(); await sent })
+    expect(node.querySelector('canvas')).toBeNull()
+    await act(async () => { cancelled.resolve(turn('stopped')); await stopped })
+  })
+
   it('keeps polling a running turn until complete without resubmitting generation', async () => {
     vi.mocked(streamChat).mockImplementation(async function* () { yield meta; yield { type: 'delta', turn_id: 't', delta: '部分' }; throw new TypeError('disconnected') })
     vi.mocked(api.turn).mockResolvedValueOnce(turn('running', message('streaming', '部分'))).mockResolvedValueOnce(turn('completed'))
@@ -79,7 +215,7 @@ describe('disconnected chat recovery', () => {
     vi.mocked(api.messages).mockResolvedValue({ items: [message('streaming')], next_cursor: null })
     vi.mocked(api.turn).mockResolvedValueOnce(turn('running', message('streaming'))).mockResolvedValueOnce(turn('failed', message('streaming')))
     await render()
-    expect(node.textContent).toContain('正在生成')
+    expect(node.textContent).toContain('正在确认生成状态')
     await advance()
     expect(node.textContent).toContain('回答失败')
     expect(node.textContent).toContain('重试本轮')
