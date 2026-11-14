@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import type { Ref } from 'react'
-import { ArrowUp, Image, Paperclip, Plus, Square } from 'lucide-react'
+import { ArrowUp, Globe, Image, Paperclip, Plus, Square } from 'lucide-react'
 import { BEND, MetalFx, useMetalBend } from 'metal-fx'
 import { useReducedMotion } from 'motion/react'
 import { Link } from 'react-router'
@@ -11,12 +11,16 @@ import { useWorkspace } from '../WorkspaceData'
 import { Button } from '@/components/arc/button/button'
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { Select } from '@/components/arc/select/select'
+import { Tooltip } from '@/components/arc/tooltip/tooltip'
 import { FadingTextarea } from './FadingTextarea'
 
 const demoLibrary = [{ value: 'product', label: '产品资料库' }]
 const emptyLibrary = [{ value: 'empty', label: '暂无可用知识库', disabled: true }]
-const answerModes = [{ value: 'knowledge_only', label: '仅知识库' }, { value: 'with_general', label: '通用知识补充' }]
 const staticBend = { ...BEND, enabled: false }
+
+function shortLibraryName(name: string) {
+  return Array.from(name.replace(/^【演示】\s*/, '') || name).slice(0, 4).join('')
+}
 
 export type ComposerHandle = { focus: () => void; chooseImage: () => void }
 
@@ -29,7 +33,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
 }) {
   const { user, libraries, capabilities, chat, notify, report, requireLogin, refresh, revision } = useWorkspace()
   const [draft, setDraft] = useState('')
-  const [answerMode, setAnswerMode] = useState('knowledge_only')
+  const [supplement, setSupplement] = useState(false)
   const [selected, setSelected] = useState('')
   const [ready, setReady] = useState<Material[]>([])
   const [materialId, setMaterialId] = useState('')
@@ -71,7 +75,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
     if (await chat.send({
       conversation_id: conversationId,
       knowledge_base_id: libraryId,
-      answer_mode: answerMode === 'with_general' ? 'with_general' : 'knowledge_only',
+      answer_mode: supplement ? 'with_general' : 'knowledge_only',
       intent: summary ? 'summary' : 'qa',
       material_ids: summary ? [materialId] : null,
       content,
@@ -112,7 +116,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
     <form
       ref={form}
       inert={!user}
-      className={`composer ${demo || conversationId ? 'composer-chat' : ''}`}
+      className="composer"
       onSubmit={(event) => {
         event.preventDefault()
         void submit()
@@ -127,7 +131,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
           label="提问"
           className="composer-input"
           placeholder={summary ? '你希望提炼哪些内容？' : demo || conversationId ? '向你的知识库提问…' : '向你的资料提问…'}
-          rows={2}
+          rows={1}
           maxLength={8000}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
@@ -158,15 +162,20 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
           }} />
         ))}
         <div className="composer-options">
-          <Select label="回答范围" className="composer-select" options={answerModes} value={answerMode} onValueChange={setAnswerMode} />
+          <Tooltip content={supplement ? '已开启通用知识补充' : '当前仅使用知识库，点击开启通用知识补充'}>
+            <Button type="button" variant="secondary" className="composer-supplement" aria-label="通用知识补充" aria-pressed={supplement} onClick={() => setSupplement((on) => !on)}>
+              <Globe size={18} aria-hidden="true" />
+            </Button>
+          </Tooltip>
           <Select
             ref={libraryControl}
             label="知识库"
             className="composer-select"
+            formatValue={shortLibraryName}
             options={demo ? demoLibrary : libraries.length ? libraries.map(({ id, name }) => ({ value: id, label: name })) : emptyLibrary}
             value={demo ? 'product' : libraryId ?? ''}
             onValueChange={setSelected}
-            placeholder="选择知识库"
+            placeholder="选知识库"
           />
         </div>
         <MetalFx

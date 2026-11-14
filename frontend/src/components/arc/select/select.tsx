@@ -15,6 +15,7 @@ export interface SelectProps extends Omit<ComponentPropsWithoutRef<typeof Select
   placeholder?: string;
   id?: string;
   className?: string;
+  formatValue?: (label: string) => string;
   options: { value: string; label: string; disabled?: boolean }[];
 }
 
@@ -28,7 +29,7 @@ const valueRoll: Variants = {
 const valueFade: Variants = { enter: { opacity: 0 }, center: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: motionTokens.duration.instant } }, exit: { opacity: 0, transition: { duration: motionTokens.duration.instant } } };
 
 export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select(
-  { label, description, placeholder = "Select an option", options, id, className, disabled, onValueChange, ...rootProps },
+  { label, description, placeholder = "Select an option", options, id, className, formatValue, disabled, onValueChange, ...rootProps },
   ref,
 ) {
   const generatedId = useId();
@@ -39,6 +40,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
   const currentValue = rootProps.value ?? uncontrolledValue;
   const index = options.findIndex((option) => option.value === currentValue);
   const shown = currentValue ? options[index]?.label ?? "" : placeholder;
+  const display = formatValue?.(shown) ?? shown;
   const [previousIndex, setPreviousIndex] = useState(index);
   const [direction, setDirection] = useState(1);
   if (previousIndex !== index) { setPreviousIndex(index); setDirection(index > previousIndex ? 1 : -1); }
@@ -51,13 +53,14 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
           ref={ref}
           id={controlId}
           aria-describedby={hintId}
+          title={display !== shown ? shown : undefined}
           className={[styles.trigger, className].filter(Boolean).join(" ")}
         >
           {/* Radix keeps the real value for assistive tech; the visible copy below animates between values. */}
           <span className={styles.srOnly}><SelectPrimitive.Value placeholder={placeholder} /></span>
           <span className={styles.valueText} aria-hidden="true">
             <AnimatePresence initial={false} custom={direction}>
-              <motion.span key={currentValue ? `value-${currentValue}` : "placeholder"} data-placeholder={currentValue ? undefined : ""} custom={direction} variants={reduceMotion ? valueFade : valueRoll} initial="enter" animate="center" exit="exit">{shown}</motion.span>
+              <motion.span key={currentValue ? `value-${currentValue}` : "placeholder"} data-placeholder={currentValue ? undefined : ""} custom={direction} variants={reduceMotion ? valueFade : valueRoll} initial="enter" animate="center" exit="exit">{display}</motion.span>
             </AnimatePresence>
           </span>
           <SelectPrimitive.Icon className={styles.chevron}>
@@ -65,7 +68,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
           </SelectPrimitive.Icon>
         </SelectPrimitive.Trigger>
         <SelectPrimitive.Portal>
-          <SelectPrimitive.Content className={styles.content} position="popper" sideOffset={4} collisionPadding={12}>
+          <SelectPrimitive.Content className={styles.content} data-compact-trigger={formatValue ? "" : undefined} position="popper" sideOffset={4} collisionPadding={12}>
             <SelectPrimitive.ScrollUpButton className={styles.scrollButton}>
               <ChevronUp size={16} strokeWidth={1.75} aria-hidden="true" />
             </SelectPrimitive.ScrollUpButton>

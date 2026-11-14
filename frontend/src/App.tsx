@@ -4,8 +4,8 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent, DialogTrigger } from '@/components/arc/dialog/dialog'
-import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
+import { UserMenu } from '@/components/arc/user-menu/user-menu'
 import { Home } from './components/Home'
 import { ProjectNavigation } from './components/ProjectNavigation'
 import { Account } from './components/Account'
@@ -158,12 +158,24 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
   const navigate = useNavigate()
   const { pathname, search } = useLocation()
   const isChat = pathname.startsWith('/chat/')
-  const accountItems = [
-    { label: '设置', icon: <Settings size={16} />, onSelect: () => user ? navigate('/settings') : onPrivateLink('/settings') },
-    user
-      ? { label: '退出登录', onSelect: async () => { try { await api.logout(); onLogout(); void navigate('/') } catch (error) { report(error) } } }
-      : { label: '登录 / 注册', onSelect: requireLogin },
-  ]
+  const accountMenu = user ? (
+    <UserMenu
+      user={{ name: user.display_name, email: user.email, avatarSrc: user.avatar_url ?? undefined }}
+      showName
+      showTheme={false}
+      align={isChat ? 'start' : 'end'}
+      items={[{ label: '设置', icon: <Settings size={16} />, onSelect: () => void navigate('/settings') }]}
+      onSignOut={async () => {
+        try {
+          await api.logout()
+          onLogout()
+          void navigate('/')
+        } catch (error) {
+          report(error)
+        }
+      }}
+    />
+  ) : <Button variant="secondary" onClick={requireLogin}>登录</Button>
 
   useEffect(() => {
     function openSearch(event: KeyboardEvent) {
@@ -199,7 +211,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             ))}
           </nav>
           <ProjectNavigation />
-          {isChat && <div className="workspace-label"><DropdownMenu label={user?.display_name || '个人空间'} icon={<span className="account-avatar">{user?.display_name.slice(0, 1) || 'K'}</span>} items={accountItems} /></div>}
+          {isChat && <div className="workspace-label">{accountMenu}</div>}
         </div>
       </aside>
       <div className="main-shell">
@@ -211,11 +223,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
               <DialogTrigger asChild>
                 <Button variant="secondary" className="search-button"><Search size={17} /><span>搜索知识库、资料或对话…</span><kbd>Ctrl K</kbd></Button>
               </DialogTrigger>
-              <div className="account-menu">
-                {user
-                  ? <DropdownMenu label={user.display_name} icon={<span className="account-avatar">{user.display_name.slice(0, 1)}</span>} items={accountItems} />
-                  : <Button variant="secondary" onClick={requireLogin}>登录</Button>}
-              </div>
+              <div className="account-menu">{accountMenu}</div>
             </div>}
           </header>
         <main className="page">
