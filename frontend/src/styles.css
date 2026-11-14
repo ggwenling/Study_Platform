@@ -136,25 +136,47 @@ h1, h2, h3, p { margin: 0; }
 }
 .welcome p { margin-top: 14px; color: #c4c4c4; line-height: 1.65; font-size: clamp(13px, 1.16vw, 18px); text-wrap: balance; }
 .composer {
-  padding: 16px 23px 18px;
-  border: 1px solid #696969;
+  --composer-control: #242424;
+  --composer-control-hover: #303030;
+  --composer-control-size: 48px;
+  padding: 16px 22px 18px;
+  overflow: clip;
+  border: 1px solid var(--line);
   border-radius: 28px;
-  background: linear-gradient(145deg, #ffffff17, #ffffff0a 56%, #ffffff23);
-  box-shadow: inset 0 0 35px #ffffff08, 0 14px 46px #0004;
-  backdrop-filter: blur(15px);
-  transition: border-color 160ms ease, box-shadow 160ms ease;
+  background: var(--panel);
+  transition: border-color 160ms ease;
 }
 .composer-wrapper { position: relative; }
-.composer-login { position: absolute; inset: 0; z-index: 1; border: 0; border-radius: 24px; background: transparent; }
-.composer:focus-within { border-color: #aaa; box-shadow: 0 0 0 2px #ffffff12, 0 14px 46px #0005; }
-.composer-options, .composer-actions, .supplement-control { display: flex; align-items: center; gap: 9px; }
-.composer-options { justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }
-.composer-options > div { min-width: 0; }
-.supplement-control .supplement-switch { flex-direction: row-reverse; font-size: 14px; }
-.library-control { position: relative; }
-.library-control > svg { position: absolute; z-index: 1; top: 50%; left: 12px; transform: translateY(-50%); pointer-events: none; }
-.library-control button.library-select { min-height: 39px; height: 39px; padding: 0 12px 0 37px; border-radius: 999px; background: #ffffff12; font-size: 15px; }
-.composer-field label, .library-control label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.composer-login { position: absolute; inset: 0; z-index: 1; border: 0; border-radius: 28px; background: transparent; }
+.composer:focus-within { border-color: #686868; }
+.composer-actions, .composer-options { display: flex; align-items: center; gap: 10px; }
+.composer-actions { align-items: flex-end; margin-top: 8px; }
+.composer-options { flex: 1; min-width: 0; justify-content: flex-end; flex-wrap: wrap; }
+.composer-options > div { max-width: min(100%, 192px); }
+.composer-actions button:is(.composer-add, .composer-select, .send-button) {
+  min-height: var(--composer-control-size);
+  border-radius: 999px;
+  border-color: var(--line);
+  background: var(--composer-control);
+  color: var(--text-secondary);
+  box-shadow: none;
+}
+.composer-actions button:is(.composer-add, .send-button) {
+  flex: none;
+  justify-content: center;
+  width: var(--composer-control-size);
+  padding: 0;
+}
+.composer-actions button.composer-select { padding-inline: 14px; font-size: 14px; }
+.composer-actions button:is(.composer-add, .composer-select, .send-button):is(:hover, [data-state="open"]):not(:disabled) {
+  background: var(--composer-control-hover);
+  color: var(--ink);
+}
+.composer-actions button.composer-add:disabled { opacity: .5; }
+.composer-send { flex: none; }
+.composer-send:has(button:disabled) { opacity: .68; }
+.composer-actions button.send-button { border-color: #777; color: var(--ink); }
+.composer-field label, .composer-options label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .composer-field textarea.composer-input {
   width: 100%;
   min-height: clamp(70px, 9vh, 92px);
@@ -169,9 +191,7 @@ h1, h2, h3, p { margin: 0; }
   font-size: clamp(15px, 1.2vw, 19px);
 }
 .composer-field textarea.composer-input:focus { outline: none; box-shadow: none; }
-.composer-field textarea::placeholder { color: #aaa; }
-.send-button:is(button) { margin-left: auto; display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border-radius: 12px; background: #f1f1f1; color: #181818; }
-.send-button:is(button):disabled { opacity: .4; }
+.composer-field textarea::placeholder { color: var(--dim); }
 .shortcuts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; width: 92%; margin: clamp(28px, 6.8vh, 66px) auto 0; }
 .shortcut:is(button) { height: auto; min-height: clamp(100px, 14vh, 133px); padding: 12px 8px; border-radius: 18px; background: #171717c9; border-color: #292929; font-size: clamp(14px, 1.08vw, 18px); }
 .shortcut:is(button):hover { background: #252525; border-color: #444; }
@@ -229,10 +249,8 @@ h1, h2, h3, p { margin: 0; }
 .citation:is(button) { font-size: 12px; gap: 6px; max-width: 100%; white-space: normal; height: auto; }
 .copy-button:is(button) { margin-left: 32px; color: #b4b4b4; }
 .chat-footer { padding: 12px clamp(16px, 3vw, 42px) clamp(16px, 4vh, 52px); }
-.composer-chat { max-width: 1170px; margin-inline: auto; background: linear-gradient(135deg, #1c1c1c, #131313); border-color: #515151; padding-block: 10px 12px; }
-.composer-chat .composer-field textarea.composer-input { min-height: 50px; }
-.composer-chat .composer-options { margin-bottom: 0; }
-.composer-chat .send-button:is(button) { border-radius: 50%; }
+.chat-footer .composer-wrapper { max-width: 864px; margin-inline: auto; }
+.composer-chat .composer-field textarea.composer-input { min-height: 56px; }
 .source-panel { min-width: 0; overflow: hidden; background: #0d0d0d; }
 .source-panel-inner { width: var(--source-width); height: 100%; overflow: auto; padding: clamp(22px, 2.5vh, 38px) clamp(16px, 1.35vw, 35px); border-left: 1px solid #242424; }
 .source-panel h2 { margin-bottom: 18px; }
@@ -320,6 +338,11 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
   .app-shell[data-nav="false"] .sidebar { display: none; }
   .topbar { height: 49px; }
   .home { min-height: calc(100dvh - 49px); }
+  .composer { --composer-control-size: 44px; border-radius: 22px; }
+  .composer-actions, .composer-options { gap: 6px; }
+  .composer-options { flex-wrap: nowrap; }
+  .composer-actions button.composer-select { gap: 4px; padding-inline: 7px; font-size: 12px; }
+  .composer-actions button.composer-select svg { width: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .app-shell, .chat, .navigation a, .composer { transition: none; }

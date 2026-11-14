@@ -4,6 +4,7 @@ import { motion, useReducedMotion } from 'motion/react'
 import { Link } from 'react-router'
 import { Button } from '@/components/arc/button/button'
 import { Composer } from './Composer'
+import type { ComposerHandle } from './Composer'
 import { useWorkspace } from '../WorkspaceData'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
 import { useDisclosurePreference } from '../useDisclosurePreference'
@@ -17,7 +18,7 @@ const shortcuts = [
 export function Home() {
   const reduced = useReducedMotion()
   const [summary, setSummary] = useState(false)
-  const composer = useRef<HTMLDivElement>(null)
+  const composer = useRef<ComposerHandle>(null)
   const { overview, user, loading, requireLogin } = useWorkspace()
   const [panelOpen, setPanelOpen] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:overview`, true)
   const panelContent = useRef<HTMLDivElement>(null)
@@ -45,15 +46,15 @@ export function Home() {
             <h1>欢迎使用 知循</h1>
             <p>你的个人多知识库 RAG 工具，基于自己的资料获得更可靠的答案与洞察。</p>
           </header>
-          <div ref={composer}><Composer summary={summary} /></div>
+          <Composer ref={composer} summary={summary} />
           <div className="shortcuts">
             {shortcuts.map(({ label, description, icon: Icon }, index) => (
               <Button key={label} variant="secondary" className="shortcut" onClick={() => {
                 if (!user) return requireLogin()
-                if (index === 2) composer.current?.querySelector<HTMLButtonElement>('button[aria-label="添加图片"]')?.click()
+                if (index === 2) composer.current?.chooseImage()
                 else {
                   setSummary(index === 1)
-                  composer.current?.querySelector('textarea')?.focus()
+                  composer.current?.focus()
                 }
               }}>
                 <span className="shortcut-content">
