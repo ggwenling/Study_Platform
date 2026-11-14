@@ -10,7 +10,15 @@ cd D:\Synapse\backend
 uv sync --locked
 ```
 
-将根目录 `.env.example` 复制为 `.env` 并填写本机连接信息，文件已被 Git 忽略。
+首次安装 PostgreSQL 扩展见 [Windows 安装说明](infra/windows/README.md)。
+已有 PostgreSQL 管理员可运行以下命令，交互输入密码，创建独立的开发库、测试库和运行角色，
+并生成根目录被 Git 忽略的 `.env`。脚本遇到同名数据库或角色会停止，不覆盖已有对象。
+
+```powershell
+uv run python -m study_platform.cli.bootstrap_database --admin-user postgres
+```
+
+也可将根目录 `.env.example` 复制为 `.env`，自行准备数据库和角色并填写连接信息。
 应用连接使用 `DATABASE_URL`；迁移使用独立的 `MIGRATION_DATABASE_URL`；
 LangGraph 使用 Psycopg 格式的 `GRAPH_DATABASE_URL`。
 
@@ -33,7 +41,18 @@ uv run pytest -q
 ```
 
 数据库集成测试需准备独立测试库并填写 `TEST_DATABASE_URL`、`TEST_GRAPH_DATABASE_URL`，
-随后设置 `$env:RUN_DB_TESTS='1'` 再执行 pytest。
+先对测试库执行 Alembic 迁移和 checkpointer setup，再设置 `$env:RUN_DB_TESTS='1'` 执行 pytest。
+测试库名必须以 `_test` 结尾；测试数据使用事务回滚或随机 checkpoint thread 清理。
+
+```powershell
+uv run python tests/prepare_database.py
+$env:RUN_DB_TESTS = '1'
+uv run pytest -q
+```
+
+输入设计快照保存在 `docs/architecture/`，实现决策及仍需业务层落实的规则见
+[数据库规则](docs/database-rules.md)。原文档的 PG16 调整为已确认的本机 PG18；
+`users.status` 长度调整为 24，以容纳原文档声明的 `pending_verification`。
 
 ## Git 约定
 
