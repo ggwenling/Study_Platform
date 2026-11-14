@@ -144,6 +144,8 @@ h1, h2, h3, p { margin: 0; }
   backdrop-filter: blur(15px);
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
+.composer-wrapper { position: relative; }
+.composer-login { position: absolute; inset: 0; z-index: 1; border: 0; border-radius: 24px; background: transparent; }
 .composer:focus-within { border-color: #aaa; box-shadow: 0 0 0 2px #ffffff12, 0 14px 46px #0005; }
 .composer-options, .composer-actions, .supplement-control { display: flex; align-items: center; gap: 9px; }
 .composer-options { justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }

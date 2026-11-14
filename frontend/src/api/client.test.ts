@@ -7,7 +7,9 @@ function byteStream(text: string): ReadableStream<Uint8Array> {
   return new ReadableStream({ start(controller) { for (const byte of bytes) controller.enqueue(new Uint8Array([byte])); controller.close() } })
 }
 
-afterEach(() => { vi.unstubAllGlobals() })
+afterEach(() => { api.clearSession(); vi.unstubAllGlobals() })
+
+const auth = (token: string) => Response.json({ user: { id: 'u' }, access_token: token })
 
 describe('chat stream', () => {
   it('decodes split UTF-8, CRLF, heartbeats and an unterminated final frame', async () => {
@@ -20,30 +22,55 @@ describe('chat stream', () => {
     const stream = byteStream('data: {"type":"error","turn_id":"t","code":"failed","message":"失败","retryable":true}\n\n')
     await expect(async () => { for await (const _ of parseChatStream(stream)) { /* consume */ } }).rejects.toMatchObject({ name: 'ApiError', code: 'failed', turn_id: 't', retryable: true })
   })
-  it('sends credentials, CSRF and idempotency key and reports HTTP errors', async () => {
+  it('sends Bearer and idempotency key for SSE', async () => {
     vi.stubGlobal('document', { cookie: 'study_csrf=abc%20123' })
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 'denied', message: 'Denied', retryable: false }), { status: 401 }))
+    const fetchMock = vi.fn().mockResolvedValueOnce(auth('access')).mockResolvedValueOnce(Response.json({ code: 'denied', message: 'Denied', retryable: false }, { status: 403 }))
     vi.stubGlobal('fetch', fetchMock)
+    await api.login({ email: 'a', password: 'b' })
     await expect(async () => { for await (const _ of streamChat({ knowledge_base_id: 'k', answer_mode: 'knowledge_only', intent: 'qa', content: 'x' }, 'key')) { /* consume */ } }).rejects.toBeInstanceOf(ApiError)
-    const options = fetchMock.mock.calls[0][1]
-    expect(options.credentials).toBe('include')
-    expect(options.headers.get('X-CSRF-Token')).toBe('abc 123')
+    const options = fetchMock.mock.calls[1][1]
+    expect(options.credentials).toBe('omit')
+    expect(options.headers.get('Authorization')).toBe('Bearer access')
+    expect(options.headers.get('X-CSRF-Token')).toBeNull()
     expect(options.headers.get('Idempotency-Key')).toBe('key')
   })
 })
 
 describe('HTTP client', () => {
-  it('sends CSRF for writes but not login', async () => {
+  it('does not restore a session from a refresh completed after logout', async () => {
     vi.stubGlobal('document', { cookie: 'study_csrf=token' })
-    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response('{}')))
+    let finish!: (response: Response) => void
+    const fetchMock = vi.fn().mockImplementationOnce(() => new Promise<Response>((resolve) => { finish = resolve }))
+      .mockResolvedValueOnce(Response.json({}))
     vi.stubGlobal('fetch', fetchMock)
-    await api.createKnowledgeBase({ name: 'test' })
+    const pending = api.refresh()
+    api.clearSession()
+    finish(auth('stale'))
+    await expect(pending).rejects.toMatchObject({ status: 401 })
+    await api.me()
+    expect(fetchMock.mock.calls[1][1].headers.get('Authorization')).toBeNull()
+  })
+  it('shares refresh across simultaneous 401s and retries with the new token', async () => {
+    vi.stubGlobal('document', { cookie: 'study_csrf=token' })
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      const headers = new Headers(init.headers)
+      if (url.endsWith('/login')) return auth('old')
+      if (url.endsWith('/refresh')) {
+        expect(headers.get('X-CSRF-Token')).toBe('token')
+        return auth('new')
+      }
+      expect(headers.get('X-CSRF-Token')).toBeNull()
+      return headers.get('Authorization') === 'Bearer new' ? Response.json({}) : new Response(null, { status: 401 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
     await api.login({ email: 'a', password: 'b' })
-    expect(fetchMock.mock.calls[0][1].headers.get('X-CSRF-Token')).toBe('token')
-    expect(fetchMock.mock.calls[1][1].headers.get('X-CSRF-Token')).toBeNull()
+    await Promise.all([api.me(), api.content('v')])
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/refresh'))).toHaveLength(1)
   })
   it('reports actual XHR upload progress and returns the processing job', async () => {
     vi.stubGlobal('document', { cookie: 'study_csrf=token' })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(auth('upload')))
+    await api.login({ email: 'a', password: 'b' })
     let xhr: MockXHR
     class MockXHR {
       upload = { onprogress: undefined as ((event: { lengthComputable: boolean; loaded: number; total: number }) => void) | undefined }
@@ -67,8 +94,8 @@ describe('HTTP client', () => {
     xhr!.upload.onprogress?.({ lengthComputable: true, loaded: 3, total: 3 })
     xhr!.onload?.()
     expect(progress).toHaveBeenCalledWith(3, 3)
-    expect(xhr!.withCredentials).toBe(true)
-    expect(xhr!.headers['X-CSRF-Token']).toBe('token')
+    expect(xhr!.withCredentials).toBe(false)
+    expect(xhr!.headers.Authorization).toBe('Bearer upload')
     expect(xhr!.body?.get('file')).toBeInstanceOf(File)
     await expect(result).resolves.toMatchObject({ job_id: 'j', status: 'queued' })
   })

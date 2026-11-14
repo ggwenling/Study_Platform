@@ -17,7 +17,8 @@ async def live() -> dict[str, str]:
 async def ready(request: Request) -> JSONResponse:
     settings = request.app.state.settings
     if (
-        not settings.deepseek_api_key.get_secret_value()
+        len(settings.auth_jwt_secret.get_secret_value().encode()) < 32
+        or not settings.deepseek_api_key.get_secret_value()
         or not settings.embedding_api_key.get_secret_value()
     ):
         return JSONResponse({"status": "not_ready"}, status_code=503)
@@ -27,7 +28,7 @@ async def ready(request: Request) -> JSONResponse:
                 text("SELECT version_num FROM study.alembic_version")
             )
             await connection.execute(text("SELECT 1 FROM study.knowledge_bases LIMIT 0"))
-        if revision != "0002_personal_rag":
+        if revision != "0003_bearer_auth":
             return JSONResponse({"status": "not_ready"}, status_code=503)
         settings.storage_dir.mkdir(parents=True, exist_ok=True)
         with TemporaryFile(dir=settings.storage_dir) as probe:

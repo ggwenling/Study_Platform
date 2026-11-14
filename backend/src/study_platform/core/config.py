@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 604800
     cookie_secure: bool = False
     login_detailed_errors: bool = False
+    auth_jwt_secret: SecretStr = SecretStr("")
+    auth_public_url: str = "http://127.0.0.1:5173"
+    google_client_id: str = ""
+    google_client_secret: SecretStr = SecretStr("")
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_starttls: bool = True
+    smtp_user: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_from: str = ""
     allowed_origins: list[str] = [
         "http://localhost:5173", "http://127.0.0.1:5173",
         "http://localhost:8000", "http://127.0.0.1:8000",

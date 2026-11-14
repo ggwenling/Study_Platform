@@ -89,7 +89,10 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   }
 
   return (
+    <div className="composer-wrapper">
+    {!user && <button type="button" className="composer-login" aria-label="登录后使用提问、选库和上传" onClick={requireLogin} />}
     <form
+      inert={!user}
       className={`composer ${demo || conversationId ? 'composer-chat' : ''}`}
       onSubmit={(event) => {
         event.preventDefault()
@@ -162,5 +165,6 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
         </Button>}
       </div>
     </form>
+    </div>
   )
 }

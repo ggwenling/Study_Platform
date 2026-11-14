@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from study_platform.api.v1.auth import router as auth_router
 from study_platform.api.v1.resources import router
+from study_platform.core.config import Settings
 from study_platform.core.errors import ApiError, api_error_handler
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import AiWorkflowRun, Message
@@ -33,6 +34,7 @@ def resource_client():
         tx = connection.begin()
         db = Session(connection, join_transaction_mode="create_savepoint")
         app = FastAPI()
+        app.state.settings = Settings(_env_file=None, auth_jwt_secret="resource-test-key" * 3)
         app.include_router(auth_router)
         app.include_router(router)
         app.add_exception_handler(ApiError, api_error_handler)
@@ -54,8 +56,8 @@ def signup(http):
         },
     )
     assert result.status_code == 201
-    http.headers["X-CSRF-Token"] = http.cookies["study_csrf"]
-    return UUID(result.json()["id"])
+    http.headers["Authorization"] = "Bearer " + result.json()["access_token"]
+    return UUID(result.json()["user"]["id"])
 
 
 def test_resources_ownership_pagination_and_tombstones(resource_client):

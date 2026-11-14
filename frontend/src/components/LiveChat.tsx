@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { useWorkspace } from '../WorkspaceData'
 import { Composer } from './Composer'
 import { MarkdownContent } from './MarkdownContent'
+import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
 
 const time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const statusText = { pending: '等待生成…', streaming: '正在生成…', stopped: '已停止', failed: '回答失败', completed: '' }
@@ -156,8 +157,8 @@ export default function LiveChat({ id }: { id: string }) {
             ? <p>此来源已不可访问。</p>
             : source ? <div className="source-detail">
               <p>{source.quote}</p>
-              {source.preview_url?.includes('/pages/') && <img className="source-image" src={source.preview_url} alt={`${source.title} · ${source.location_label}`} />}
-              {source.content_url && <a className="return-link" href={source.content_url} target="_blank" rel="noreferrer">打开原件</a>}
+              {source.preview_url?.includes('/pages/') && <MaterialPage key={source.preview_url} version={source.material_version_id} page={Number(source.preview_url.split('/').at(-1))} title={`${source.title} · ${source.location_label}`} />}
+              {source.content_url && <DownloadMaterial version={source.material_version_id} title={source.title} />}
             </div>
               : <p role="status">正在核实来源…</p>}
         </DialogContent>

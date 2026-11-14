@@ -68,7 +68,9 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
         "updated_at",
         "deleted_at",
     }
-    assert len(expected) == 38
+    expected["study.google_identities"] = {"subject", "user_id"}
+    expected["study.password_resets"] = {"token_hash", "user_id", "email_hash", "client_hash", "created_at", "used_at"}
+    assert len(expected) == 40
     assert set(Base.metadata.tables) == set(expected)
     for name, fields in expected.items():
         assert set(Base.metadata.tables[name].columns.keys()) == fields, name
@@ -79,6 +81,9 @@ def test_primary_key_generation_and_timezone_contract():
         if table.name == "chunk_embeddings":
             assert list(table.primary_key.columns.keys()) == ["chunk_id", "model_profile_id"]
             assert all(c.server_default is None for c in table.primary_key.columns)
+        elif table.name in {"google_identities", "password_resets"}:
+            expected_key = "subject" if table.name == "google_identities" else "token_hash"
+            assert list(table.primary_key.columns.keys()) == [expected_key]
         else:
             assert list(table.primary_key.columns.keys()) == ["id"]
             assert isinstance(table.c.id.type, sa.Uuid)

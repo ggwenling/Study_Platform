@@ -64,7 +64,7 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
             expected = {
                 table.name for table in Base.metadata.tables.values() if table.schema == "study"
             }
-            assert len(expected) == 38
+            assert len(expected) == 40
 
             def check(upgraded: bool) -> None:
                 with engine.connect() as connection:

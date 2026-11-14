@@ -9,6 +9,7 @@ import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { Select } from '@/components/arc/select/select'
 import { useWorkspace } from '../WorkspaceData'
+import { DownloadMaterial } from './ProtectedMaterial'
 
 const phases: Record<string, string> = {
   queued: '等待处理', parsing: '解析中', ocr: '识别文字中', indexing: '建立索引中',
@@ -121,7 +122,7 @@ export default function Library({ preferredId }: { preferredId?: string }) {
       <Dialog open={Boolean(preview)} onOpenChange={(open) => { if (!open) setPreview(null) }}>
         <DialogContent title={previewName || '资料预览'} description="查看从原件提取的文字。">
           {preview && <div className="source-detail">
-            <a className="return-link" href={`/api/v1/material-versions/${encodeURIComponent(preview.version_id)}/content`} target="_blank" rel="noreferrer">打开原件</a>
+            <DownloadMaterial version={preview.version_id} title={previewName} />
             {preview.sections.map((section, index) => <p key={index}>{section.text}</p>)}
           </div>}
         </DialogContent>

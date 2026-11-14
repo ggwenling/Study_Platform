@@ -91,6 +91,33 @@ class UserSession(Base):
     )
 
 
+class GoogleIdentity(Base):
+    __tablename__ = "google_identities"
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", name="uq_google_identities_user_id"),
+        {"schema": "study"},
+    )
+
+    subject = sa.Column(sa.String(255), primary_key=True)
+    user_id = sa.Column(sa.Uuid(), sa.ForeignKey("study.users.id", name="fk_google_identities_user_id", ondelete="RESTRICT"), nullable=False)
+
+
+class PasswordReset(Base):
+    __tablename__ = "password_resets"
+    __table_args__ = (
+        sa.Index("ix_password_resets_email_time", "email_hash", "created_at"),
+        sa.Index("ix_password_resets_client_time", "client_hash", "created_at"),
+        {"schema": "study"},
+    )
+
+    token_hash = sa.Column(sa.String(64), primary_key=True)
+    user_id = sa.Column(sa.Uuid(), sa.ForeignKey("study.users.id", name="fk_password_resets_user_id", ondelete="RESTRICT"))
+    email_hash = sa.Column(sa.String(64), nullable=False)
+    client_hash = sa.Column(sa.String(64), nullable=False)
+    created_at = sa.Column(sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()"))
+    used_at = sa.Column(sa.DateTime(timezone=True))
+
+
 class Course(Base):
     __tablename__ = "courses"
     __table_args__ = (

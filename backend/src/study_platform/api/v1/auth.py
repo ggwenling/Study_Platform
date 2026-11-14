@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -13,6 +14,7 @@ from study_platform.core.errors import ApiError
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import User
 from study_platform.services.auth import (
+    access_session,
     account_can_login,
     check_csrf,
     check_origin,
@@ -20,9 +22,12 @@ from study_platform.services.auth import (
     credentials_valid,
     find_session,
     hasher,
+    issue_token,
+    signing_key,
 )
 
 router = APIRouter()
+bearer = HTTPBearer(auto_error=False)
 
 
 class UserDTO(BaseModel):
@@ -30,6 +35,11 @@ class UserDTO(BaseModel):
     email: str
     display_name: str
     avatar_url: str | None = None
+
+
+class AuthDTO(BaseModel):
+    user: UserDTO
+    access_token: str
 
 
 class LoginErrorDTO(BaseModel):
@@ -73,13 +83,14 @@ def user_payload(user: User) -> dict:
     }
 
 
-def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
-    session = find_session(db, request)
+def get_current_user(
+    request: Request, db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> User:
+    session = access_session(db, request, credentials.credentials if credentials else None)
     user = db.get(User, session.user_id) if session else None
     if user is None or not account_can_login(user):
         raise ApiError(401, "unauthenticated", "请先登录")
-    if request.method not in ("GET", "HEAD", "OPTIONS"):
-        check_csrf(request, session)
     # A streaming response can outlive authentication by minutes. Return the
     # loaded user without keeping a read transaction or pool slot open.
     db.expunge(user)
@@ -92,11 +103,12 @@ def me(user: User = Depends(get_current_user)) -> dict:
     return user_payload(user)
 
 
-@router.post("/auth/register", status_code=201, response_model=UserDTO)
+@router.post("/auth/register", status_code=201, response_model=AuthDTO)
 def register(
     body: RegisterBody, request: Request, response: Response, db: Session = Depends(get_db)
 ) -> dict:
     check_origin(request)
+    signing_key(request)
     user = User(
         email=body.email, password_hash=hasher.hash(body.password), display_name=body.display_name
     )
@@ -106,13 +118,12 @@ def register(
     except IntegrityError:
         db.rollback()
         raise ApiError(400, "registration_failed", "无法注册，请检查输入或尝试登录") from None
-    create_session(db, user, response)
-    return user_payload(user)
+    return {"user": user_payload(user), "access_token": create_session(db, user, request, response)}
 
 
 @router.post(
     "/auth/login",
-    response_model=UserDTO,
+    response_model=AuthDTO,
     responses={
         401: {
             "model": LoginErrorDTO,
@@ -129,15 +140,26 @@ def login(
     body: LoginBody, request: Request, response: Response, db: Session = Depends(get_db)
 ) -> dict:
     check_origin(request)
-    user = db.scalar(select(User).where(User.email == body.email))
+    user = db.scalar(select(User).where(User.email == body.email).with_for_update())
     if not credentials_valid(user, body.password):
         if request.app.state.settings.login_detailed_errors:
             if not account_can_login(user):
                 raise ApiError(401, "invalid_account", "此邮箱对应的账号不可登录")
             raise ApiError(401, "invalid_password", "密码错误")
         raise ApiError(401, "invalid_credentials", "邮箱或密码错误")
-    create_session(db, user, response)
-    return user_payload(user)
+    return {"user": user_payload(user), "access_token": create_session(db, user, request, response)}
+
+
+@router.post("/auth/refresh", response_model=AuthDTO)
+def refresh(request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
+    check_origin(request)
+    session = find_session(db, request)
+    user = db.get(User, session.user_id) if session else None
+    if not session or user is None or not account_can_login(user):
+        raise ApiError(401, "unauthenticated", "请先登录")
+    check_csrf(request, session)
+    response.headers["Cache-Control"] = "no-store"
+    return {"user": user_payload(user), "access_token": issue_token(request, session)}
 
 
 @router.post("/auth/logout", status_code=204)
@@ -149,6 +171,7 @@ def logout(request: Request, db: Session = Depends(get_db)) -> Response:
         session.revoked_at = datetime.now(UTC)
         db.commit()
     response = Response(status_code=204)
+    response.delete_cookie("study_refresh", path="/api/v1/auth")
     response.delete_cookie("study_session", path="/")
     response.delete_cookie("study_csrf", path="/")
     return response

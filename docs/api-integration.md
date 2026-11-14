@@ -1,10 +1,18 @@
 # API 接入说明
 
-API 根路径为 `/api/v1`，交互式接口定义见 `/docs`。示例假设浏览器通过同源代理访问后端；跨源时要使用允许的 Origin、`credentials: "include"`，并正确配置 HTTPS 和 Cookie。服务不会在响应中返回密钥。
+API 根路径为 `/api/v1`，交互式接口定义见 `/docs`。示例假设浏览器通过同源代理访问后端；跨源时要使用允许的 Origin，并正确配置 HTTPS 和 Cookie。注册、登录、刷新及退出请求需要 `credentials: "include"`；业务请求使用 Bearer 令牌。服务不会在响应中返回服务端密钥。
 
 ## 登录与请求
 
-`POST /auth/register` 接收 `{email, password, display_name}`，`POST /auth/login` 接收 `{email, password}`；成功后服务设置 HttpOnly 的 `study_session` 和可读取的 `study_csrf` Cookie。`GET /me` 获取当前用户，`POST /auth/logout` 退出。登录和注册也会检查 Origin。除登录注册外，写请求需要 Cookie、`X-CSRF-Token`（值为 `study_csrf`）和受允许的 Origin；GET 不需要 CSRF 头。部署 HTTPS 时配置 `COOKIE_SECURE=true`。
+`POST /auth/register` 接收 `{email, password, display_name}`，`POST /auth/login` 接收 `{email, password}`。两者返回 `{user, access_token}`，并设置有效期默认七天的 HttpOnly `study_refresh` 与可读取的 `study_csrf` Cookie。前端只在内存中保存有效期最长 15 分钟的访问令牌。包括 `GET /me`、上传、资料原件、OCR 页图和 SSE 在内的受保护请求统一使用 `Authorization: Bearer <access_token>`。
+
+`POST /auth/refresh` 使用刷新 Cookie 恢复登录并返回新的 `{user, access_token}`。`POST /auth/logout` 撤销会话并清除 Cookie。两者需要 `X-CSRF-Token`，值取自 `study_csrf`，并检查 Origin。客户端合并并发刷新请求。部署 HTTPS 时设置 `COOKIE_SECURE=true`。
+
+升级到 `0003_bearer_auth` 前，在服务端设置至少 32 字节的随机 `AUTH_JWT_SECRET`。运行迁移后一起重启前后端。原会话会撤销，用户重新登录即可访问原有数据。
+
+`GET /auth/options` 返回 Google 和邮件恢复是否可用。Google 登录需要 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET` 和应用地址 `AUTH_PUBLIC_URL`。Google 客户端的授权回调地址为该应用地址加 `/api/v1/auth/google/callback`。浏览器访问 `/auth/google/start` 开始授权，同邮箱账号通过 `POST /auth/google/link` 提交现有知循密码完成绑定。
+
+`POST /auth/password/forgot` 接收 `{email}`，配置 `SMTP_HOST`、`SMTP_PORT` 和 `SMTP_FROM` 后通过 SMTP 投递一次性链接。默认使用 STARTTLS，提供商要求身份验证时设置 `SMTP_USER` 和 `SMTP_PASSWORD`。仅本地邮件收件箱可用 `SMTP_STARTTLS=false` 测试。`POST /auth/password/reset` 接收 `{token, password}`。重置链接 30 分钟过期，完成后账号原有会话均失效。
 
 登录弹窗可根据 `401` 响应的 `code` 定位输入框。本地联调时在仓库根目录 `.env` 中设置 `LOGIN_DETAILED_ERRORS=true` 并重启后端。公开部署保留默认的 `false`，避免通过错误响应判断邮箱是否对应可登录账号。
 
@@ -16,7 +24,7 @@ API 根路径为 `/api/v1`，交互式接口定义见 `/docs`。示例假设浏�
 
 缺少字段或格式错误返回 `422 validation_error`。凭据校验失败时不设置新的会话 Cookie。
 
-在 `frontend/src` 下可直接导入 `./api/client` 中的 `api`、`uploadMaterial`、`streamChat` 和 `retryTurn`。Vite 已配置 `/api` 转发到本地后端。客户端会携带 Cookie，并给写请求添加 CSRF 请求头。完整路径及响应字段见 [OpenAPI 契约](../contracts/frontend.openapi.json)。
+在 `frontend/src` 下可直接导入 `./api/client` 中的 `api`、`uploadMaterial`、`streamChat` 和 `retryTurn`。Vite 已配置 `/api` 转发到本地后端。原件和页图通过客户端读取后，使用临时 Blob 地址预览或下载。完整路径及响应字段见 [OpenAPI 契约](../contracts/frontend.openapi.json)。
 
 业务错误返回 `{code, message, request_id, retryable}`。401 引导登录，403 检查 CSRF 和 Origin，404 表示资源不可访问。
 
@@ -44,7 +52,7 @@ API 根路径为 `/api/v1`，交互式接口定义见 `/docs`。示例假设浏�
 }
 ```
 
-请求需要 `Idempotency-Key` 和 CSRF 头。同一次提交在响应丢失后可以复用原请求和键。已结束的轮次会重放结果，进行中的轮次返回 409。`answer_mode` 默认 `knowledge_only`，用户可选 `with_general`。`intent` 为 `qa` 或 `summary`。问答省略 `material_ids` 时检索当前库已就绪的资料。摘要须明确选择已就绪资料，上限为 40 个分块且总计 24,000 字符。每轮保存自己的知识库与索引范围，切库后原消息仍可查看。资源仅对所属用户可访问，删除后历史引用可能标为不可用。
+请求需要 `Authorization: Bearer <access_token>` 和 `Idempotency-Key`。同一次提交在响应丢失后可以复用原请求和键。已结束的轮次会重放结果，进行中的轮次返回 409。`answer_mode` 默认 `knowledge_only`，用户可选 `with_general`。`intent` 为 `qa` 或 `summary`。问答省略 `material_ids` 时检索当前库已就绪的资料。摘要须明确选择已就绪资料，上限为 40 个分块且总计 24,000 字符。每轮保存自己的知识库与索引范围，切库后原消息仍可查看。资源仅对所属用户可访问，删除后历史引用可能标为不可用。
 
 这是 **POST SSE**：用 `fetch` 读取 `text/event-stream`，不能直接用仅支持 GET 的 `EventSource`。事件为 `meta`、`delta`、`sources`、`done`、`stopped` 或 `error`；`meta` 包含 `conversation_id` 和 `turn_id`，应立即保存以便恢复。`delta` 逐段追加，`sources` 的 citations 含位置与引用 ID，`done` 提供最终消息。可通过 `GET /sources/{citation_id}` 查看来源，相关原件和预览 URL 也需要鉴权。
 

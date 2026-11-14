@@ -28,6 +28,7 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   }
   vi.stubGlobal('XMLHttpRequest', MockXHR)
   await api.me(); await api.register({ email: 'a', password: 'b', display_name: 'c' }); await api.login({ email: 'a', password: 'b' }); await api.logout()
+  await api.authOptions(); await api.refresh(); await api.googleLink('b'); await api.forgotPassword('a'); await api.resetPassword('token', 'b')
   await api.knowledgeBases(); await api.knowledgeBase('id'); await api.createKnowledgeBase({ name: 'x' }); await api.updateKnowledgeBase('id', { name: 'x' }); await api.deleteKnowledgeBase('id')
   await api.materials('id'); await uploadMaterial('id', new File(['x'], 'x.txt')); await api.material('id'); await api.deleteMaterial('id'); await api.retryMaterial('id')
   await api.job('id'); await api.cancelJob('id'); await api.preview('id'); await api.content('id'); await api.pageImage('id', 1); await api.source('id')
@@ -35,7 +36,7 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.overview(); await api.search('q'); await api.capabilities(); await api.turn('id', 'id'); await api.cancelTurn('id', 'id')
   for await (const _ of streamChat({ knowledge_base_id: 'id', answer_mode: 'knowledge_only', intent: 'qa', content: 'x' }, 'key')) { /* consume */ }
   for await (const _ of retryTurn('id', 'id')) { /* consume */ }
-  expect(calls).toHaveLength(33)
+  expect(calls).toHaveLength(38)
   for (const [url, method] of calls) {
     const path = Object.keys(contract.paths).find((template) => new RegExp('^' + template.replace(/\{[^}]+\}/g, '[^/]+') + '$').test(url))
     expect(path, `${method.toUpperCase()} ${url}`).toBeDefined()
@@ -51,6 +52,7 @@ it('publishes the fields consumed by the frontend', () => {
     ScopeDTO: ['knowledge_base_id', 'knowledge_base_name', 'answer_mode', 'index_version_ids'],
     UploadResponse: ['material_id', 'version_id', 'job_id', 'status'],
     UserDTO: ['id', 'email', 'display_name'],
+    AuthDTO: ['user', 'access_token'],
     KnowledgeBaseDTO: ['id', 'name', 'description', 'created_at', 'updated_at'],
     KnowledgeBasePage: ['items', 'next_cursor'],
     ConversationDTO: ['id', 'title', 'created_at', 'updated_at'],

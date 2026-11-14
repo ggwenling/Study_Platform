@@ -8,6 +8,7 @@ import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { Home } from './components/Home'
 import { Account } from './components/Account'
+import type { AccountMode } from './components/Account'
 import { WorkspaceData, useWorkspace } from './WorkspaceData'
 import { api } from './api/client'
 import { ApiError } from './api/stream'
@@ -45,10 +46,30 @@ function ChatRoute({ notify }: { notify: (message: string) => void }) {
 
 export function App() {
   const [user, setUser] = useState<User | null>(null)
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [sessionState, setSessionState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [sessionAttempt, setSessionAttempt] = useState(0)
   const [loginOpen, setLoginOpen] = useState(false)
+  const [mode, setMode] = useState<AccountMode>('login')
+  const [resetToken, setResetToken] = useState('')
+  const [authError, setAuthError] = useState('')
   const [notice, setNotice] = useState('')
   const timer = useRef<number>(0)
   const reduced = useReducedMotion()
+  const trigger = useRef<HTMLElement | null>(null)
+  const destination = useRef('')
+  const path = location.pathname + location.search
+  const privatePage = !['/', '/chat/demo'].includes(location.pathname.replace(/\/+$/, '') || '/')
+
+  function requireLogin(target?: string) {
+    if (loginOpen) return
+    if (typeof target === 'string') destination.current = target
+    trigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setMode('login')
+    setAuthError('')
+    setLoginOpen(true)
+  }
 
   function notify(message: string) {
     window.clearTimeout(timer.current)
@@ -59,22 +80,58 @@ export function App() {
   useEffect(() => () => window.clearTimeout(timer.current), [])
   useEffect(() => {
     let active = true
-    void api.me().then(
-      (account) => { if (active) setUser(account) },
-      (error) => { if (active && !(error instanceof ApiError && error.status === 401)) notify(errorMessage(error)) },
+    void api.refresh().then(
+      (account) => { if (active) { setUser(account); setSessionState('ready') } },
+      (error) => {
+        if (!active) return
+        setSessionState(error instanceof ApiError && error.status === 401 ? 'ready' : 'error')
+      },
     )
     return () => { active = false }
-  }, [])
+  }, [sessionAttempt])
+
+  useEffect(() => {
+    if (sessionState === 'loading') return
+    const params = new URLSearchParams(location.search)
+    const auth = params.get('auth')
+    const reset = new URLSearchParams(location.hash.slice(1)).get('reset')
+    if (reset || auth === 'google_link' || auth === 'google_error') {
+      params.delete('auth')
+      const clean = location.pathname + (params.size ? '?' + params : '')
+      destination.current = clean
+      setResetToken(reset ?? '')
+      setMode(reset ? 'reset' : auth === 'google_link' ? 'google_link' : 'login')
+      setAuthError(auth === 'google_error' ? 'Google 登录未完成，请重试。' : '')
+      setLoginOpen(true)
+      if (reset) { setUser(null); api.clearSession(); setSessionState('ready') }
+      void navigate('/', { replace: true })
+    } else if (!user && privatePage && sessionState === 'ready') {
+      destination.current = path
+      requireLogin()
+      void navigate('/', { replace: true })
+    }
+  }, [location, user, sessionState])
+
+  function signedIn(account: User) {
+    setUser(account)
+    setSessionState('ready')
+    setLoginOpen(false)
+    if (destination.current) void navigate(destination.current, { replace: true })
+    destination.current = ''
+    setResetToken('')
+  }
 
   return <>
-    <WorkspaceData key={user?.id ?? 'guest'} user={user} notify={notify} requireLogin={() => setLoginOpen(true)} onExpired={() => setUser(null)}>
-      <Shell onLogout={() => setUser(null)} />
+    <WorkspaceData key={user?.id ?? 'guest'} user={user} notify={notify} requireLogin={requireLogin} onExpired={() => { api.clearSession(); setUser(null) }}>
+      <Shell onLogout={() => setUser(null)} onPrivateLink={requireLogin} privatePage={privatePage && !user} sessionState={sessionState}
+        retrySession={() => { setSessionState('loading'); setSessionAttempt((value) => value + 1) }} />
     </WorkspaceData>
-    <Dialog open={loginOpen} onOpenChange={setLoginOpen}>
-      <DialogContent title="登录知循" description="登录后访问你的知识库与对话。">
-        <Account onLogin={(account) => { setUser(account); setLoginOpen(false) }} />
-      </DialogContent>
-    </Dialog>
+    <Account open={loginOpen} onOpenChange={(open) => {
+      setLoginOpen(open)
+      if (!open) { destination.current = ''; setResetToken(''); setAuthError('') }
+    }} onLogin={signedIn} mode={mode} setMode={(nextMode) => { setMode(nextMode); setAuthError('') }}
+      next={destination.current || path} resetToken={resetToken} initialError={authError}
+      returnFocus={() => { if (trigger.current?.isConnected) trigger.current.focus(); else document.querySelector<HTMLElement>('.nav-toggle')?.focus() }} />
     <div className="notice-region" role="status" aria-live="polite">
       <AnimatePresence mode="wait">
         {notice && (
@@ -87,7 +144,13 @@ export function App() {
   </>
 }
 
-function Shell({ onLogout }: { onLogout: () => void }) {
+function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySession }: {
+  onLogout: () => void
+  onPrivateLink: (path: string) => void
+  privatePage: boolean
+  sessionState: 'loading' | 'ready' | 'error'
+  retrySession: () => void
+}) {
   const { user, recent, loading, notify, report, requireLogin } = useWorkspace()
   const [navOpen, setNavOpen] = useState(() => !window.matchMedia('(max-width: 480px)').matches)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -95,7 +158,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
   const { pathname, search } = useLocation()
   const isChat = pathname.startsWith('/chat/')
   const accountItems = [
-    { label: '设置', icon: <Settings size={16} />, onSelect: () => navigate('/settings') },
+    { label: '设置', icon: <Settings size={16} />, onSelect: () => user ? navigate('/settings') : onPrivateLink('/settings') },
     user
       ? { label: '退出登录', onSelect: async () => { try { await api.logout(); onLogout(); void navigate('/') } catch (error) { report(error) } } }
       : { label: '登录 / 注册', onSelect: requireLogin },
@@ -105,16 +168,25 @@ function Shell({ onLogout }: { onLogout: () => void }) {
     function openSearch(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        setSearchOpen(true)
+        if (document.querySelector('[role="dialog"]')) return
+        if (user) setSearchOpen(true)
+        else requireLogin()
       }
     }
     window.addEventListener('keydown', openSearch)
     return () => window.removeEventListener('keydown', openSearch)
-  }, [])
+  }, [user, requireLogin])
 
   return (
-    <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
-    <div className="app-shell" data-nav={navOpen} data-chat={isChat}>
+    <Dialog open={searchOpen} onOpenChange={(open) => { if (open && !user) requireLogin(); else setSearchOpen(open) }}>
+    <div className="app-shell" data-nav={navOpen} data-chat={isChat} onClickCapture={(event) => {
+      if (user || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || !(event.target instanceof Element)) return
+      const link = event.target.closest<HTMLAnchorElement>('a[href^="/"]')
+      if (!link || ['/', '/chat/demo'].includes(link.pathname)) return
+      event.preventDefault()
+      if (sessionState === 'ready') onPrivateLink(link.pathname + link.search)
+      else void navigate(link.pathname + link.search)
+    }}>
       <aside className="sidebar" id="sidebar" aria-label="主导航" inert={!navOpen} aria-hidden={!navOpen}>
         <div className="sidebar-inner">
           <Link to="/" className="brand" aria-label="知循首页">
@@ -156,14 +228,17 @@ function Shell({ onLogout }: { onLogout: () => void }) {
             </div>}
           </header>
         <main className="page">
-          <Routes>
+          {privatePage ? sessionState === 'error'
+            ? <div className="placeholder-page"><EmptyState title="无法恢复登录状态" description="请检查连接后重试。" action={<Button onClick={retrySession}>重试</Button>} /></div>
+            : sessionState === 'loading' ? <div className="placeholder-page" role="status">正在检查登录状态…</div> : <Home />
+          : <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/chat/:id" element={<ChatRoute notify={notify} />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/knowledge" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开知识库…</div>}><Library key={search} preferredId={new URLSearchParams(search).get('id') ?? undefined} /></Suspense>} />
             <Route path="/settings" element={<Placeholder title="设置暂未开放" description="个人偏好将在这里管理。" />} />
             <Route path="*" element={<Placeholder title="页面不存在" description="请检查访问地址，或返回首页。" />} />
-          </Routes>
+          </Routes>}
         </main>
       </div>
     </div>

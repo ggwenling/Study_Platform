@@ -61,7 +61,7 @@ def test_legacy_material_mapping_and_nonempty_downgrade(monkeypatch):
                     ),
                     {"id": material, "owner": user, "course": course},
                 )
-            command.upgrade(config, "head")
+            command.upgrade(config, "0002_personal_rag")
             with engine.connect() as connection:
                 kb = connection.execute(
                     sa.text("SELECT id,owner_user_id,name,description FROM study.knowledge_bases")

@@ -26,7 +26,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins,
                        allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE"],
-                       allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key"])
+                       allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "Idempotency-Key"])
     app.add_exception_handler(ApiError, api_error_handler)
 
     @app.exception_handler(RequestValidationError)

@@ -33,7 +33,7 @@ export function useWorkspace() {
 export function WorkspaceData({ user, notify, requireLogin, onExpired, children }: {
   user: User | null
   notify: Data['notify']
-  requireLogin: () => void
+  requireLogin: Data['requireLogin']
   onExpired: () => void
   children: ReactNode
 }) {

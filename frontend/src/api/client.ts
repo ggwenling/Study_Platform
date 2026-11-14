@@ -3,14 +3,18 @@ import type { Capabilities, ChatRequest, Citation, Conversation, Dashboard, Job,
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
+type AuthResponse = { user: User; access_token: string }
+let session: AuthResponse | null = null
+let refreshing: Promise<User> | null = null
+let sessionVersion = 0
 
 function csrfToken(): string | undefined {
   const cookie = document.cookie.split(/;\s*/).find((part) => part.startsWith('study_csrf='))
   return cookie ? decodeURIComponent(cookie.slice('study_csrf='.length)) : undefined
 }
-function headersFor(method: string, headers?: HeadersInit, csrf = true): Headers {
+function headersFor(headers?: HeadersInit, csrf = false): Headers {
   const result = new Headers(headers)
-  if (csrf && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+  if (csrf) {
     const token = csrfToken()
     if (token) result.set('X-CSRF-Token', token)
   }
@@ -27,15 +31,63 @@ async function checked(response: Response): Promise<Response> {
   }
   return response
 }
-async function request<T>(path: string, options: RequestInit = {}, csrf = true): Promise<T> {
-  const method = (options.method ?? 'GET').toUpperCase()
-  const headers = headersFor(method, options.headers, csrf)
+async function authorized<T>(send: (token?: string) => Promise<T>): Promise<T> {
+  const original = session
+  try {
+    return await send(original?.access_token)
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 401) || !original) throw error
+    if (session === original) await refresh()
+    if (!session || session.user.id !== original.user.id) throw error
+    return send(session.access_token)
+  }
+}
+
+async function request<T>(path: string, options: RequestInit = {}, auth: 'bearer' | 'public' | 'cookie' = 'bearer'): Promise<T> {
+  const headers = headersFor(options.headers, auth === 'cookie')
   if (options.body && typeof options.body === 'string') headers.set('Content-Type', 'application/json')
-  const response = await checked(await fetch(base + path, { ...options, method, headers, credentials: 'include' }))
+  const send = async (token?: string) => {
+    const requestHeaders = new Headers(headers)
+    if (token) requestHeaders.set('Authorization', `Bearer ${token}`)
+    return checked(await fetch(base + path, { ...options, headers: requestHeaders, credentials: auth === 'bearer' ? 'omit' : 'include' }))
+  }
+  const response = auth === 'bearer' ? await authorized(send) : await send()
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 const json = (method: string, body?: unknown): RequestInit => ({ method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+
+function clearSession() {
+  sessionVersion += 1
+  session = null
+  refreshing = null
+}
+
+function refresh() {
+  const version = sessionVersion
+  if (!refreshing) {
+    refreshing = request<AuthResponse>('/auth/refresh', json('POST'), 'cookie').then((result) => {
+      if (version !== sessionVersion || (session && session.user.id !== result.user.id)) {
+        throw new ApiError({ code: 'unauthenticated', message: '请重新登录', retryable: false }, 401)
+      }
+      session = result
+      return result.user
+    }).catch((error) => {
+      if (version === sessionVersion && error instanceof ApiError && error.status === 401) session = null
+      throw error
+    }).finally(() => {
+      if (version === sessionVersion) refreshing = null
+    })
+  }
+  return refreshing
+}
+
+async function authenticate(path: string, body: unknown) {
+  const result = await request<AuthResponse>(path, json('POST', body), 'public')
+  clearSession()
+  session = result
+  return result.user
+}
 const query = (values: Record<string, string | undefined>) => {
   const params = new URLSearchParams()
   Object.entries(values).forEach(([key, value]) => { if (value !== undefined) params.set(key, value) })
@@ -45,9 +97,18 @@ const query = (values: Record<string, string | undefined>) => {
 
 export const api = {
   me: () => request<User>('/me'),
-  register: (body: { email: string; password: string; display_name: string }) => request<User>('/auth/register', json('POST', body), false),
-  login: (body: { email: string; password: string }) => request<User>('/auth/login', json('POST', body), false),
-  logout: () => request<void>('/auth/logout', json('POST')),
+  refresh,
+  clearSession,
+  authOptions: () => request<{ google: boolean; password_reset: boolean }>('/auth/options', {}, 'public'),
+  register: (body: { email: string; password: string; display_name: string }) => authenticate('/auth/register', body),
+  login: (body: { email: string; password: string }) => authenticate('/auth/login', body),
+  googleLink: (password: string) => authenticate('/auth/google/link', { password }),
+  forgotPassword: (email: string) => request<{ message: string }>('/auth/password/forgot', json('POST', { email }), 'public'),
+  resetPassword: async (token: string, password: string) => {
+    await request<void>('/auth/password/reset', json('POST', { token, password }), 'public')
+    clearSession()
+  },
+  logout: async () => { await request<void>('/auth/logout', json('POST'), 'cookie'); clearSession() },
   knowledgeBases: (cursor?: string) => request<Page<KnowledgeBase>>('/knowledge-bases' + query({ cursor })),
   knowledgeBase: (id: string) => request<KnowledgeBase>(`/knowledge-bases/${pathId(id)}`),
   createKnowledgeBase: (body: KnowledgeBaseInput) => request<KnowledgeBase>('/knowledge-bases', json('POST', body)),
@@ -76,11 +137,18 @@ export const api = {
   cancelTurn: (conversationId: string, turnId: string) => request<Turn>(turnPath(conversationId, turnId) + '/cancel', json('POST')),
 }
 function turnPath(conversationId: string, turnId: string) { return `/conversations/${pathId(conversationId)}/turns/${pathId(turnId)}` }
-async function checkedFetch(path: string): Promise<Response> { return checked(await fetch(base + path, { credentials: 'include' })) }
+function fetchProtected(path: string, options?: RequestInit) {
+  return authorized(async (token) => {
+    const headers = new Headers(options?.headers)
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    return checked(await fetch(base + path, { ...options, headers, credentials: 'omit' }))
+  })
+}
+function checkedFetch(path: string) { return fetchProtected(path) }
 
 async function* stream(path: string, body: unknown, idempotencyKey?: string, signal?: AbortSignal) {
-  const headers = headersFor('POST', { 'Content-Type': 'application/json', ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) })
-  const response = await checked(await fetch(base + path, { method: 'POST', headers, credentials: 'include', body: JSON.stringify(body), signal }))
+  const headers = { 'Content-Type': 'application/json', ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) }
+  const response = await fetchProtected(path, { method: 'POST', headers, body: JSON.stringify(body), signal })
   if (!response.body) throw new ApiError({ code: 'empty_stream', message: 'Response has no stream', retryable: false })
   let turnId: string | undefined
   let complete = false
@@ -96,15 +164,13 @@ export function streamChat(body: ChatRequest, idempotencyKey: string, signal?: A
 export function retryTurn(conversationId: string, turnId: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/retry', {}, undefined, signal) }
 
 export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal): Promise<UploadResult> {
-  return new Promise((resolve, reject) => {
+  return authorized((token) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     const abort = () => xhr.abort()
     if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return }
     signal?.addEventListener('abort', abort, { once: true })
     xhr.open('POST', `${base}/knowledge-bases/${pathId(knowledgeBaseId)}/materials`)
-    xhr.withCredentials = true
-    const token = csrfToken()
-    if (token) xhr.setRequestHeader('X-CSRF-Token', token)
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
     xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress?.(event.loaded, event.total) }
     xhr.onload = () => {
       signal?.removeEventListener('abort', abort)
@@ -120,5 +186,5 @@ export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?:
     const form = new FormData()
     form.append('file', file)
     xhr.send(form)
-  })
+  }))
 }

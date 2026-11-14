@@ -4,6 +4,7 @@ import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heat
 import { Button } from '@/components/arc/button/button'
 import { Tooltip } from '@/components/arc/tooltip/tooltip'
 import { Composer } from './Composer'
+import { useWorkspace } from '../WorkspaceData'
 import { MarkdownContent } from './MarkdownContent'
 
 const sources = [
@@ -29,10 +30,12 @@ const demoDays = Array.from({ length: 147 }, (_, index) => ({
 }))
 
 export default function DemoChat({ notify }: { notify: (message: string) => void }) {
+  const { user, requireLogin } = useWorkspace()
   const [sourcesOpen, setSourcesOpen] = useState(true)
-  const sourceNotice = () => notify('来源查看尚未接入。')
+  const sourceNotice = () => user ? notify('此引用来自示例会话。') : requireLogin()
 
   async function copyAnswer() {
+    if (!user) return requireLogin()
     try {
       await navigator.clipboard.writeText(answer)
       notify('已复制示例回答。')
@@ -103,7 +106,10 @@ export default function DemoChat({ notify }: { notify: (message: string) => void
           </section>
           <section className="source-section">
             <h3>使用活动</h3>
-            <ActivityHeatmap days={demoDays} label="示例使用活动" period="最近 21 周" unit={{ one: '次活动', other: '次活动' }} weekStartsOn={1} locale="zh-CN" />
+            <div className="composer-wrapper">
+              {!user && <button type="button" className="composer-login" aria-label="登录后使用活动筛选" onClick={requireLogin} />}
+              <div inert={!user}><ActivityHeatmap days={demoDays} label="示例使用活动" period="最近 21 周" unit={{ one: '次活动', other: '次活动' }} weekStartsOn={1} locale="zh-CN" /></div>
+            </div>
           </section>
           <p className="source-disclaimer">示例内容仅用于展示界面。</p>
         </div>

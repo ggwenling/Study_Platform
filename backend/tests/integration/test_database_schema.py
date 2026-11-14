@@ -91,7 +91,7 @@ def test_schema_matches_metadata(db):
     expected = {
         table.name: table for table in Base.metadata.tables.values() if table.schema == "study"
     }
-    assert len(expected) == 38
+    assert len(expected) == 40
     assert set(inspector.get_table_names(schema="study")) - {"alembic_version"} == set(expected)
     for name, table in expected.items():
         actual = {column["name"]: column for column in inspector.get_columns(name, schema="study")}
