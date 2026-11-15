@@ -1,6 +1,7 @@
 """Server-side model clients. Provider errors never select another model."""
 
 import math
+import time
 
 from langchain_openai import ChatOpenAI
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
@@ -22,12 +23,15 @@ def provider_error(exc: Exception) -> ApiError:
     return ApiError(502, "model_response_invalid", "模型服务返回了无法使用的结果")
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
+def embed_texts(texts: list[str], *, diagnostics: dict | None = None) -> list[list[float]]:
     settings = get_settings()
     if not settings.embedding_api_key.get_secret_value():
         raise ApiError(503, "model_not_configured", "尚未配置向量模型")
     if not texts or len(texts) > 20:
         raise ValueError("Embedding batch must contain 1 to 20 texts")
+    started = time.monotonic()
+    if diagnostics is not None:
+        diagnostics.update(calls=1, input_count=len(texts), usage=None)
     try:
         with OpenAI(
             api_key=settings.embedding_api_key.get_secret_value(),
@@ -40,6 +44,8 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
                 dimensions=settings.embedding_dimensions, encoding_format="float",
             )
         rows = sorted(response.data, key=lambda row: row.index)
+        if diagnostics is not None:
+            diagnostics["usage"] = response.usage.model_dump() if response.usage else None
         vectors = [row.embedding for row in rows]
         if len(vectors) != len(texts) or any(
             len(v) != 1024 or not all(math.isfinite(x) for x in v) or not any(v)
@@ -51,9 +57,13 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         raise
     except Exception as exc:
         raise provider_error(exc) from None
+    finally:
+        if diagnostics is not None:
+            diagnostics["elapsed_ms"] = (time.monotonic() - started) * 1000
 
 
-def chat_model() -> ChatOpenAI:
+def chat_model(*, timeout: float | None = None, max_tokens: int | None = None,
+               temperature: float | None = None) -> ChatOpenAI:
     settings = get_settings()
     if not settings.deepseek_api_key.get_secret_value():
         raise ApiError(503, "model_not_configured", "尚未配置聊天模型")
@@ -61,9 +71,10 @@ def chat_model() -> ChatOpenAI:
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
         model=settings.chat_model,
-        timeout=settings.model_timeout_seconds,
+        timeout=settings.model_timeout_seconds if timeout is None else timeout,
         max_retries=0,
-        max_tokens=settings.model_max_output_tokens,
+        max_tokens=settings.model_max_output_tokens if max_tokens is None else max_tokens,
+        **({"temperature": temperature} if temperature is not None else {}),
         extra_body={"thinking": {"type": "disabled"}},
         stream_usage=True,
     )

@@ -56,3 +56,7 @@ uv run pytest -q
 ```
 
 数据库规则见 [数据库规则](docs/database-rules.md)。`.env`、`.venv`、`.local` 和其他凭据或安装缓存不提交。
+
+## 问答质量回归
+
+在 `backend` 执行 `uv run study-eval-rag` 可离线验证固定中文样例；增加 `--live --strategy compare` 才会在新建隔离测试库中调用真实模型。数据集、复核及运行方式见 [质量回归说明](docs/rag-quality.md)，结果见 [质量验收记录](docs/verification-rag-quality.md)。查询改写候选未获得事实命中增益，默认关闭。

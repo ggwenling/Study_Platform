@@ -31,6 +31,10 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def chat_db(monkeypatch):
+    from study_platform.core.config import get_settings
+
+    settings = get_settings().model_copy(update={"rag_query_rewrite_enabled": False})
+    monkeypatch.setattr(chat, "get_settings", lambda: settings)
     if os.getenv("RUN_DB_TESTS") != "1" or not os.getenv("TEST_DATABASE_URL"):
         pytest.skip("explicit PostgreSQL test database required")
     url = make_url(os.environ["TEST_DATABASE_URL"])
@@ -324,6 +328,172 @@ def test_reference_endpoint_checks_conversation_owner(chat_db):
         with pytest.raises(ApiError) as error:
             get_source(citation_id, db, SimpleNamespace(id=s.outsider))
         assert error.value.status_code == 404
+
+
+@pytest.mark.parametrize("deleted", ["material", "knowledge_base", "index"])
+def test_unavailable_ocr_citation_is_redacted_in_sources_history_turn_and_replay(chat_db, deleted):
+    from study_platform.api.v1.resources import get_source, list_messages
+    from study_platform.persistence.models import IndexVersion, Material
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    evidence["locator"] = {"page": 1, "ocr": [{"text": "Hidden OCR original", "box": [[1, 2]]}]}
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+    assert chat.checkpoint(run, fence, "Saved answer [S2]", "completed", [evidence])
+    conv = conversation_for(s, run)
+    before = chat.turn(s.owner, conv, run)
+    citation = before["messages"][-1]["citations"][0]
+    assert citation["quote"] == evidence["text"] and citation["locator"]["ocr"]
+    with s.factory.begin() as db:
+        if deleted == "material":
+            db.get(Material, evidence["material_id"]).deleted_at = chat.now()
+        elif deleted == "knowledge_base":
+            db.get(KnowledgeBase, s.kb_a).deleted_at = chat.now()
+        else:
+            index = db.get(IndexVersion, evidence["index_version_id"])
+            index.status, index.is_active = "failed", False
+    with s.factory() as db:
+        source = get_source(citation["id"], db, SimpleNamespace(id=s.owner))
+        history = list_messages(conv, 50, None, db, SimpleNamespace(id=s.owner))
+    state = chat.turn(s.owner, conv, run)
+    for item in [source, history["items"][-1]["citations"][0], state["messages"][-1]["citations"][0]]:
+        assert item["quote"] == "" and item["locator"] == {}
+        assert item["content_url"] is None and item["preview_url"] is None
+        assert item["availability"] == "unavailable" and item["location_label"] == "第 1 页"
+    assert state["messages"][-1]["content"] == "Saved answer [S2]"
+
+    async def replay():
+        return [payload(frame) async for frame in chat.stream(s.owner, run, fence, replay=True)]
+
+    events = asyncio.run(replay())
+    assert "Hidden OCR original" not in json.dumps(events)
+    assert next(e for e in events if e["type"] == "sources")["citations"][0]["quote"] == ""
+
+
+def test_cancel_during_rewrite_does_not_embed_or_generate(chat_db, monkeypatch):
+    from study_platform.services.query_rewrite import RewriteResult
+
+    s = chat_db
+    seed_evidence(s)
+    settings = chat.get_settings().model_copy(update={"rag_query_rewrite_enabled": True})
+    monkeypatch.setattr(chat, "get_settings", lambda: settings)
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+    conv = conversation_for(s, run)
+
+    async def rewrite(_):
+        chat.cancel(s.owner, conv, run)
+        return RewriteResult("reworded", "rewritten", 1)
+
+    def forbidden(*_, **__):
+        raise AssertionError("cancelled turn must not call embedding or answer model")
+
+    monkeypatch.setattr(chat, "rewrite_query", rewrite)
+    monkeypatch.setattr(chat, "retrieve", forbidden)
+    monkeypatch.setattr(chat, "chat_model", forbidden)
+
+    async def consume():
+        return [payload(frame) async for frame in chat.stream(s.owner, run, fence)]
+
+    assert asyncio.run(consume())[-1]["type"] == "stopped"
+
+
+def test_two_vector_retrieval_keeps_frozen_scope_filters_deleted_material_and_caps_six(chat_db):
+    from study_platform.persistence.models import ChunkEmbedding, Material, MaterialChunk
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    outside = seed_evidence(s)
+    vector = [1.0] + [0.0] * 1023
+    with s.factory.begin() as db:
+        db.get(Material, outside["material_id"]).knowledge_base_id = s.kb_b
+        for item in (evidence, outside):
+            db.add(ChunkEmbedding(chunk_id=item["id"], embedding=vector,
+                                  model_profile_id=f"{chat.get_settings().embedding_model}:1024"))
+        for ordinal in range(1, 10):
+            row = MaterialChunk(id=uuid4(), index_version_id=evidence["index_version_id"],
+                                material_version_id=evidence["material_version_id"], ordinal=ordinal,
+                                text=f"Fact {ordinal}", text_sha256="a" * 64, locator={"line": ordinal})
+            db.add(row)
+            db.flush()
+            db.add(ChunkEmbedding(chunk_id=row.id, embedding=vector,
+                                  model_profile_id=f"{chat.get_settings().embedding_model}:1024"))
+    scope = {"index_version_ids": [str(evidence["index_version_id"])]}
+    settings = chat.get_settings().model_copy(update={"retrieval_top_k": 20})
+    # The production cap stays six even if an old local configuration asks for more.
+    from unittest.mock import patch
+
+    with patch.object(chat, "get_settings", return_value=settings):
+        hits = chat.retrieve_vectors(scope, [vector, vector])
+    assert len(hits) == 6 and len({row["id"] for row in hits}) == 6
+    assert {row["material_version_id"] for row in hits} == {evidence["material_version_id"]}
+    with s.factory.begin() as db:
+        db.get(Material, evidence["material_id"]).deleted_at = chat.now()
+    assert chat.retrieve_vectors(scope, [vector, vector]) == []
+
+
+def test_enabled_rewrite_batches_queries_answers_original_and_replay_calls_nothing(chat_db, monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+
+    from study_platform.persistence.models import ChunkEmbedding
+    from study_platform.services.query_rewrite import RewriteResult
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    vector = [1.0] + [0.0] * 1023
+    with s.factory.begin() as db:
+        db.add(ChunkEmbedding(chunk_id=evidence["id"], embedding=vector,
+                              model_profile_id=f"{chat.get_settings().embedding_model}:1024"))
+    settings = chat.get_settings().model_copy(update={"rag_query_rewrite_enabled": True})
+    monkeypatch.setattr(chat, "get_settings", lambda: settings)
+    rewritten = AsyncMock(return_value=RewriteResult("Equivalent question", "rewritten", 1))
+    embed = Mock(return_value=[vector, vector])
+    monkeypatch.setattr(chat, "rewrite_query", rewritten)
+    monkeypatch.setattr(chat, "embed_texts", embed)
+
+    async def chunks(messages):
+        assert messages[-1].content == "Original question"
+        yield SimpleNamespace(content="Private evidence text [S1]", usage_metadata=None)
+
+    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=chunks))
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a, content="Original question"), uuid4().hex)
+
+    async def consume(replay=False):
+        return [payload(frame) async for frame in chat.stream(s.owner, run, fence, replay=replay)]
+
+    events = asyncio.run(consume())
+    assert events[-1]["type"] == "done" and events[-1]["message"]["citations"]
+    embed.assert_called_once_with(["Original question", "Equivalent question"])
+    asyncio.run(consume(True))
+    assert rewritten.call_count == 1 and embed.call_count == 1
+
+
+@pytest.mark.parametrize("intent", ["summary", "empty"])
+def test_summary_and_empty_library_skip_rewrite_even_when_enabled(chat_db, monkeypatch, intent):
+    s = chat_db
+    settings = chat.get_settings().model_copy(update={"rag_query_rewrite_enabled": True})
+    monkeypatch.setattr(chat, "get_settings", lambda: settings)
+
+    def forbidden(*_, **__):
+        raise AssertionError("this path must not rewrite or embed a query")
+
+    monkeypatch.setattr(chat, "rewrite_query", forbidden)
+    monkeypatch.setattr(chat, "embed_texts", forbidden)
+    data = request(s.kb_a)
+    if intent == "summary":
+        evidence = seed_evidence(s)
+        data.update(intent="summary", material_ids=[str(evidence["material_id"])])
+
+    async def answer(_):
+        yield SimpleNamespace(content="Summary [S1]", usage_metadata=None)
+
+    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=answer))
+    run, fence, _ = chat.prepare(s.owner, data, uuid4().hex)
+
+    async def consume():
+        return [payload(frame) async for frame in chat.stream(s.owner, run, fence)]
+
+    events = asyncio.run(consume())
+    assert events[-1]["type"] == "done"
 
 
 @pytest.mark.parametrize("deleted", [True, False])

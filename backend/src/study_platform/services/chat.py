@@ -26,6 +26,7 @@ from study_platform.persistence.models.materials import (
 )
 from study_platform.persistence.models.operations import AiWorkflowRun, IdempotencyKey
 from study_platform.services.models import chat_model, embed_texts, provider_error
+from study_platform.services.query_rewrite import rewrite_query
 
 ACTIVE = ("created", "running")
 
@@ -333,12 +334,38 @@ def chunk_dto(row, title):
             "locator": row.locator, "title": title}
 
 
-def retrieve(scope, content):
+def retrieve(scope, content, *, rewritten_query=None, diagnostics=None):
+    if not scope["index_version_ids"]:
+        return []
+    queries = [content]
+    if rewritten_query and rewritten_query != content:
+        queries.append(rewritten_query)
+    if diagnostics is None:
+        vectors = embed_texts(queries)
+    else:
+        vectors = embed_texts(queries, diagnostics=diagnostics)
+    return retrieve_vectors(scope, vectors)
+
+
+def fuse_rankings(rankings, limit):
+    scores, rows, original = {}, {}, {}
+    for branch, ranking in enumerate(rankings):
+        for rank, row in enumerate(ranking, 1):
+            key = row["id"]
+            scores[key] = scores.get(key, 0) + 1 / (60 + rank)
+            rows[key] = row
+            if branch == 0:
+                original[key] = rank
+    ordered = sorted(rows, key=lambda key: (-scores[key], original.get(key, float("inf")), str(key)))
+    return [rows[key] for key in ordered[:limit]]
+
+
+def retrieve_vectors(scope, vectors):
     indices = [UUID(x) for x in scope["index_version_ids"]]
     if not indices:
         return []
-    vector = embed_texts([content])[0]
     profile = f"{get_settings().embedding_model}:1024"
+    limit = min(get_settings().retrieval_top_k, 6)
     with session_factory()() as db:
         # MATERIALIZED scoped candidates prevent an ANN global top-k from dropping
         # a private knowledge base's matches before the ownership filter is applied.
@@ -349,13 +376,16 @@ def retrieve(scope, content):
         ).where(
             ChunkEmbedding.model_profile_id == profile,
         ).cte("scoped").prefix_with("MATERIALIZED")
-        distance = scoped.c.embedding.cosine_distance(vector)
-        matches = sa.select(scoped.c.chunk_id, distance.label("distance")).where(
-            distance <= 1-get_settings().retrieval_min_similarity,
-        ).order_by(distance, scoped.c.chunk_id).limit(get_settings().retrieval_top_k).subquery()
-        rows = db.execute(query.join(matches, matches.c.chunk_id == MaterialChunk.id)
-                          .order_by(matches.c.distance, MaterialChunk.id)).all()
-        return [chunk_dto(row, title) for row, title in rows]
+        rankings = []
+        for vector in vectors:
+            distance = scoped.c.embedding.cosine_distance(vector)
+            matches = sa.select(scoped.c.chunk_id, distance.label("distance")).where(
+                distance <= 1-get_settings().retrieval_min_similarity,
+            ).order_by(distance, scoped.c.chunk_id).limit(limit).subquery()
+            rows = db.execute(query.join(matches, matches.c.chunk_id == MaterialChunk.id)
+                              .order_by(matches.c.distance, MaterialChunk.id)).all()
+            rankings.append([chunk_dto(row, title) for row, title in rows])
+        return fuse_rankings(rankings, limit)
 
 
 def prompt(scope, evidence, history):
@@ -446,7 +476,19 @@ async def stream(owner, run_id, fence, replay=False):
                 raise ApiError(422, "summary_scope_too_large", "所选资料过长，请减少摘要资料范围")
         else:
             yield event("phase", turn_id=run_id, phase="searching")
-            evidence = await run_in_threadpool(retrieve, scope, scope["content"])
+            if get_settings().rag_query_rewrite_enabled and scope["index_version_ids"]:
+                if not await run_in_threadpool(checkpoint, run_id, fence, content):
+                    yield await ended_event(owner, conv_id, run_id)
+                    return
+                rewritten = await rewrite_query(scope["content"])
+                if not await run_in_threadpool(checkpoint, run_id, fence, content):
+                    yield await ended_event(owner, conv_id, run_id)
+                    return
+                evidence = await run_in_threadpool(
+                    retrieve, scope, scope["content"], rewritten_query=rewritten.query,
+                )
+            else:
+                evidence = await run_in_threadpool(retrieve, scope, scope["content"])
         if not evidence and scope["answer_mode"] == "knowledge_only":
             content = "当前资料不足，无法根据所选知识库回答。请补充相关资料或调整提问。"
             yield event("delta", turn_id=run_id, delta=content)

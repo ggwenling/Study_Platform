@@ -81,7 +81,17 @@ def test_citation_snapshot_and_unavailable_sources(monkeypatch, tmp_path):
     dto = citation_dto(db, citation)
     assert dto["availability"] == "unavailable"
     assert dto["unavailable_reason"] == "material_deleted"
-    assert dto["content_url"] is None and dto["quote"] == "Original quote"
+    assert dto["content_url"] is None and dto["preview_url"] is None
+    assert dto["quote"] == "" and dto["locator"] == {}
+    material.deleted_at = None
+    kb.deleted_at = datetime.now(UTC)
+    citation.locator = {"image": 1, "ocr": [{"text": "Hidden OCR", "box": [[1, 2]]}]}
+    dto = citation_dto(db, citation)
+    assert dto["unavailable_reason"] == "knowledge_base_deleted"
+    assert dto["quote"] == "" and dto["locator"] == {}
+    kb.deleted_at = None
+    db.rows[(IndexVersion, index_id)].status = "failed"
+    assert citation_dto(db, citation)["locator"] == {}
 
 
 def test_message_snapshot_scope_only_exposes_public_fields():

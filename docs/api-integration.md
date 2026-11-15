@@ -76,6 +76,10 @@ for await (const event of streamChat({
 
 流中断后用 `api.turn(conversationId, turnId)` 查询已保存的状态和内容。用户主动停止可调用 `api.cancelTurn(conversationId, turnId)`。最后一个失败或停止的轮次可通过 `retryTurn(conversationId, turnId)` 在原资料范围内重新生成。流中的 `error` 事件会由客户端抛出 `ApiError`。界面收到 `done` 后才将回答标为完成。
 
+来源变为不可用时，所有引用读取路径（包括历史、轮次查询和 SSE 重放）返回 `quote: ""`、`locator: {}`、`content_url: null` 和 `preview_url: null`；保留来源标识、名称、版本、定位标签及失效原因。历史回答正文仍保留，不能把它当作来源仍可读取的凭据。
+
+可选查询改写由后端 `RAG_QUERY_REWRITE_ENABLED` 控制，默认关闭；不增加请求字段或 SSE 事件，实验步骤仍显示为 searching。它只补充当前库内的检索问题，最终回答针对原问题，不能扩大知识范围。行为与实测边界见 [质量回归说明](rag-quality.md)。
+
 ## 运行与费用
 
 开发库执行 `uv run alembic upgrade head`；如需独立的 LangGraph 表再执行 `uv run study-setup-checkpointer`。启动 `uv run study-api` 与独立的 `uv run study-worker`。应用的问答流程通过 LangChain 调用模型、在业务数据库记录轮次，不使用 LangGraph checkpointer 恢复执行。

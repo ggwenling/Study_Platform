@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     model_max_output_tokens: int = 2048
     retrieval_top_k: int = 6
     retrieval_min_similarity: float = 0.35
+    rag_query_rewrite_enabled: bool = False
 
 
 @lru_cache
