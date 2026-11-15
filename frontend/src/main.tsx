@@ -5,6 +5,7 @@ import { MotionConfig } from 'motion/react'
 import { App } from './App'
 import '@/components/arc/foundation.css'
 import './styles.css'
+import './typography.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

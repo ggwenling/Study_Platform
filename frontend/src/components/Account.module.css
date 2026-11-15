@@ -4,16 +4,16 @@
 .card > div:first-child > button { position: absolute; top: 12px; right: 12px; border-color: transparent; background: transparent; }
 .brand { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 13px; }
 .brand svg { color: #77af86; }
-.brand strong { font-size: 19px; }
-.brand span { color: #ddd; font-size: 12px; }
-.card h2 { color: #f4f4f4; font-weight: 650; font-size: 22px; }
-.card p { font-size: 13px; }
+.brand strong { font-size: var(--text-lg); }
+.brand span { color: #ddd; font-size: var(--text-xs); }
+.card h2 { color: #f4f4f4; font-weight: 600; font-size: var(--text-2xl); }
+.card p { font-size: var(--text-caption); }
 .form { display: grid; gap: 8px; padding-inline: 14px; }
 .form input[name="password"], .form input[name="confirmation"] { background: transparent; }
 .form .submit { width: 100%; background: #f4f4f4; color: #151515; }
-.forgot, .footer { display: flex; align-items: center; gap: 5px; font-size: 13px; }
+.forgot, .footer { display: flex; align-items: center; gap: 5px; font-size: var(--text-caption); }
 .forgot { justify-content: flex-end; margin-top: -6px; }
 .footer { justify-content: center; color: #b7b7b7; }
-.divider { display: flex; align-items: center; gap: 12px; font-size: 12px; color: #aaa; }
+.divider { display: flex; align-items: center; gap: 12px; font-size: var(--text-xs); color: #aaa; }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #303030; }
 .overlay[data-state] { background: rgb(0 0 0 / .76); backdrop-filter: blur(2px); }

@@ -1,0 +1,83 @@
+@import './fonts/misans/misans.css';
+
+@font-face {
+  font-family: Geist;
+  src: url('../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+}
+
+:root {
+  --font-sans: 'Geist', 'MiSans', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'SFMono-Regular', 'Cascadia Code', Consolas, monospace;
+  --font-editorial: 'Noto Serif SC', 'Songti SC', serif;
+  --font-body: var(--font-sans);
+  --font-display: var(--font-sans);
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+  --text-4xl: 36px;
+  /* Explicit exceptions in the product specification. */
+  --text-caption: 13px;
+  --text-intro: 15px;
+  --text-field: var(--text-base);
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --leading-display: 1.2;
+  --leading-heading: 1.35;
+  --leading-ui: 1.4;
+  --leading-body: 1.65;
+  --leading-chat: 1.75;
+  --tracking-body: normal;
+  --tracking-display: normal;
+}
+
+html, body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body);
+  letter-spacing: normal;
+  font-kerning: normal;
+}
+button, input, textarea, select { font-family: var(--font-sans); }
+button, nav { line-height: var(--leading-ui); font-weight: var(--weight-medium); }
+h1, h2, h3, h4, h5, h6 { font-weight: var(--weight-semibold); line-height: var(--leading-heading); }
+h1 { font-size: var(--text-3xl); }
+h2 { font-size: var(--text-2xl); }
+h3 { font-size: var(--text-lg); }
+strong, b { font-weight: var(--weight-semibold); }
+small { font-size: var(--text-xs); }
+.navigation a { font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.recent-link { font-size: var(--text-sm); font-weight: var(--weight-regular); }
+.user-bubble { font-size: var(--text-intro); line-height: var(--leading-chat); }
+.answer { font-size: var(--text-base); font-weight: var(--weight-regular); line-height: var(--leading-chat); }
+.answer h1 { font-size: var(--text-xl); }
+.answer h2 { font-size: var(--text-lg); }
+.answer h3, .answer h4, .answer h5, .answer h6 { font-size: var(--text-base); }
+.answer :is(h1, h2, h3, h4, h5, h6) { margin-block: 1.25em .5em; }
+.answer :is(p, ol, ul, blockquote, table, pre) { margin-block: .75em; }
+.answer :is(ol, ul) { padding-inline-start: 1.5em; }
+.answer blockquote { margin-inline: 0; padding-inline-start: 1em; border-inline-start: 2px solid var(--line); color: var(--text-secondary); }
+.answer table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.answer :is(th, td) { border: 1px solid var(--line); padding: .5em .75em; text-align: start; }
+code, pre, kbd, samp { font-family: var(--font-mono); font-variant-ligatures: none; }
+pre, .answer pre code.hljs { font-size: var(--text-caption); line-height: var(--leading-body); }
+:not(pre) > code { font-size: .9em; }
+.citation:is(button), .pill { font-size: var(--text-caption); font-weight: var(--weight-regular); }
+.source-detail p { font-size: var(--text-intro); }
+.resource-list li > a { font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.numeric, time, .overview-row, .source-card small { font-variant-numeric: tabular-nums; }
