@@ -8,10 +8,11 @@ from uuid import uuid4
 
 import sqlalchemy as sa
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
-from study_platform.persistence.database import session_factory
+from study_platform.persistence.database import connection_failure, session_factory
 from study_platform.persistence.models.identity import Material
 from study_platform.persistence.models.knowledge import KnowledgeBase
 from study_platform.persistence.models.materials import (
@@ -297,9 +298,9 @@ def run_once():
             return False
         job_id, version_id, fence, attempt_no = claim_result
         staging = version_dir(version_id) / f"attempt-{job_id}-{fence}"
-        staging.mkdir(exist_ok=True)
         index_id = None
         try:
+            staging.mkdir(exist_ok=True)
             locked_job(db, job_id, fence)
             version = db.get(MaterialVersion, version_id)
             if version.parse_status != "ready":
@@ -310,7 +311,7 @@ def run_once():
             )
             page_count = version.page_count
             if not extracted:
-                raise ValueError("No text could be extracted")
+                raise ApiError(422, "no_text_extracted", "未提取到可用文字")
             update_phase(db, job_id, fence, "indexing")
             profile = f"{get_settings().embedding_model}:{get_settings().embedding_dimensions}"
             locked_job(db, job_id, fence)
@@ -349,7 +350,7 @@ def run_once():
                 batch = chunk_rows[offset : offset + 20]
                 result = embed_texts([row[0] for row in batch])
                 if len(result) != len(batch) or any(len(v) != 1024 for v in result):
-                    raise ValueError("Invalid embedding dimensions")
+                    raise ApiError(502, "embedding_invalid", "向量模型返回维度或内容不正确")
                 vectors.extend(result)
             job = locked_job(db, job_id, fence)
             version = db.get(MaterialVersion, version_id)
@@ -421,8 +422,17 @@ def run_once():
             db.rollback()
             try:
                 job = locked_job(db, job_id, fence)
-                retryable = isinstance(exc, ApiError) and exc.retryable
-                code = exc.code if isinstance(exc, ApiError) else "ingestion_failed"
+                retryable = (isinstance(exc, ApiError) and exc.retryable) or (
+                    isinstance(exc, DBAPIError) and connection_failure(exc)
+                )
+                if isinstance(exc, ApiError):
+                    code = exc.code
+                elif isinstance(exc, DBAPIError):
+                    code = "database_unavailable" if retryable else "database_error"
+                elif isinstance(exc, OSError):
+                    code = "storage_unavailable"
+                else:
+                    code = "ingestion_failed"
                 job.failure_code = str(code)[:64]
                 job.status = "queued" if retryable and attempt_no < job.max_attempts else "failed"
                 job.next_run_at = now() + timedelta(seconds=5)

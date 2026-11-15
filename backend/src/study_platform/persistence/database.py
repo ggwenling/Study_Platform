@@ -3,9 +3,25 @@
 from functools import lru_cache
 
 from sqlalchemy import create_engine
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from study_platform.core.config import get_settings
+
+
+def connection_failure(error: DBAPIError) -> bool:
+    code = getattr(error.orig, "sqlstate", None)
+    if code is None and any(message in str(error.orig).lower() for message in (
+        "no password supplied", "password authentication failed", "invalid connection option",
+        "invalid conninfo", "invalid sslmode",
+    )):
+        return False
+    return (
+        error.connection_invalidated
+        or (code is None and isinstance(error, OperationalError))
+        or (code is not None and code.startswith("08"))
+        or code in {"57P01", "57P02", "57P03"}
+    )
 
 
 @lru_cache

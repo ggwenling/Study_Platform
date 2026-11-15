@@ -154,6 +154,20 @@ def dto(db, material):
     else:
         state = "ready" if version and version.parse_status == "ready" else "failed"
     error = job.failure_code if job else (version.failure_code if version else "source_unavailable")
+    message = {
+        "no_text_extracted": "未识别到可用文字，请上传更清晰的资料或改用文本文件。",
+        "storage_unavailable": "无法写入资料存储，请检查磁盘空间和目录权限后重试。",
+        "database_unavailable": "数据库连接中断，请恢复数据库后重试。",
+        "database_error": "数据库操作失败，请检查配置后重试。",
+        "model_not_configured": "尚未配置向量模型，请完成配置后重试。",
+        "model_auth_failed": "模型认证或权限不足，请检查模型配置后重试。",
+        "model_quota_unavailable": "模型额度、余额或速率受限，请处理后显式重试。",
+        "model_timeout": "模型连接超时，请检查连接后重试。",
+        "embedding_invalid": "向量模型结果不可用，请检查模型配置后重试。",
+        "lease_expired": "后台处理多次中断，请重新启动后台处理后重试。",
+    }.get(error, "资料处理失败，请检查原件后重试。") if error else None
+    if error and state == "queued":
+        message = "上次处理暂时中断，正在等待自动重试。"
     return {
         "id": material.id,
         "knowledge_base_id": material.knowledge_base_id,
@@ -165,7 +179,7 @@ def dto(db, material):
         "job_id": job.id if job else None,
         "created_at": material.created_at,
         "error_code": error,
-        "error_message": "资料处理失败，请检查原件后重试" if error else None,
+        "error_message": message,
     }
 
 

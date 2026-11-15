@@ -4,6 +4,10 @@
 
 ## 本地运行
 
+依赖、数据库、密钥和迁移完成后，可双击根目录 `Start-Synapse.cmd`，统一启动 API、资料处理 worker 和本地 Web，并打开 `http://127.0.0.1:5173/`。`Status-Synapse.cmd` 分别检查三个进程与 API 就绪状态，`Stop-Synapse.cmd` 只停止本启动器管理的应用进程，保留 PostgreSQL。首次前端准备需在 `frontend` 执行 `npm ci`。
+
+启动器不会执行安装、迁移或修改数据库服务设置。已有手动服务占用 8000／5173 时，应先在原终端停止它们；启动器不会接管或按端口杀死进程。日志及进程记录位于忽略提交的 `.local/runtime`。命令行用法、故障处理及验收边界见 [本地运行说明](docs/local-runtime.md)。
+
 ```powershell
 cd D:\Synapse\backend
 uv sync --locked
@@ -33,6 +37,8 @@ uv run study-worker
 API 默认监听 `127.0.0.1:8000`，Swagger 在 `/docs`。`/health/live` 检查进程，`/health/ready` 检查业务迁移、知识库表、存储目录写入及模型密钥是否配置，不调用付费模型。迁移和 LangGraph checkpointer setup 是独立步骤，API 启动不会执行 DDL。当前问答使用 LangChain 模型调用和数据库记录，不依赖 LangGraph checkpointer 恢复对话。
 
 资料支持 PDF、DOCX、UTF-8 TXT、PNG 和 JPEG，单文件最多 20 MiB、PDF 最多 50 页、图片最多 2000 万像素。无文字层的 PDF 页和图片由 RapidOCR 在 CPU 上处理；资料原件通过鉴权接口访问。上传后需要 worker 处理完成才能检索。完整调用步骤、Cookie/CSRF、SSE 和错误处理见 [API 接入说明](docs/api-integration.md)。
+
+首页和会话输入区支持页内创建首个知识库。上传后自动展开“当前库资料”，展示阶段、可问答数量及失败重试；切换知识库不会改变已开始上传的归属。列表读取失败保留上次结果并提供重新读取入口。只有已就绪资料参与问答。
 
 ## 验证
 

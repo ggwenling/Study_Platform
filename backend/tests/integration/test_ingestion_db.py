@@ -3,11 +3,13 @@
 import hashlib
 import os
 from datetime import timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from study_platform.persistence.models.identity import Material, User
@@ -117,6 +119,53 @@ def test_worker_publishes_text_and_vector(state):
             )
             == "hello"
         )
+
+
+def test_staging_permission_failure_marks_job_failed_without_killing_worker(state, monkeypatch):
+    factory, job_id, version_id, _, _ = state
+    from pathlib import Path
+
+    mkdir = Path.mkdir
+
+    def fail_staging(path, *args, **kwargs):
+        if path.name.startswith("attempt-"):
+            raise PermissionError("staging denied")
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fail_staging)
+    assert ingestion.run_once()
+    with factory() as db:
+        assert db.get(AiJob, job_id).status == "failed"
+        assert db.get(AiJob, job_id).failure_code == "storage_unavailable"
+        assert db.get(MaterialVersion, version_id).parse_status == "failed"
+        assert not db.scalar(sa.select(IndexVersion).where(
+            IndexVersion.material_version_id == version_id))
+    assert ingestion.run_once() is False
+
+
+def test_short_database_fault_during_indexing_retries_without_duplicate_publication(state, monkeypatch):
+    factory, job_id, version_id, _, _ = state
+    embed = models.embed_texts
+
+    def disconnect(_):
+        raise OperationalError("", {}, SimpleNamespace(sqlstate="08006"))
+
+    monkeypatch.setattr(models, "embed_texts", disconnect)
+    assert ingestion.run_once()
+    with factory() as db:
+        job = db.get(AiJob, job_id)
+        assert job.status == "queued"
+        job.next_run_at = ingestion.now() - timedelta(seconds=1)
+        db.commit()
+    monkeypatch.setattr(models, "embed_texts", embed)
+    assert ingestion.run_once()
+    with factory() as db:
+        assert db.get(AiJob, job_id).status == "succeeded"
+        assert db.scalar(sa.select(sa.func.count()).select_from(IndexVersion).where(
+            IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True))) == 1
+        attempts = db.scalars(sa.select(AiJobAttempt).where(AiJobAttempt.job_id == job_id)
+                             .order_by(AiJobAttempt.attempt_no)).all()
+        assert [attempt.outcome for attempt in attempts] == ["retry", "success"]
 
 
 def test_reclaimed_leases_fence_and_stop_after_three_attempts(state):

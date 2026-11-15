@@ -1,3 +1,4 @@
+import pytest
 from fastapi import FastAPI
 
 from study_platform.api.v1.materials import router
@@ -57,3 +58,25 @@ def test_material_response_serializes_uuid_dates_and_nullable_errors(monkeypatch
         "version_id": str(version_id), "job_id": str(job_id),
         "created_at": "2026-01-01T00:00:00Z", "error_code": None, "error_message": None,
     }
+
+
+@pytest.mark.parametrize("code,state,expected", [
+    ("no_text_extracted", "failed", "未识别到可用文字"),
+    ("storage_unavailable", "failed", "磁盘空间和目录权限"),
+    ("model_auth_failed", "failed", "模型认证或权限不足"),
+    ("model_quota_unavailable", "failed", "显式重试"),
+    ("database_unavailable", "queued", "等待自动重试"),
+])
+def test_failure_reason_distinguishes_user_recovery_actions(monkeypatch, code, state, expected):
+    from types import SimpleNamespace
+
+    from study_platform.api.v1 import materials
+
+    material = SimpleNamespace(id="m", knowledge_base_id="k", title="t", created_at=None)
+    version = SimpleNamespace(id="v", source_mime="text/plain", byte_size=1)
+    job = SimpleNamespace(id="j", status=state, result={}, failure_code=code)
+    monkeypatch.setattr(materials, "latest_version", lambda *_: version)
+    monkeypatch.setattr(materials, "latest_job", lambda *_: job)
+    result = materials.dto(None, material)
+    assert expected in result["error_message"]
+    assert result["status"] == state

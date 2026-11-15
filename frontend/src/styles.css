@@ -147,6 +147,17 @@ h1, h2, h3, p { margin: 0; }
 }
 .home .composer { --composer-input-size: var(--text-base); }
 .composer-wrapper { position: relative; }
+.current-materials { margin-top: 8px; padding: 0 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); text-align: start; }
+.current-materials-title { display: block; overflow-wrap: anywhere; font-size: var(--text-sm); }
+.current-materials-title small { display: block; margin-top: 4px; color: var(--text-secondary); font-size: var(--text-xs); font-weight: 400; }
+.current-materials-body { max-height: min(24vh, 200px); overflow-y: auto; overscroll-behavior: contain; font-size: var(--text-sm); }
+.current-materials-body p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.current-materials-list { margin: 0; padding: 0; list-style: none; }
+.current-materials-list li { display: flex; align-items: start; gap: 12px; padding-block: 10px; border-top: 1px solid var(--line); }
+.current-materials-list li > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.current-materials-list strong { display: block; font-weight: 500; }
+.current-materials-list span { display: block; margin-top: 4px; color: var(--text-secondary); }
+.composer .composer-hint { overflow-wrap: anywhere; }
 .composer-login { position: absolute; inset: 0; z-index: 1; border: 0; border-radius: 24px; background: transparent; }
 .composer:focus-within { border-color: #686868; }
 .composer-actions, .composer-options { display: flex; align-items: center; gap: 8px; }

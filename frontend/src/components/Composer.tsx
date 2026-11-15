@@ -3,9 +3,8 @@ import type { Ref } from 'react'
 import { ArrowUp, Globe, Image, Paperclip, Plus, Square } from 'lucide-react'
 import { BEND, MetalFx, useMetalBend } from 'metal-fx'
 import { useReducedMotion } from 'motion/react'
-import { Link } from 'react-router'
 import { api, uploadMaterial } from '@/api/client'
-import { allPages } from '@/api/ui'
+import { allPages, errorMessage } from '@/api/ui'
 import type { Material } from '@/api/types'
 import { useWorkspace } from '../WorkspaceData'
 import { Button } from '@/components/arc/button/button'
@@ -13,6 +12,9 @@ import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { Select } from '@/components/arc/select/select'
 import { Tooltip } from '@/components/arc/tooltip/tooltip'
 import { FadingTextarea } from './FadingTextarea'
+import { CurrentMaterials } from './CurrentMaterials'
+import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
+import { Input } from '@/components/arc/input/input'
 
 const demoLibrary = [{ value: 'product', label: '产品资料库' }]
 const emptyLibrary = [{ value: 'empty', label: '暂无可用知识库', disabled: true }]
@@ -38,6 +40,12 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   const [ready, setReady] = useState<Material[]>([])
   const [materialId, setMaterialId] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [uploadNote, setUploadNote] = useState('')
+  const [uploadTarget, setUploadTarget] = useState<{ id: string; at: number } | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [createBusy, setCreateBusy] = useState(false)
+  const [createError, setCreateError] = useState('')
+  const uploadController = useRef<AbortController | null>(null)
   const form = useRef<HTMLFormElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const imageInput = useRef<HTMLInputElement>(null)
@@ -50,6 +58,8 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   const libraryId = requestedLibrary ? libraries.find((library) => library.id === requestedLibrary)?.id : libraries[0]?.id
   const active = chat.active?.conversationId === conversationId ? chat.active : null
   const pending = !demo && chat.pending && (chat.pending.body.conversation_id ?? undefined) === conversationId
+
+  useEffect(() => () => uploadController.current?.abort(), [user?.id])
 
   useEffect(() => {
     if (demo || !summary || !libraryId) return
@@ -99,14 +109,20 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
     if (!libraryId || uploading) return
     if (capabilities && file.size > capabilities.max_upload_bytes) return notify('文件超过服务器允许的大小。')
     setUploading(true)
+    const target = libraries.find((library) => library.id === libraryId)!
+    const controller = new AbortController()
+    uploadController.current = controller
+    setUploadTarget({ id: target.id, at: Date.now() })
+    setUploadNote(`正在上传「${file.name}」至「${target.name}」…`)
     try {
-      await uploadMaterial(libraryId, file)
+      await uploadMaterial(target.id, file, undefined, controller.signal)
+      if (controller.signal.aborted) return
       refresh()
-      notify('资料已提交处理。请在知识库查看状态。')
+      setUploadNote(`「${file.name}」已提交至「${target.name}」。`)
     } catch (error) {
-      report(error)
+      if (!controller.signal.aborted) { setUploadNote(`「${file.name}」上传失败，请重新添加。`); report(error) }
     } finally {
-      setUploading(false)
+      if (!controller.signal.aborted) setUploading(false)
     }
   }
 
@@ -122,7 +138,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
         void submit()
       }}
     >
-      {!demo && user && libraries.length === 0 && <Link className="composer-hint" to="/knowledge">创建知识库并导入资料</Link>}
+      {!demo && user && libraries.length === 0 && <Button type="button" variant="ghost" size="sm" onClick={() => { setCreateError(''); setCreating(true) }}>创建知识库并导入资料</Button>}
       {!demo && requestedLibrary && !libraryId && libraries.length > 0 && <p className="composer-hint">原知识库不可用，请重新选择。</p>}
       {!demo && capabilities?.rag === false && <p className="composer-hint">服务器尚未配置问答模型。</p>}
       {summary && <Select label="摘要资料" value={materialId} onValueChange={setMaterialId} options={ready.map(({ id, title }) => ({ value: id, label: title }))} placeholder="选择已就绪资料" />}
@@ -196,9 +212,32 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
           </Button>}
         </MetalFx>
       </div>
-      {uploading && <span className="composer-hint" role="status">正在上传…</span>}
+      {uploadNote && <span className="composer-hint" role="status">{uploadNote}</span>}
       {pending && <Button type="button" variant="secondary" size="sm" onClick={async () => { if (await chat.resend()) setDraft('') }}>重发上次请求</Button>}
     </form>
+    {!demo && user && libraryId && <CurrentMaterials key={`${user.id}:${libraryId}`} libraryId={libraryId} name={libraries.find((library) => library.id === libraryId)!.name} reveal={uploadTarget?.id === libraryId ? uploadTarget.at : 0} />}
+    <Dialog open={creating} onOpenChange={setCreating}>
+      <DialogContent title="创建知识库" description="创建后可直接添加资料并提问。" closeLabel="关闭创建知识库">
+        <form className="stack-form" onSubmit={async (event) => {
+          event.preventDefault()
+          if (createBusy) return
+          const name = String(new FormData(event.currentTarget).get('name')).trim()
+          if (!name) return
+          setCreateBusy(true)
+          setCreateError('')
+          try {
+            const library = await api.createKnowledgeBase({ name })
+            setSelected(library.id)
+            refresh()
+            setCreating(false)
+          } catch (error) { setCreateError(errorMessage(error)); report(error) } finally { setCreateBusy(false) }
+        }}>
+          <Input label="知识库名称" name="name" required maxLength={200} autoFocus placeholder="例如：工作资料" />
+          {createError && <p className="error-text" role="alert">{createError}</p>}
+          <Button type="submit" loading={createBusy}>创建知识库</Button>
+        </form>
+      </DialogContent>
+    </Dialog>
     </div>
   )
 }
