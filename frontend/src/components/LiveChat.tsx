@@ -161,8 +161,8 @@ export default function LiveChat({ id }: { id: string }) {
               )
             })}
           </div>
+          <div className="chat-footer"><Composer conversationId={id} preferredLibrary={latest?.scope?.knowledge_base_id ?? conversation?.project_knowledge_base_id ?? undefined} /></div>
         </div>
-        <div className="chat-footer"><Composer conversationId={id} preferredLibrary={latest?.scope?.knowledge_base_id ?? conversation?.project_knowledge_base_id ?? undefined} /></div>
       </section>
       <aside className="source-panel" id="live-sources" aria-label="引用与来源" inert={!panel} aria-hidden={!panel}>
         <div className="source-panel-inner">

@@ -163,7 +163,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
       user={{ name: user.display_name, email: user.email, avatarSrc: user.avatar_url ?? undefined }}
       showName
       showTheme={false}
-      align={isChat ? 'start' : 'end'}
+      align="start"
       items={[{ label: '设置', icon: <Settings size={16} />, onSelect: () => void navigate('/settings') }]}
       onSignOut={async () => {
         try {
@@ -211,7 +211,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             ))}
           </nav>
           <ProjectNavigation />
-          {isChat && <div className="workspace-label">{accountMenu}</div>}
+          <div className="workspace-label">{accountMenu}</div>
         </div>
       </aside>
       <div className="main-shell">
@@ -219,12 +219,11 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             <Button variant="ghost" className="icon-button nav-toggle" size="sm" aria-label={navOpen ? '收起导航' : '展开导航'} aria-expanded={navOpen} aria-controls="sidebar" onClick={() => setNavOpen(!navOpen)}>
               <PanelLeft size={19} />
             </Button>
-            {!isChat && <div className="topbar-actions">
+            {!isChat && (
               <DialogTrigger asChild>
                 <Button variant="secondary" className="search-button"><Search size={17} /><span>搜索知识库、资料或对话…</span><kbd>Ctrl K</kbd></Button>
               </DialogTrigger>
-              <div className="account-menu">{accountMenu}</div>
-            </div>}
+            )}
           </header>
         <main className="page">
           {privatePage ? sessionState === 'error'

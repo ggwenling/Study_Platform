@@ -14,6 +14,10 @@
   .trigger[data-name] { padding-right: 4px; }
   .triggerName, .chevron { display: none; }
 }
+.trigger[data-choice] { width: 13rem; padding-inline: 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
+.trigger[data-choice]:is(:hover, [data-state="open"]) { background: var(--surface-muted); }
+.trigger[data-choice] .triggerName { display: block; flex: 1; min-width: 0; text-align: left; }
+.trigger[data-choice] .chevron { display: block; }
 
 .face { position: relative; display: inline-grid; width: var(--face-size); height: var(--face-size); flex: none; }
 .face[data-size="sm"] { --face-size: 32px; --dot-size: 11px; }
@@ -90,6 +94,9 @@
 .sheet .row { height: 52px; }
 .sheet .segments { --segment: 40px; height: 34px; }
 .sheet .keys { display: none; }
+.panel[data-choice]:not(.sheet) { max-height: min(18rem, 40dvh); overflow-y: auto; overscroll-behavior: contain; }
+.panel[data-choice] .item { height: auto; min-height: var(--row); padding-block: 6px; }
+.panel[data-choice] .itemLabel { display: block; overflow-wrap: anywhere; }
 
 @media (prefers-reduced-motion: reduce) {
   .trigger, .chevron, .dot, .dot::before, .dot::after, .segment, .thumb, .item, .icon { transition: none; }

@@ -79,8 +79,8 @@ export default function DemoChat({ notify }: { notify: (message: string) => void
               </Tooltip>
             </article>
           </div>
+          <div className="chat-footer"><Composer demo /></div>
         </div>
-        <div className="chat-footer"><Composer demo /></div>
       </section>
       <aside className="source-panel" id="chat-sources" aria-label="引用与来源" inert={!sourcesOpen} aria-hidden={!sourcesOpen}>
         <div className="source-panel-inner">

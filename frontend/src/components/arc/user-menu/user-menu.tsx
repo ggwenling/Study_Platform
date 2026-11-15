@@ -5,7 +5,7 @@ import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, PointerEvent
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { PanInfo, Transition, Variants } from "motion/react";
-import { ChevronDown, LoaderCircle, LogOut, Monitor, Moon, Sun, SunMoon } from "lucide-react";
+import { Check, ChevronDown, LoaderCircle, LogOut, Monitor, Moon, Sun, SunMoon } from "lucide-react";
 import { motionTokens } from "../lib/motion-tokens";
 import styles from "./user-menu.module.css";
 
@@ -26,7 +26,7 @@ const themes: { value: ThemePreference; label: string; icon: ReactNode }[] = [
 ];
 
 export interface UserMenuUser { name: string; email: string; plan?: string; avatarSrc?: string; avatarSrcSet?: string }
-export interface UserMenuItem { label: string; icon?: ReactNode; keys?: string[]; onSelect?: () => void }
+export interface UserMenuItem { id?: string; label: string; icon?: ReactNode; keys?: string[]; checked?: boolean; onSelect?: () => void }
 
 /**
  * The account menu behind a person's photo in an app's top bar. It holds a compact identity header, a short group of account
@@ -34,8 +34,7 @@ export interface UserMenuItem { label: string; icon?: ReactNode; keys?: string[]
  * Theme and status choices keep the menu open; everything else closes it and returns focus to the trigger.
  * When `onSignOut` returns a promise, the item shows its progress and the menu closes once it settles.
  */
-export interface UserMenuProps {
-  user: UserMenuUser;
+interface UserMenuOptions {
   /** Presence status. Passing `status` or `onStatusChange` shows the presence dot and an inline status switch. */
   status?: UserStatus;
   defaultStatus?: UserStatus;
@@ -62,6 +61,11 @@ export interface UserMenuProps {
   ref?: Ref<HTMLButtonElement>;
   className?: string;
 }
+
+export type UserMenuProps = UserMenuOptions & (
+  | { user: UserMenuUser; choice?: never }
+  | { user?: never; choice: { label: string; value: string; icon: ReactNode } }
+);
 
 type Highlight = { top: number; height: number; tone?: string; glide: boolean };
 type OpenReason = "first" | "last" | "pointer" | null;
@@ -138,10 +142,10 @@ const getStops = (root: HTMLElement | null) => Array.from(root?.querySelectorAll
 function focusStop(stop: HTMLElement | undefined) {
   if (!stop) return;
   const target = stop.dataset.stop === "group" ? stop.querySelector<HTMLElement>('[aria-checked="true"]') ?? stop.querySelector<HTMLElement>("button") : stop;
-  target?.focus({ preventScroll: true });
+  target?.focus({ preventScroll: stop.getAttribute("role") !== "menuitemradio" });
 }
 
-export function UserMenu({ user, status: statusProp, defaultStatus = "available", onStatusChange, theme: themeProp, defaultTheme = "system", onThemeChange, showTheme = true, items = [], onSignOut, signOutKeys, align = "end", showName = false, open: openProp, defaultOpen = false, onOpenChange, portal = true, ref, className }: UserMenuProps) {
+export function UserMenu({ user, choice, status: statusProp, defaultStatus = "available", onStatusChange, theme: themeProp, defaultTheme = "system", onThemeChange, showTheme = true, items = [], onSignOut, signOutKeys, align = "end", showName = false, open: openProp, defaultOpen = false, onOpenChange, portal = true, ref, className }: UserMenuProps) {
   const id = useId();
   const menuId = `${id}-menu`;
   const triggerId = `${id}-trigger`;
@@ -354,42 +358,43 @@ export function UserMenu({ user, status: statusProp, defaultStatus = "available"
 
   const glide: Transition = highlight?.glide && !reduced ? motionTokens.spring.snappy : { duration: 0 };
   const row = reduced ? undefined : rowMotion;
-  const menuProps = { id: menuId, role: "menu", "aria-labelledby": triggerId, tabIndex: -1, onKeyDown };
+  const menuProps = { id: menuId, role: "menu", "aria-labelledby": triggerId, "data-choice": Boolean(choice) || undefined, tabIndex: -1, onKeyDown };
 
   const content = <>
-    <motion.div className={styles.header} variants={row}>
+    {user && <motion.div className={styles.header} variants={row}>
       <Face user={user} status={showStatus ? status : undefined} size="md" />
       <div className={styles.identity}>
         <div className={styles.nameRow}><span className={styles.name}>{user.name}</span>{user.plan && <span className={styles.plan}>{user.plan}</span>}</div>
         <span className={styles.email} title={user.email}>{user.email}</span>
       </div>
-    </motion.div>
+    </motion.div>}
     <div ref={listRef} className={styles.list} onFocus={onListFocus} onPointerMove={onListPointerMove} onPointerLeave={onListPointerLeave}>
       <motion.span className={styles.highlight} data-tone={highlight?.tone} aria-hidden="true" initial={false}
         animate={highlight ? { y: highlight.top, height: highlight.height, opacity: 1 } : { opacity: 0 }}
         transition={{ default: glide, opacity: { duration: reduced ? 0 : motionTokens.duration.instant } }} />
       {items.length > 0 && <>
-        <div className={styles.separator} role="separator" />
-        {items.map(item => <motion.button key={item.label} type="button" role="menuitem" tabIndex={-1} className={styles.item} data-stop="item" data-label={item.label} variants={row}
+        {user && <div className={styles.separator} role="separator" />}
+        {items.map(item => <motion.button key={item.id ?? item.label} type="button" role={item.checked === undefined ? "menuitem" : "menuitemradio"} aria-checked={item.checked} tabIndex={-1} className={styles.item} data-stop="item" data-label={item.label} variants={row}
           onPointerMove={onItemPointerMove} onClick={() => { close(true); item.onSelect?.(); }}>
-          <span className={styles.icon} aria-hidden="true">{item.icon}</span>
+          {item.icon && <span className={styles.icon} aria-hidden="true">{item.icon}</span>}
           <span className={styles.itemLabel}>{item.label}</span>
+          {item.checked && <Check size={15} aria-hidden="true" />}
           {item.keys && <Keys keys={item.keys} />}
         </motion.button>)}
       </>}
-      {(showTheme || showStatus) && <>
+      {user && (showTheme || showStatus) && <>
         <div className={styles.separator} role="separator" />
         {showStatus && <Segmented label="Status" icon={<PresenceDot status={status} />} value={status} onChange={changeStatus}
           options={userStatuses.map(option => ({ ...option, icon: <PresenceDot status={option.value} /> }))} variants={row} />}
         {showTheme && <Segmented label="Theme" icon={<SunMoon size={16} strokeWidth={1.75} />} value={theme} onChange={changeTheme} options={themes} variants={row} />}
       </>}
-      <div className={styles.separator} role="separator" />
+      {onSignOut && <><div className={styles.separator} role="separator" />
       <motion.button type="button" role="menuitem" tabIndex={-1} className={styles.item} data-stop="item" data-tone="danger" data-label="退出登录" variants={row}
         aria-busy={signingOut || undefined} onPointerMove={onItemPointerMove} onClick={signOut}>
         <span className={styles.icon} aria-hidden="true">{signingOut ? <LoaderCircle className={styles.spinner} size={16} strokeWidth={1.75} /> : <LogOut size={16} strokeWidth={1.75} />}</span>
         <span className={styles.itemLabel}><Rise text={signingOut ? "正在退出" : "退出登录"} reduced={reduced} /></span>
         {signOutKeys && <Keys keys={signOutKeys} />}
-      </motion.button>
+      </motion.button></>}
     </div>
   </>;
 
@@ -405,18 +410,18 @@ export function UserMenu({ user, status: statusProp, defaultStatus = "available"
       transition={{ duration: reduced ? motionTokens.duration.instant : motionTokens.duration.standard, ease: standard }} onClick={() => close(true)} />}
     {open && sheet && <motion.div key="sheet" ref={surfaceRef} {...menuProps} className={`${styles.panel} ${styles.sheet}`} aria-modal="true"
       variants={reduced ? stillMotion : sheetMotion} initial="closed" animate="open" exit="exit"
-      drag={reduced ? false : "y"} dragConstraints={{ top: 0, bottom: 0 }} dragElastic={{ top: .04, bottom: .9 }} dragMomentum={false} onDragEnd={onDragEnd}>
+      drag={reduced || choice ? false : "y"} dragConstraints={{ top: 0, bottom: 0 }} dragElastic={{ top: .04, bottom: .9 }} dragMomentum={false} onDragEnd={onDragEnd}>
       <span className={styles.handle} aria-hidden="true" />
       {content}
     </motion.div>}
   </AnimatePresence>;
 
   return <span ref={rootRef} className={styles.root}>
-    <button ref={setTriggerRef} id={triggerId} type="button" className={[styles.trigger, className].filter(Boolean).join(" ")} data-state={open ? "open" : "closed"} data-name={showName || undefined}
-      aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined} aria-label={`账户菜单，${user.name}${showStatus ? `，${statusLabel(status)}` : ""}`}
+    <button ref={setTriggerRef} id={triggerId} type="button" className={[styles.trigger, className].filter(Boolean).join(" ")} data-state={open ? "open" : "closed"} data-name={showName || undefined} data-choice={Boolean(choice) || undefined}
+      aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined} aria-label={choice ? `${choice.label}，${choice.value}` : `账户菜单，${user.name}${showStatus ? `，${statusLabel(status)}` : ""}`}
       onClick={onTriggerClick} onKeyDown={onTriggerKeyDown}>
-      <Face user={user} status={showStatus ? status : undefined} size="sm" />
-      {showName && <><span className={styles.triggerName}>{user.name}</span><ChevronDown className={styles.chevron} size={16} strokeWidth={1.75} aria-hidden="true" /></>}
+      {choice ? <span className={styles.icon} aria-hidden="true">{choice.icon}</span> : <Face user={user} status={showStatus ? status : undefined} size="sm" />}
+      {(choice || showName) && <><span className={styles.triggerName}>{choice ? choice.value : user?.name}</span><ChevronDown className={styles.chevron} size={16} strokeWidth={1.75} aria-hidden="true" /></>}
     </button>
     {sheet ? createPortal(bottomSheet, document.body) : inline ? panel : hydrated ? createPortal(panel, document.body) : null}
   </span>;
