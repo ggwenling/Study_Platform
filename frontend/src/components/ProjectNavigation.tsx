@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Folder, Plus } from 'lucide-react'
-import { NavLink, useNavigate } from 'react-router'
+import { Copy, ExternalLink, Folder, MessageCircle, Plus } from 'lucide-react'
+import { NavLink, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import type { Conversation, KnowledgeBase, Page } from '@/api/types'
 import { errorMessage } from '@/api/ui'
 import { Accordion } from '@/components/arc/accordion/accordion'
 import { Button } from '@/components/arc/button/button'
+import { ContextMenu } from '@/components/arc/context-menu/context-menu'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { Input } from '@/components/arc/input/input'
 import { useWorkspace } from '../WorkspaceData'
@@ -44,13 +45,14 @@ export function ProjectNavigation() {
 }
 
 function ProjectFolder({ kb }: { kb: KnowledgeBase }) {
-  const { user, revision, refresh, report } = useWorkspace()
+  const { user, revision, refresh, report, notify } = useWorkspace()
   const [open, setOpen] = useDisclosurePreference(`knowloop:${user!.id}:project:${kb.id}`, false)
   const [page, setPage] = useState<Page<Conversation> | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   useEffect(() => {
     if (!open) return
     let current = true
@@ -65,7 +67,20 @@ function ProjectFolder({ kb }: { kb: KnowledgeBase }) {
         try { const row = await api.createConversation({ project_knowledge_base_id: kb.id }); refresh(); void navigate(`/chat/${row.id}`) } catch (failure) { report(failure) } finally { setBusy(false) }
       }}><Plus size={14} />新对话</Button>
       {error ? <><p className="error-text" role="alert">{error}</p><Button variant="ghost" size="sm" onClick={() => setAttempt((value) => value + 1)}>重试</Button></> : !page ? <p role="status">正在读取…</p> : <>
-        {page.items.map((row) => <NavLink key={row.id} className="recent-link" to={`/chat/${row.id}`}>{row.title || '未命名对话'}</NavLink>)}
+        {page.items.map((row) => <ContextMenu
+          key={row.id}
+          label={`会话：${row.title || '未命名对话'}`}
+          items={[
+            { id: 'open', label: '打开会话', icon: <MessageCircle size={15} />, onSelect: () => void navigate(`/chat/${row.id}`) },
+            { id: 'new-tab', label: '在新标签页打开', icon: <ExternalLink size={15} />, onSelect: () => { window.open(`/chat/${row.id}`, '_blank', 'noopener,noreferrer') } },
+            { id: 'copy', label: '复制链接', icon: <Copy size={15} />, onSelect: async () => {
+              try {
+                await navigator.clipboard.writeText(new URL(`/chat/${row.id}`, window.location.origin).href)
+                notify('已复制会话链接。')
+              } catch { notify('无法访问剪贴板。') }
+            } },
+          ]}
+        ><span className="recent-link" aria-current={pathname === `/chat/${row.id}` ? 'page' : undefined}>{row.title || '未命名对话'}</span></ContextMenu>)}
         {!page.items.length && <p className="muted">暂无会话</p>}
         {page.next_cursor && <Button variant="ghost" size="sm" loading={busy} onClick={async () => {
           setBusy(true)
