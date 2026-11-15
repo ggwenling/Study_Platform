@@ -28,6 +28,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File infra/windows/local-runt
 
 本轮不安装 Windows 常驻服务、不做开机自启或进程自动监护。worker 退出后用状态入口识别，再运行启动入口恢复。手动离线备份与恢复列为独立后续任务；现有数据库和 `.local/storage` 持久化不等于已经具备备份。
 
+## 校正已存储的 DOCX 表格列号
+
+在 `backend` 运行预览，查看本机数据库名、可校正版本和跳过原因。
+
+```powershell
+uv run --no-sync python -m study_platform.cli.repair_docx_locators
+```
+
+有可校正记录时，停止访问该数据库的 API 和 worker，再把预览显示的库名传给 `--database`。例如本机默认库的执行命令如下。
+
+```powershell
+uv run --no-sync python -m study_platform.cli.repair_docx_locators --apply --database study_platform
+```
+
+命令按版本核对原件、段落、分块和引用哈希，在同一事务中校正预览、分块和历史聊天引用的单元格列号。原件缺失或内容对不上时跳过该版本。运行后再预览一次，确认可校正记录归零，再启动 API 和 worker。
+
 ## 验证入口
 
 ```powershell

@@ -397,7 +397,7 @@ def test_cancel_during_rewrite_does_not_embed_or_generate(chat_db, monkeypatch):
     assert asyncio.run(consume())[-1]["type"] == "stopped"
 
 
-def test_two_vector_retrieval_keeps_frozen_scope_filters_deleted_material_and_caps_six(chat_db):
+def test_retrieval_keeps_scope_and_only_caps_six_for_fusion(chat_db, monkeypatch):
     from study_platform.persistence.models import ChunkEmbedding, Material, MaterialChunk
 
     s = chat_db
@@ -409,7 +409,7 @@ def test_two_vector_retrieval_keeps_frozen_scope_filters_deleted_material_and_ca
         for item in (evidence, outside):
             db.add(ChunkEmbedding(chunk_id=item["id"], embedding=vector,
                                   model_profile_id=f"{chat.get_settings().embedding_model}:1024"))
-        for ordinal in range(1, 10):
+        for ordinal in range(1, 14):
             row = MaterialChunk(id=uuid4(), index_version_id=evidence["index_version_id"],
                                 material_version_id=evidence["material_version_id"], ordinal=ordinal,
                                 text=f"Fact {ordinal}", text_sha256="a" * 64, locator={"line": ordinal})
@@ -418,14 +418,15 @@ def test_two_vector_retrieval_keeps_frozen_scope_filters_deleted_material_and_ca
             db.add(ChunkEmbedding(chunk_id=row.id, embedding=vector,
                                   model_profile_id=f"{chat.get_settings().embedding_model}:1024"))
     scope = {"index_version_ids": [str(evidence["index_version_id"])]}
-    settings = chat.get_settings().model_copy(update={"retrieval_top_k": 20})
-    # The production cap stays six even if an old local configuration asks for more.
-    from unittest.mock import patch
-
-    with patch.object(chat, "get_settings", return_value=settings):
-        hits = chat.retrieve_vectors(scope, [vector, vector])
+    settings = chat.get_settings().model_copy(update={"retrieval_top_k": 12})
+    monkeypatch.setattr(chat, "get_settings", lambda: settings)
+    monkeypatch.setattr(chat, "embed_texts", lambda queries: [vector for _ in queries])
+    baseline = chat.retrieve(scope, "Original question")
+    assert len(baseline) == 12
+    hits = chat.retrieve(scope, "Original question", rewritten_query="Equivalent question")
     assert len(hits) == 6 and len({row["id"] for row in hits}) == 6
     assert {row["material_version_id"] for row in hits} == {evidence["material_version_id"]}
+    assert {row["material_version_id"] for row in baseline} == {evidence["material_version_id"]}
     with s.factory.begin() as db:
         db.get(Material, evidence["material_id"]).deleted_at = chat.now()
     assert chat.retrieve_vectors(scope, [vector, vector]) == []
@@ -465,6 +466,87 @@ def test_enabled_rewrite_batches_queries_answers_original_and_replay_calls_nothi
     embed.assert_called_once_with(["Original question", "Equivalent question"])
     asyncio.run(consume(True))
     assert rewritten.call_count == 1 and embed.call_count == 1
+
+
+def test_docx_repair_updates_preview_and_historical_citation_only_after_verification(chat_db, monkeypatch, tmp_path):
+    from hashlib import sha256
+
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    from study_platform.api.v1.materials import preview
+    from study_platform.cli import repair_docx_locators
+    from study_platform.persistence.models import (
+        IndexVersion,
+        MaterialChunk,
+        MaterialSection,
+        MaterialVersion,
+        MessageCitation,
+    )
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    version_id = evidence["material_version_id"]
+    source = tmp_path / "source.docx"
+    doc = Document()
+    row = doc.add_table(rows=1, cols=2).rows[0]
+    first, second = row.cells
+    text = "Original evidence"
+    second.text = text
+    row._tr.remove(first._tc)
+    before = OxmlElement("w:gridBefore")
+    before.set(qn("w:val"), "1")
+    row._tr.get_or_add_trPr().append(before)
+    doc.save(source)
+    original = source.read_bytes()
+    old = {"table_path": [{"table": 1, "row": 1, "column": 1}], "cell_paragraph": 1}
+    corrected = {"table_path": [{"table": 1, "row": 1, "column": 2}], "cell_paragraph": 1}
+    digest = sha256(text.encode()).hexdigest()
+    evidence.update(text=text, locator=old)
+    monkeypatch.setattr(repair_docx_locators, "source_path", lambda _: source)
+    monkeypatch.setattr("study_platform.services.citations.source_path", lambda _: source)
+    with s.factory.begin() as db:
+        version = db.get(MaterialVersion, version_id)
+        version.source_mime = repair_docx_locators.DOCX
+        version.source_sha256 = sha256(original).hexdigest()
+        version.parser_profile = "document-v1"
+        index = db.get(IndexVersion, evidence["index_version_id"])
+        index.pipeline_profile = "document-v1"
+        section = MaterialSection(id=uuid4(), material_version_id=version_id, ordinal=0, level=1,
+                                  text=text, locator=old)
+        db.add(section)
+        db.flush()
+        chunk = db.get(MaterialChunk, evidence["id"])
+        chunk.section_id, chunk.text, chunk.text_sha256, chunk.locator = section.id, text, digest, old
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+    assert chat.checkpoint(run, fence, "Original answer [S2]", "completed", [evidence])
+    conv = conversation_for(s, run)
+    with s.factory.begin() as db:
+        citation = db.scalar(sa.select(MessageCitation))
+        citation_id = citation.id
+        citation.quote_sha256 = "a" * 64
+    assert repair_docx_locators.repair(s.factory, apply=True)["skipped"] == 1
+    with s.factory.begin() as db:
+        assert db.get(MaterialChunk, evidence["id"]).locator == old
+        assert db.scalar(sa.select(MaterialSection)).locator == old
+        db.get(MessageCitation, citation_id).quote_sha256 = digest
+
+    assert repair_docx_locators.repair(s.factory)["changed_rows"] == 3
+    with s.factory() as db:
+        assert preview(version_id, db, SimpleNamespace(id=s.owner))["sections"][0]["locator"] == old
+    assert repair_docx_locators.repair(s.factory, apply=True)["changed_rows"] == 3
+    assert repair_docx_locators.repair(s.factory, apply=True)["changed_rows"] == 0
+    with s.factory() as db:
+        assert preview(version_id, db, SimpleNamespace(id=s.owner))["sections"] == [{"text": text, "locator": corrected}]
+        chunk = db.get(MaterialChunk, evidence["id"])
+        assert chunk.locator == corrected and chunk.text_sha256 == digest
+        assert chunk.index_version_id == evidence["index_version_id"]
+        assert db.get(MessageCitation, citation_id).quote_sha256 == digest
+    saved = chat.turn(s.owner, conv, run)["messages"][-1]
+    assert saved["content"] == "Original answer [S2]"
+    assert saved["citations"][0]["location_label"] == "表格 1，第 1 行，第 2 列，段落 1"
+    assert saved["citations"][0]["quote"] == text and source.read_bytes() == original
 
 
 @pytest.mark.parametrize("intent", ["summary", "empty"])

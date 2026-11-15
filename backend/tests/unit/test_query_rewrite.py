@@ -12,6 +12,7 @@ from study_platform.services import chat, models, query_rewrite
     "content",
     [
         '{"query":"QZ-732柜在哪里？"}',
+        '{"query":"“雪松”项目中的QZ-731和B-99柜在哪里？"}',
         '{"query":"“雪松”项目的qz-731柜位置在哪里？"}',
         '{"query":"雪松项目有几个柜子？"}',
         '{"query":""}',

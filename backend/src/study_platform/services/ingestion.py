@@ -60,6 +60,39 @@ def ocr_image(image):
     )
 
 
+def extract_docx(path, *, legacy_columns=False):
+    from docx import Document
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    def blocks(container, table_path=()):
+        paragraph_number = table_number = 0
+        for block in container.iter_inner_content():
+            if isinstance(block, Paragraph):
+                paragraph_number += 1
+                text = block.text.strip()
+                if text:
+                    locator = (
+                        {"table_path": list(table_path), "cell_paragraph": paragraph_number}
+                        if table_path
+                        else {"paragraph": paragraph_number}
+                    )
+                    yield text, locator
+            elif isinstance(block, Table):
+                table_number += 1
+                seen_cells = set()
+                for row_number, row in enumerate(block.rows, 1):
+                    first_column = 1 if legacy_columns else row.grid_cols_before + 1
+                    for column_number, cell in enumerate(row.cells, first_column):
+                        if cell._tc in seen_cells:
+                            continue
+                        seen_cells.add(cell._tc)
+                        location = {"table": table_number, "row": row_number, "column": column_number}
+                        yield from blocks(cell, (*table_path, location))
+
+    yield from blocks(Document(path))
+
+
 def extract(version, output_dir, phase):
     """Yield text with original page/paragraph/line locators."""
     settings = get_settings()
@@ -71,39 +104,7 @@ def extract(version, output_dir, phase):
                 if line.strip():
                     yield line.strip(), {"line": number}
     elif mime.endswith("wordprocessingml.document"):
-        from docx import Document
-        from docx.table import Table
-        from docx.text.paragraph import Paragraph
-
-        def blocks(container, table_path=()):
-            paragraph_number = table_number = 0
-            for block in container.iter_inner_content():
-                if isinstance(block, Paragraph):
-                    paragraph_number += 1
-                    text = block.text.strip()
-                    if text:
-                        locator = (
-                            {"table_path": list(table_path), "cell_paragraph": paragraph_number}
-                            if table_path
-                            else {"paragraph": paragraph_number}
-                        )
-                        yield text, locator
-                elif isinstance(block, Table):
-                    table_number += 1
-                    seen_cells = set()
-                    for row_number, row in enumerate(block.rows, 1):
-                        for column_number, cell in enumerate(row.cells, 1):
-                            if cell._tc in seen_cells:
-                                continue
-                            seen_cells.add(cell._tc)
-                            location = {
-                                "table": table_number,
-                                "row": row_number,
-                                "column": column_number,
-                            }
-                            yield from blocks(cell, (*table_path, location))
-
-        yield from blocks(Document(path))
+        yield from extract_docx(path)
     elif mime == "application/pdf":
         import pypdfium2 as pdfium
 

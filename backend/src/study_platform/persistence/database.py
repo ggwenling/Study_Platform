@@ -1,5 +1,6 @@
 """Short synchronous transactions for business APIs and the separate worker."""
 
+import re
 from functools import lru_cache
 
 from sqlalchemy import create_engine
@@ -7,6 +8,11 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from study_platform.core.config import get_settings
+
+_MISSING_DATABASE = re.compile(
+    r'(?:database "[^\r\n]+" does not exist|数据库 "[^\r\n]+" 不存在)\s*$',
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def connection_failure(error: DBAPIError) -> bool:
@@ -16,6 +22,13 @@ def connection_failure(error: DBAPIError) -> bool:
         "invalid conninfo", "invalid sslmode",
     )):
         return False
+    if code is None and isinstance(error, OperationalError):
+        # libpq retains the server bytes when psycopg has no startup SQLSTATE.
+        raw = getattr(getattr(error.orig, "pgconn", None), "error_message", b"")
+        if _MISSING_DATABASE.search(str(error.orig)) or (
+            raw and _MISSING_DATABASE.search(raw.decode("gb18030", errors="replace"))
+        ):
+            return False
     return (
         error.connection_invalidated
         or (code is None and isinstance(error, OperationalError))

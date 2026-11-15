@@ -365,7 +365,9 @@ def retrieve_vectors(scope, vectors):
     if not indices:
         return []
     profile = f"{get_settings().embedding_model}:1024"
-    limit = min(get_settings().retrieval_top_k, 6)
+    limit = get_settings().retrieval_top_k
+    if len(vectors) > 1:
+        limit = min(limit, 6)
     with session_factory()() as db:
         # MATERIALIZED scoped candidates prevent an ANN global top-k from dropping
         # a private knowledge base's matches before the ownership filter is applied.

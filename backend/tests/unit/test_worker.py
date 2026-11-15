@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from psycopg import OperationalError as PsycopgOperationalError
 from sqlalchemy.exc import InterfaceError, OperationalError
 
 from study_platform.cli import worker
@@ -54,3 +55,28 @@ def test_missing_password_is_not_mistaken_for_a_network_outage():
     assert not worker.connection_failure(
         OperationalError("", {}, Exception("no password supplied"))
     )
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        b'FATAL:  database "missing" does not exist\n',
+        '致命错误:  数据库 "missing" 不存在\n'.encode("gb18030"),
+    ],
+)
+def test_worker_exits_on_missing_database_startup_without_sqlstate(monkeypatch, caplog, diagnostic):
+    original = PsycopgOperationalError(
+        diagnostic.decode("utf-8", errors="replace"),
+        pgconn=SimpleNamespace(error_message=diagnostic),
+    )
+    assert original.sqlstate is None
+    monkeypatch.setattr(
+        worker, "run_once", Mock(side_effect=OperationalError(None, None, original))
+    )
+    sleep = Mock()
+    monkeypatch.setattr(worker.time, "sleep", sleep)
+    with pytest.raises(SystemExit) as error:
+        worker.main()
+    assert error.value.code == 1
+    sleep.assert_not_called()
+    assert '"missing"' not in caplog.text

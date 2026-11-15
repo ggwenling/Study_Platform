@@ -257,17 +257,22 @@ def seed_corpus(factory, materials):
 
 
 def write_json(path, value):
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    temporary = path.with_suffix(f".{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 async def live_evaluation(args, cases, materials, output):
     with isolated_database(output) as factory:
-        scopes, documents, hashes, corpus_embedding = seed_corpus(factory, materials)
         settings = get_settings()
         report = {
             "dataset_sha256": hashlib.sha256(args.dataset.read_bytes()).hexdigest(),
-            "source_hashes": hashes,
-            "corpus_embedding": corpus_embedding,
+            "expected_case_ids": [case["id"] for case in cases],
+            "strategy": args.strategy,
+            "status": "running",
             "chat_model": settings.chat_model,
             "embedding_model": settings.embedding_model,
             "dimensions": 1024,
@@ -275,15 +280,20 @@ async def live_evaluation(args, cases, materials, output):
             "min_similarity": settings.retrieval_min_similarity,
             "cases": [],
         }
+        write_json(output / "report.json", report)
+        scopes, documents, hashes, corpus_embedding = seed_corpus(factory, materials)
+        report.update(source_hashes=hashes, corpus_embedding=corpus_embedding)
         for number, case in enumerate(cases, 1):
             report["cases"].extend(
                 await evaluate_case(case, scopes[case["knowledge_base"]], documents, args.strategy)
             )
             write_json(output / "report.json", report)
             print(f"Evaluated {number}/{len(cases)}: {case['id']}", flush=True)
-        write_json(output / "review.json", review_template(report))
-        write_json(output / "gate.json", quality_gate(report))
-        write_json(output / "summary.json", summarize(report))
+    report["status"] = "completed"
+    write_json(output / "report.json", report)
+    write_json(output / "review.json", review_template(report))
+    write_json(output / "gate.json", quality_gate(report))
+    write_json(output / "summary.json", summarize(report))
     print(f"Evaluation complete; isolated database removed. Review report: {output}")
 
 

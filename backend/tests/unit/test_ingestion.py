@@ -3,6 +3,8 @@ from uuid import uuid4
 
 import pytest
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from PIL import Image
 
 from study_platform.services import ingestion
@@ -56,6 +58,27 @@ def test_docx_table_only_text_and_merged_cells(tmp_path, monkeypatch):
             "merged fact",
             {"table_path": [{"table": 1, "row": 1, "column": 1}], "cell_paragraph": 1},
         )
+    ]
+
+
+def test_docx_omitted_leading_grid_column_with_merge_and_nested_table(tmp_path):
+    doc = Document()
+    row = doc.add_table(rows=1, cols=3).rows[0]
+    first, second, third = row.cells
+    merged = second.merge(third)
+    merged.text = "merged at column two"
+    merged.add_table(rows=1, cols=1).cell(0, 0).text = "nested"
+    row._tr.remove(first._tc)
+    before = OxmlElement("w:gridBefore")
+    before.set(qn("w:val"), "1")
+    row._tr.get_or_add_trPr().append(before)
+    path = tmp_path / "omitted.docx"
+    doc.save(path)
+    outer = {"table": 1, "row": 1, "column": 2}
+    inner = {"table": 1, "row": 1, "column": 1}
+    assert list(ingestion.extract_docx(path)) == [
+        ("merged at column two", {"table_path": [outer], "cell_paragraph": 1}),
+        ("nested", {"table_path": [outer, inner], "cell_paragraph": 1}),
     ]
 
 

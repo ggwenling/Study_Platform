@@ -42,10 +42,14 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
     recoveries.current.clear()
   }, [])
 
-  function merge(id: string, messages: Message[]) {
+  function merge(id: string, messages: Message[], fromRecovery = false) {
     setCached((current) => {
       const rows = new Map((current[id] ?? []).map((item) => [item.id, item]))
-      for (const message of messages) rows.set(message.id, message)
+      for (const message of messages) {
+        const existing = rows.get(message.id)
+        if (fromRecovery && existing && terminal(existing.status) && !terminal(message.status)) continue
+        rows.set(message.id, message)
+      }
       return { ...current, [id]: [...rows.values()] }
     })
   }
@@ -66,7 +70,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
           try {
             const saved = await api.turn(conversationId, turnId, abort.signal)
             if (abort.signal.aborted) return
-            merge(conversationId, turnMessages(saved))
+            merge(conversationId, turnMessages(saved), true)
             if (terminal(saved.status)) {
               callbacks.current.refresh()
               return
@@ -138,6 +142,14 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
       }])
     }
 
+    function release() {
+      if (abort.signal.aborted || controller.current !== abort) return
+      controller.current = null
+      setBusy(false)
+      setActive(null)
+      refresh()
+    }
+
     try {
       const events = retry ? retryTurn(retry.conversationId, retry.turnId, abort.signal)
         : streamChat(request!.body, request!.key, abort.signal)
@@ -172,8 +184,12 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
           citations = event.citations
           assistant('streaming')
         } else if ((event.type === 'done' || event.type === 'stopped') && event.turn_id === current?.turnId) {
-          phase(null)
           if (event.message) merge(event.message.conversation_id, [event.message])
+          else assistant('stopped')
+          // The stream has confirmed the outcome. Canonical ordering can sync independently.
+          release()
+          startRecovery(current.conversationId, current.turnId)
+          return true
         }
       }
       if (current) {
@@ -187,6 +203,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
       return true
     } catch (error) {
       if (abort.signal.aborted) return false
+      if (controller.current !== abort) return true
       phase(null)
       report(error)
       if (current) {
@@ -199,12 +216,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
       }
       return Boolean(current)
     } finally {
-      if (!abort.signal.aborted) {
-        controller.current = null
-        setBusy(false)
-        setActive(null)
-        refresh()
-      }
+      release()
     }
   }
 

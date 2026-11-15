@@ -1,6 +1,9 @@
+import asyncio
 import copy
 import json
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,13 +33,85 @@ def comparison():
                     "scope_valid": True,
                 }
             )
-    report = {"cases": rows}
+    report = {
+        "cases": rows,
+        "strategy": "compare",
+        "status": "completed",
+        "expected_case_ids": ["answerable", "no-answer"],
+    }
     review = review_template(report)
     review.update(reviewer="test reviewer", human_confirmed=True)
     for row in review["cases"]:
         row["fact_correct"] = row["id"] != "answerable" or row["strategy"] == "rewrite"
         row["citations_supported"] = True
     return report, review
+
+
+@pytest.mark.parametrize(
+    "damage", ["interrupted", "missing_question", "missing_side", "duplicate", "legacy", "single"]
+)
+def test_incomplete_comparisons_never_pass_even_with_all_existing_rows_reviewed(damage):
+    report, _ = comparison()
+    if damage == "interrupted":
+        report["status"] = "running"
+    elif damage == "missing_question":
+        report["expected_case_ids"].append("second-paraphrase")
+    elif damage == "missing_side":
+        report["cases"].pop()
+    elif damage == "duplicate":
+        report["cases"].append(report["cases"][0])
+    elif damage == "legacy":
+        del report["expected_case_ids"]
+    else:
+        report["strategy"] = "baseline"
+    review = review_template(report)
+    review.update(reviewer="Reviewer", human_confirmed=True)
+    review["cases"] = list({(r["id"], r["strategy"]): r for r in review["cases"]}.values())
+    for row in review["cases"]:
+        row.update(fact_correct=True, citations_supported=True)
+    gate = quality_gate(report, review)
+    assert not gate["complete_comparison"] and not gate["eligible_for_default"]
+
+
+def test_interrupted_live_evaluation_keeps_planned_questions_and_running_status(
+    tmp_path, monkeypatch
+):
+    dataset = tmp_path / "facts.jsonl"
+    dataset.write_text("test", encoding="utf-8")
+    args = SimpleNamespace(strategy="compare", dataset=dataset)
+    cases = [{"id": n, "knowledge_base": "kb"} for n in ("first", "second")]
+    monkeypatch.setattr(evaluate_rag, "isolated_database", lambda _: nullcontext(None))
+    monkeypatch.setattr(evaluate_rag, "seed_corpus", lambda *_: ({"kb": {}}, {}, {}, []))
+
+    async def eval_case(case, *_):
+        if case["id"] == "second":
+            raise RuntimeError("interrupted")
+        return [{"id": "first", "strategy": name} for name in ("baseline", "rewrite")]
+
+    monkeypatch.setattr(evaluate_rag, "evaluate_case", eval_case)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        asyncio.run(evaluate_rag.live_evaluation(args, cases, [], tmp_path))
+    saved = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert saved["status"] == "running" and saved["expected_case_ids"] == ["first", "second"]
+    assert [r["id"] for r in saved["cases"]] == ["first", "first"]
+
+
+@pytest.mark.parametrize("quote", ["……", ["有效依据", "。？！"]])
+def test_dataset_rejects_quotes_that_normalize_to_empty(tmp_path, quote):
+    source = Path(__file__).resolve().parents[2] / "evaluation/facts.jsonl"
+    cases, materials = read_dataset(source)
+    case = cases[0]
+    case["support"][0]["quote"] = quote
+    path = tmp_path / "facts.jsonl"
+    path.write_text(json.dumps(case), encoding="utf-8")
+    path.with_name("materials.json").write_text(json.dumps(materials), encoding="utf-8")
+    with pytest.raises(ValueError, match="supporting passages"):
+        read_dataset(path)
+    case["support"][0]["quote"] = "……"
+    document = case["support"][0]["document"]
+    assert not support_hit(
+        case, [{"material_version_id": "v", "text": "任意内容"}], {"v": document}
+    )
 
 
 def test_group_gain_requires_review_and_safety_without_regression():

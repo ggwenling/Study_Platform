@@ -88,9 +88,48 @@ describe('disconnected chat recovery', () => {
     expect(node.textContent).toContain('正在生成回答')
     await act(async () => finish.resolve())
     expect(node.querySelector('canvas')).toBeNull()
-    expect(chat.busy).toBe(true)
+    expect(chat.busy).toBe(false)
     await act(async () => { saved.resolve(turn('completed')); await sent })
     expect(node.querySelector('canvas')).toBeNull()
+  })
+
+  it.each(['done', 'stopped'] as const)('unlocks on %s while canonical GET fails or hangs', async (event) => {
+    const stale = deferred<Turn>()
+    const newStream = deferred<void>()
+    const closeFirstStream = deferred<void>()
+    const status = event === 'done' ? 'completed' : 'stopped'
+    vi.mocked(api.turn).mockRejectedValueOnce(Object.assign(new Error('HTTP 503'), { status: 503 }))
+      .mockReturnValueOnce(stale.promise).mockResolvedValue(turn(status, message(status, '已确认正文')))
+    vi.mocked(streamChat).mockImplementationOnce(async function* () {
+      try {
+        yield meta
+        yield { type: 'delta', turn_id: 't', delta: '已确认正文' }
+        if (event === 'done') yield { type: event, turn_id: 't', message: message(status, '已确认正文'), scope }
+        else yield { type: event, turn_id: 't' }
+      } finally { await closeFirstStream.promise }
+    }).mockImplementationOnce(async function* () {
+      yield { ...meta, conversation_id: 'next', turn_id: 'next-turn', assistant_message_id: 'next-assistant' }
+      await newStream.promise
+    })
+    await render()
+    let first!: Promise<boolean>
+    await act(async () => { first = chat.send({ knowledge_base_id: 'k', content: '问题' }) })
+    expect(chat.busy).toBe(false)
+    expect(chat.cached.c.find((row) => row.id === 'a')).toMatchObject({ content: '已确认正文', status })
+    await advance()
+    expect(api.turn).toHaveBeenCalledTimes(2)
+
+    let next!: Promise<boolean>
+    await act(async () => { next = chat.send({ conversation_id: 'next', knowledge_base_id: 'k', content: '下一条' }) })
+    expect(chat.active?.turnId).toBe('next-turn')
+    expect(chat.busy).toBe(true)
+    await act(async () => { closeFirstStream.resolve(); expect(await first).toBe(true) })
+    await act(async () => stale.resolve(turn('running', message('streaming', '过期正文'))))
+    expect(chat.cached.c.find((row) => row.id === 'a')).toMatchObject({ content: '已确认正文', status })
+    expect(chat.active?.turnId).toBe('next-turn')
+    expect(chat.busy).toBe(true)
+    expect(streamChat).toHaveBeenCalledTimes(2)
+    await act(async () => { newStream.resolve(); await next })
   })
 
   it('removes the orb immediately on stream failure and never animates recovery snapshots', async () => {

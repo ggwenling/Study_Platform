@@ -111,6 +111,14 @@ export function ContextMenu({ children, items, label = "Context menu" }: Context
   }
 
   function onMenuKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Tab" || event.key === "Escape") {
+      if (event.key === "Escape") event.preventDefault();
+      live.current = false;
+      setOpen(false);
+      // Continue native Tab navigation from the trigger, outside the portal.
+      targetRef.current?.focus({ preventScroll: true });
+      return;
+    }
     const enabled = items.map((item, index) => ({ item, index })).filter(({ item }) => !item.disabled);
     const current = document.activeElement?.getAttribute("data-index");
     const currentPosition = enabled.findIndex(({ index }) => String(index) === current);
@@ -123,7 +131,12 @@ export function ContextMenu({ children, items, label = "Context menu" }: Context
       event.preventDefault();
       event.currentTarget.querySelector<HTMLElement>(`[data-index="${enabled[nextPosition]!.index}"]`)?.focus();
     }
-    if (event.key === "Escape") { event.preventDefault(); setOpen(false); targetRef.current?.focus(); }
+  }
+
+  function onMenuBlur(event: FocusEvent<HTMLDivElement>) {
+    if (menuRef.current !== event.currentTarget || event.currentTarget.contains(event.relatedTarget)) return;
+    live.current = false;
+    setOpen(false);
   }
 
   function place(item: HTMLElement, glide: boolean) {
@@ -150,7 +163,7 @@ export function ContextMenu({ children, items, label = "Context menu" }: Context
       {children}
     </div>
     {portal ? createPortal(<AnimatePresence>
-      {open && <motion.div key={point.key} ref={node => { if (node) menuRef.current = node; }} className={styles.menu} role="menu" aria-label={label} tabIndex={-1} style={{ left: point.x, top: point.y, transformOrigin: `${point.originX}px ${point.originY}px` }} onKeyDown={onMenuKeyDown} onFocus={onMenuFocus} onPointerMoveCapture={() => { pointer.current = true; }} onKeyDownCapture={() => { pointer.current = false; }} onPointerLeave={event => { if (live.current) event.currentTarget.focus({ preventScroll: true }); }}
+      {open && <motion.div key={point.key} ref={node => { if (node) menuRef.current = node; }} className={styles.menu} role="menu" aria-label={label} tabIndex={-1} style={{ left: point.x, top: point.y, transformOrigin: `${point.originX}px ${point.originY}px` }} onKeyDown={onMenuKeyDown} onFocus={onMenuFocus} onBlur={onMenuBlur} onPointerMoveCapture={() => { pointer.current = true; }} onKeyDownCapture={() => { pointer.current = false; }} onPointerLeave={event => { if (live.current) event.currentTarget.focus({ preventScroll: true }); }}
         initial={reduced ? { opacity: 0 } : { opacity: 0, scale: .96 }} animate={{ opacity: 1, scale: 1 }} exit={reduced ? { opacity: 0, transition: { duration: motionTokens.duration.instant } } : { opacity: 0, scale: .98, transition: { duration: motionTokens.duration.instant, ease: [...motionTokens.ease.standard] } }} transition={reduced ? { duration: motionTokens.duration.instant } : { default: motionTokens.spring.snappy, opacity: { duration: motionTokens.duration.fast, ease: [...motionTokens.ease.enter] } }}>
         <motion.span className={styles.highlight} data-tone={highlight?.danger ? "danger" : undefined} aria-hidden="true" initial={false} animate={highlight ? { y: highlight.top, height: highlight.height, opacity: 1 } : { opacity: 0 }} transition={{ default: highlight?.glide && !reduced ? motionTokens.spring.morph : { duration: 0 }, opacity: { duration: reduced ? 0 : motionTokens.duration.instant } }}/>
         {items.map((item, index) => <button key={item.id} type="button" role="menuitem" tabIndex={-1} data-index={index} data-tone={item.destructive ? "danger" : undefined} style={{ "--i": index } as CSSProperties} disabled={item.disabled} className={[styles.item, item.destructive ? styles.destructive : ""].filter(Boolean).join(" ")} onPointerMove={event => { if (!live.current) return; window.clearTimeout(clearTimer.current); if (document.activeElement !== event.currentTarget) event.currentTarget.focus({ preventScroll: true }); if (highlight?.index !== index) place(event.currentTarget, true); }} onPointerLeave={() => { if (live.current) menuRef.current?.focus({ preventScroll: true }); }} onClick={() => { if (!live.current) return; live.current = false; item.onSelect?.(); setOpen(false); targetRef.current?.focus(); }}>

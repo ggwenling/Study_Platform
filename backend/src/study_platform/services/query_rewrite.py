@@ -49,7 +49,7 @@ def validated_query(question: str, content: str) -> str | None:
 
     original, rewritten = normalize(question), normalize(query)
     identifiers = r"[A-Za-z0-9._:/%+\-]*\d[A-Za-z0-9._:/%+\-]*"
-    if not set(re.findall(identifiers, original)).issubset(re.findall(identifiers, rewritten)):
+    if set(re.findall(identifiers, original)) != set(re.findall(identifiers, rewritten)):
         return None
     for pattern in (r'"([^"]+)"', r"“([^”]+)”", r"「([^」]+)」"):
         if any(term not in rewritten for term in re.findall(pattern, original)):

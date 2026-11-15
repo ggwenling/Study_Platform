@@ -56,7 +56,7 @@ def read_dataset(path):
                 raise ValueError("Gold evidence must belong to the requested knowledge base")
             if not supporting_quotes(support) or any(
                 not isinstance(quote, str)
-                or not quote.strip()
+                or not normalized(quote)
                 or normalized(quote) == normalized(case["question"])
                 for quote in supporting_quotes(support)
             ):
@@ -71,7 +71,8 @@ def support_hit(case, evidence, documents):
         any(
             documents[str(row["material_version_id"])] == support["document"]
             and any(
-                normalized(quote) in normalized(row["text"]) for quote in supporting_quotes(support)
+                phrase and phrase in normalized(row["text"])
+                for phrase in map(normalized, supporting_quotes(support))
             )
             for row in evidence
         )
@@ -190,6 +191,14 @@ def review_template(report):
 
 def quality_gate(report, review=None):
     rows = {(row["id"], row["strategy"]): row for row in report["cases"]}
+    expected_ids = report.get("expected_case_ids", [])
+    expected_pairs = {(case_id, strategy) for case_id in expected_ids
+                      for strategy in ("baseline", "rewrite")}
+    complete_comparison = (
+        report.get("status") == "completed" and report.get("strategy") == "compare"
+        and bool(expected_ids) and len(expected_pairs) == 2 * len(expected_ids)
+        and len(rows) == len(report["cases"]) and set(rows) == expected_pairs
+    )
     verdicts = {}
     if review:
         if review.get("report_sha256") != report_digest(report):
@@ -256,9 +265,10 @@ def quality_gate(report, review=None):
             or (reviewed and not row["answerable"] and not verdicts[key]["fact_correct"])
         )
     ]
-    comparison = {key[1] for key in rows} == {"baseline", "rewrite"}
-    safe = reviewed and comparison and not regressions and not lost_groups and not safety_failures
+    safe = (reviewed and complete_comparison and not regressions and not lost_groups
+            and not safety_failures)
     return {
+        "complete_comparison": complete_comparison,
         "manual_review_complete": reviewed,
         "pending_review": not reviewed,
         "non_regression_passed": safe,
