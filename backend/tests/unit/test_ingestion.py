@@ -82,6 +82,20 @@ def test_docx_omitted_leading_grid_column_with_merge_and_nested_table(tmp_path):
     ]
 
 
+def test_docx_rejects_negative_leading_grid_columns(tmp_path):
+    doc = Document()
+    row = doc.add_table(rows=1, cols=1).rows[0]
+    row.cells[0].text = "evidence"
+    before = OxmlElement("w:gridBefore")
+    before.set(qn("w:val"), "-1")
+    row._tr.get_or_add_trPr().append(before)
+    path = tmp_path / "negative.docx"
+    doc.save(path)
+
+    with pytest.raises(ValueError, match="negative leading column count"):
+        list(ingestion.extract_docx(path))
+
+
 def test_docx_body_and_nested_tables_follow_document_order(tmp_path, monkeypatch):
     path = tmp_path / "source"
     doc = Document()

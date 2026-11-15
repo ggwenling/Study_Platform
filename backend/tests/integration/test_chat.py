@@ -496,21 +496,42 @@ def test_docx_repair_updates_preview_and_historical_citation_only_after_verifica
     second.text = text
     row._tr.remove(first._tc)
     before = OxmlElement("w:gridBefore")
-    before.set(qn("w:val"), "1")
     row._tr.get_or_add_trPr().append(before)
+    malformed_source = tmp_path / "missing-grid-value.docx"
+    doc.save(malformed_source)
+    before.set(qn("w:val"), "1")
     doc.save(source)
     original = source.read_bytes()
     old = {"table_path": [{"table": 1, "row": 1, "column": 1}], "cell_paragraph": 1}
     corrected = {"table_path": [{"table": 1, "row": 1, "column": 2}], "cell_paragraph": 1}
     digest = sha256(text.encode()).hexdigest()
     evidence.update(text=text, locator=old)
-    monkeypatch.setattr(repair_docx_locators, "source_path", lambda _: source)
+    malformed_id = UUID(int=1)  # Checked before the valid version.
+    sources = {malformed_id: malformed_source, version_id: source}
+    monkeypatch.setattr(repair_docx_locators, "source_path", sources.__getitem__)
     monkeypatch.setattr("study_platform.services.citations.source_path", lambda _: source)
     with s.factory.begin() as db:
         version = db.get(MaterialVersion, version_id)
+        version.version_no = 2
         version.source_mime = repair_docx_locators.DOCX
         version.source_sha256 = sha256(original).hexdigest()
         version.parser_profile = "document-v1"
+        db.flush()
+        malformed = malformed_source.read_bytes()
+        db.add(
+            MaterialVersion(
+                id=malformed_id,
+                material_id=version.material_id,
+                version_no=1,
+                is_current=False,
+                source_mime=repair_docx_locators.DOCX,
+                source_sha256=sha256(malformed).hexdigest(),
+                byte_size=len(malformed),
+                object_key=str(malformed_id),
+                parse_status="ready",
+                parser_profile="document-v1",
+            )
+        )
         index = db.get(IndexVersion, evidence["index_version_id"])
         index.pipeline_profile = "document-v1"
         section = MaterialSection(id=uuid4(), material_version_id=version_id, ordinal=0, level=1,
@@ -526,16 +547,17 @@ def test_docx_repair_updates_preview_and_historical_citation_only_after_verifica
         citation = db.scalar(sa.select(MessageCitation))
         citation_id = citation.id
         citation.quote_sha256 = "a" * 64
-    assert repair_docx_locators.repair(s.factory, apply=True)["skipped"] == 1
+    assert repair_docx_locators.repair(s.factory, apply=True)["skipped"] == 2
     with s.factory.begin() as db:
         assert db.get(MaterialChunk, evidence["id"]).locator == old
         assert db.scalar(sa.select(MaterialSection)).locator == old
         db.get(MessageCitation, citation_id).quote_sha256 = digest
 
-    assert repair_docx_locators.repair(s.factory)["changed_rows"] == 3
+    expected = {"checked": 2, "changed_versions": 1, "changed_rows": 3, "skipped": 1}
+    assert repair_docx_locators.repair(s.factory) == expected
     with s.factory() as db:
         assert preview(version_id, db, SimpleNamespace(id=s.owner))["sections"][0]["locator"] == old
-    assert repair_docx_locators.repair(s.factory, apply=True)["changed_rows"] == 3
+    assert repair_docx_locators.repair(s.factory, apply=True) == expected
     assert repair_docx_locators.repair(s.factory, apply=True)["changed_rows"] == 0
     with s.factory() as db:
         assert preview(version_id, db, SimpleNamespace(id=s.owner))["sections"] == [{"text": text, "locator": corrected}]

@@ -82,8 +82,10 @@ def extract_docx(path, *, legacy_columns=False):
                 table_number += 1
                 seen_cells = set()
                 for row_number, row in enumerate(block.rows, 1):
-                    first_column = 1 if legacy_columns else row.grid_cols_before + 1
-                    for column_number, cell in enumerate(row.cells, first_column):
+                    columns_before = 0 if legacy_columns else row.grid_cols_before
+                    if columns_before < 0:
+                        raise ValueError("DOCX table row has a negative leading column count")
+                    for column_number, cell in enumerate(row.cells, columns_before + 1):
                         if cell._tc in seen_cells:
                             continue
                         seen_cells.add(cell._tc)

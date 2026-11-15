@@ -8,6 +8,7 @@ from zipfile import BadZipFile
 
 import sqlalchemy as sa
 from docx.opc.exceptions import PackageNotFoundError
+from docx.oxml.exceptions import InvalidXmlError
 from lxml.etree import XMLSyntaxError
 from sqlalchemy.engine import make_url
 
@@ -42,7 +43,7 @@ def verified_changes(db, version):
         corrected = list(extract_docx(BytesIO(raw)))
         # Versions without omitted leading columns do not need any updates.
         legacy = list(extract_docx(BytesIO(raw), legacy_columns=True))
-    except (BadZipFile, PackageNotFoundError, XMLSyntaxError, KeyError, ValueError):
+    except (BadZipFile, PackageNotFoundError, InvalidXmlError, XMLSyntaxError, KeyError, ValueError):
         raise RepairSkipped("原件无法解析") from None
     if corrected == legacy:
         return []
