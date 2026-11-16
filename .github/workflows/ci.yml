@@ -98,8 +98,8 @@ jobs:
         run: npm ci
 
       - name: Unit tests (Vitest)
-        # Ubuntu 26: fork pool + jsdom/undici breaks; use thread pool.
-        run: npm test -- --pool=threads --maxWorkers=1
+        # Ubuntu 26: jsdom pulls undici; worker isolation breaks on hosted runners.
+        run: npm test -- --pool=threads --no-file-parallelism --no-isolate
 
       - name: Build (tsc + Vite bundle)
         run: npm run build
