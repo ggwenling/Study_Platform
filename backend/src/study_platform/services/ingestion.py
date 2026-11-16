@@ -25,6 +25,8 @@ from study_platform.persistence.models.materials import (
 )
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
 from study_platform.services import classification
+from study_platform.services.lexical import lexical_column_values
+from study_platform.services.models import embed_texts
 from study_platform.services.storage import source_path, version_dir
 
 _ocr = None
@@ -377,8 +379,6 @@ def run_once():
                 for ordinal, (text, locator) in enumerate(extracted)
                 for part in chunks(text)
             ]
-            from study_platform.services.models import embed_texts
-
             vectors = []
             for offset in range(0, len(chunk_rows), 20):
                 update_phase(db, job_id, fence, "indexing",
@@ -416,6 +416,7 @@ def run_once():
                     text=text,
                     text_sha256=hashlib.sha256(text.encode()).hexdigest(),
                     locator=locator,
+                    **lexical_column_values(text),
                 )
                 db.add(chunk)
                 db.flush()

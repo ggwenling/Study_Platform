@@ -384,7 +384,7 @@ erDiagram
 | `lexical` | TSVECTOR ? | 词法检索缓存，按语言使用合适分词器 |
 | `created_at` | TIMESTAMPTZ | 时间 |
 
-约束/索引：`UNIQUE(index_version_id,ordinal)`；`(material_version_id,index_version_id)`；`GIN(lexical)`；`section_id` 同源一致性在写入事务中验证。中文不应假设 PostgreSQL 默认 `simple` 分词足够，可接 `pg_jieba` 或应用级中文检索器。
+约束/索引：`UNIQUE(index_version_id,ordinal)`；`(material_version_id,index_version_id)`；`GIN(lexical)`；`section_id` 同源一致性在写入事务中验证。中文关键词索引在应用层用 jieba `cut_for_search` 生成 token，再以 `to_tsvector('simple', …)` 写入 `lexical`（CI 的 `pgvector/pgvector:pg16` 不依赖 `pg_jieba` 等扩展）。
 
 **`chunk_embeddings`** — 向量，独立于 Chunk 原文。
 

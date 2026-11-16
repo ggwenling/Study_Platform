@@ -96,14 +96,14 @@ def test_retrieval_batches_both_queries_and_keeps_scope(monkeypatch):
     embed = Mock(return_value=[[1], [2]])
     retrieve = Mock(return_value=[])
     monkeypatch.setattr(chat, "embed_texts", embed)
-    monkeypatch.setattr(chat, "retrieve_vectors", retrieve)
+    monkeypatch.setattr(chat, "retrieve_hybrid", retrieve)
     from uuid import uuid4
 
     owner = uuid4()
     scope = {"index_version_ids": ["fixed"]}
     chat.retrieve(scope, "原问题", owner, rewritten_query="同义问题")
     embed.assert_called_once_with(["原问题", "同义问题"])
-    retrieve.assert_called_once_with(scope, [[1], [2]], owner)
+    retrieve.assert_called_once_with(scope, ["原问题", "同义问题"], [[1], [2]], owner)
     assert scope == {"index_version_ids": ["fixed"]}
     embed.reset_mock()
     chat.retrieve({"index_version_ids": []}, "原问题", owner, rewritten_query="同义问题")

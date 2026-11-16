@@ -25,6 +25,7 @@ from study_platform.persistence.models.materials import (
     MaterialVersion,
 )
 from study_platform.persistence.models.operations import AiWorkflowRun, IdempotencyKey
+from study_platform.services.lexical import plain_tsquery
 from study_platform.services.models import chat_model, embed_texts, provider_error
 from study_platform.services.query_rewrite import rewrite_query
 
@@ -355,15 +356,17 @@ def retrieve(scope, content, owner: UUID, *, rewritten_query=None, diagnostics=N
         vectors = embed_texts(queries)
     else:
         vectors = embed_texts(queries, diagnostics=diagnostics)
-    return retrieve_vectors(scope, vectors, owner)
+    return retrieve_hybrid(scope, queries, vectors, owner)
 
 
-def fuse_rankings(rankings, limit):
+def fuse_rankings(rankings, limit, *, weights=None):
     scores, rows, original = {}, {}, {}
+    branch_weights = weights or [1.0] * len(rankings)
     for branch, ranking in enumerate(rankings):
+        weight = branch_weights[branch] if branch < len(branch_weights) else 1.0
         for rank, row in enumerate(ranking, 1):
             key = row["id"]
-            scores[key] = scores.get(key, 0) + 1 / (60 + rank)
+            scores[key] = scores.get(key, 0) + weight / (60 + rank)
             rows[key] = row
             if branch == 0:
                 original[key] = rank
@@ -371,34 +374,87 @@ def fuse_rankings(rankings, limit):
     return [rows[key] for key in ordered[:limit]]
 
 
+def _retrieval_limit(query_count: int) -> int:
+    limit = get_settings().retrieval_top_k
+    return min(limit, 6) if query_count > 1 else limit
+
+
+def _vector_ranking(db, query, scoped, vector, limit):
+    distance = scoped.c.embedding.cosine_distance(vector)
+    matches = sa.select(scoped.c.chunk_id, distance.label("distance")).where(
+        distance <= 1 - get_settings().retrieval_min_similarity,
+    ).order_by(distance, scoped.c.chunk_id).limit(limit).subquery()
+    rows = db.execute(
+        query.join(matches, matches.c.chunk_id == MaterialChunk.id).order_by(
+            matches.c.distance, MaterialChunk.id
+        )
+    ).all()
+    return [chunk_dto(row, title) for row, title in rows]
+
+
+def _lexical_ranking(db, query, text: str, limit):
+    tsquery = plain_tsquery(text)
+    if tsquery is None:
+        return []
+    rank = sa.func.ts_rank_cd(MaterialChunk.lexical, tsquery).label("lexical_rank")
+    stmt = (
+        query.add_columns(rank)
+        .where(MaterialChunk.lexical.is_not(None), MaterialChunk.lexical.op("@@")(tsquery))
+        .order_by(sa.desc(rank), MaterialChunk.id)
+        .limit(limit)
+    )
+    rows = db.execute(stmt).all()
+    return [chunk_dto(row, title) for row, title, _ in rows]
+
+
 def retrieve_vectors(scope, vectors, owner: UUID):
     indices = [UUID(x) for x in scope["index_version_ids"]]
     if not indices:
         return []
     profile = f"{get_settings().embedding_model}:1024"
-    limit = get_settings().retrieval_top_k
-    if len(vectors) > 1:
-        limit = min(limit, 6)
+    limit = _retrieval_limit(len(vectors))
     with session_factory()() as db:
-        # MATERIALIZED scoped candidates prevent an ANN global top-k from dropping
-        # a private knowledge base's matches before the ownership filter is applied.
         query = chunk_query(indices, owner)
-        scoped = query.with_only_columns(ChunkEmbedding.chunk_id, ChunkEmbedding.embedding,
-                                         maintain_column_froms=True).join(
-            ChunkEmbedding, ChunkEmbedding.chunk_id == MaterialChunk.id,
-        ).where(
-            ChunkEmbedding.model_profile_id == profile,
-        ).cte("scoped").prefix_with("MATERIALIZED")
-        rankings = []
-        for vector in vectors:
-            distance = scoped.c.embedding.cosine_distance(vector)
-            matches = sa.select(scoped.c.chunk_id, distance.label("distance")).where(
-                distance <= 1-get_settings().retrieval_min_similarity,
-            ).order_by(distance, scoped.c.chunk_id).limit(limit).subquery()
-            rows = db.execute(query.join(matches, matches.c.chunk_id == MaterialChunk.id)
-                              .order_by(matches.c.distance, MaterialChunk.id)).all()
-            rankings.append([chunk_dto(row, title) for row, title in rows])
+        scoped = (
+            query.with_only_columns(
+                ChunkEmbedding.chunk_id, ChunkEmbedding.embedding, maintain_column_froms=True
+            )
+            .join(ChunkEmbedding, ChunkEmbedding.chunk_id == MaterialChunk.id)
+            .where(ChunkEmbedding.model_profile_id == profile)
+            .cte("scoped")
+            .prefix_with("MATERIALIZED")
+        )
+        rankings = [_vector_ranking(db, query, scoped, vector, limit) for vector in vectors]
         return fuse_rankings(rankings, limit)
+
+
+def retrieve_hybrid(scope, queries, vectors, owner: UUID):
+    indices = [UUID(x) for x in scope["index_version_ids"]]
+    if not indices or len(vectors) != len(queries):
+        return []
+    settings = get_settings()
+    limit = _retrieval_limit(len(queries))
+    profile = f"{settings.embedding_model}:1024"
+    lexical_weight = settings.retrieval_lexical_weight if settings.retrieval_hybrid_enabled else 0.0
+    with session_factory()() as db:
+        query = chunk_query(indices, owner)
+        scoped = (
+            query.with_only_columns(
+                ChunkEmbedding.chunk_id, ChunkEmbedding.embedding, maintain_column_froms=True
+            )
+            .join(ChunkEmbedding, ChunkEmbedding.chunk_id == MaterialChunk.id)
+            .where(ChunkEmbedding.model_profile_id == profile)
+            .cte("scoped")
+            .prefix_with("MATERIALIZED")
+        )
+        rankings = [_vector_ranking(db, query, scoped, vector, limit) for vector in vectors]
+        weights = [1.0] * len(rankings)
+        if lexical_weight > 0:
+            for text in queries:
+                branch = _lexical_ranking(db, query, text, limit)
+                rankings.append(branch)
+                weights.append(lexical_weight)
+        return fuse_rankings(rankings, limit, weights=weights)
 
 
 def prompt(scope, evidence, history):

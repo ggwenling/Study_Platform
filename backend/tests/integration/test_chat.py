@@ -795,3 +795,73 @@ def test_disabled_fragment_is_excluded_from_summary_vector_search_and_history(ch
     _, chunks, history = chat.context(next_run)
     assert chunks == first_chunks and history == first_history
     assert chat.retrieve_vectors(scope, [[0.1] * 1024], s.owner)[0]["id"] == evidence["id"]
+
+
+def test_lexical_hybrid_boosts_chinese_keyword_match(chat_db, monkeypatch):
+    from unittest.mock import patch
+
+    import sqlalchemy as sa
+
+    from study_platform.core.config import Settings
+    from study_platform.persistence.models import ChunkEmbedding, MaterialChunk
+    from study_platform.services.lexical import lexical_column_values
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    with s.factory.begin() as db:
+        db.execute(
+            sa.update(MaterialChunk)
+            .where(MaterialChunk.id == evidence["id"])
+            .values(**lexical_column_values("雪松项目仓库允许的最高环境温度为摄氏二十五度。"))
+        )
+        unrelated = MaterialChunk(
+            id=uuid4(),
+            index_version_id=evidence["index_version_id"],
+            material_version_id=evidence["material_version_id"],
+            ordinal=99,
+            text="无关段落仅讨论降雨概率。",
+            text_sha256="b" * 64,
+            locator={"line": 99},
+            **lexical_column_values("无关段落仅讨论降雨概率。"),
+        )
+        db.add(unrelated)
+        vector = [0.0] * 1024
+        profile = f"{chat.get_settings().embedding_model}:1024"
+        db.add(ChunkEmbedding(chunk_id=unrelated.id, embedding=vector, model_profile_id=profile))
+        db.add(ChunkEmbedding(chunk_id=evidence["id"], embedding=vector, model_profile_id=profile))
+    scope = {"index_version_ids": [str(evidence["index_version_id"])]}
+    settings = Settings(
+        _env_file=None,
+        retrieval_hybrid_enabled=True,
+        retrieval_lexical_weight=1.0,
+        retrieval_min_similarity=0.99,
+    )
+    with patch.object(chat, "get_settings", lambda: settings):
+        hits = chat.retrieve_hybrid(scope, ["雪松仓库温度上限"], [vector], s.owner)
+    assert hits and hits[0]["id"] == evidence["id"]
+
+
+def test_lexical_hybrid_respects_owner_scope(chat_db):
+    from unittest.mock import patch
+
+    import sqlalchemy as sa
+
+    from study_platform.core.config import Settings
+    from study_platform.persistence.models import MaterialChunk
+    from study_platform.services.lexical import lexical_column_values
+
+    s = chat_db
+    owned = seed_evidence(s)
+    foreign = seed_evidence(s)
+    with s.factory.begin() as db:
+        for item in (owned, foreign):
+            db.execute(
+                sa.update(MaterialChunk)
+                .where(MaterialChunk.id == item["id"])
+                .values(**lexical_column_values("雪松仓库唯一密钥段落。"))
+            )
+    scope = {"index_version_ids": [str(owned["index_version_id"])]}
+    settings = Settings(_env_file=None, retrieval_hybrid_enabled=True, retrieval_min_similarity=0.99)
+    with patch.object(chat, "get_settings", lambda: settings):
+        hits = chat.retrieve_hybrid(scope, ["雪松仓库唯一密钥"], [[0.0] * 1024], s.owner)
+    assert {row["id"] for row in hits} == {owned["id"]}
