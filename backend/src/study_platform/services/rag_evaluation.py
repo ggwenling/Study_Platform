@@ -11,6 +11,12 @@ from pathlib import Path
 from study_platform.services import chat
 from study_platform.services.models import chat_model, embed_texts
 from study_platform.services.query_rewrite import rewrite_query
+from study_platform.services.retrieval_metrics import (
+    aggregate_by_knowledge_base,
+    evaluate_ranking,
+)
+
+DEFAULT_METRIC_K = (1, 3, 6, 10)
 
 
 def normalized(text):
@@ -66,6 +72,16 @@ def read_dataset(path):
     return cases, materials
 
 
+def expected_documents(case):
+    if not case["answerable"]:
+        return set()
+    return {item["document"] for item in case["support"]}
+
+
+def retrieved_documents(evidence, documents):
+    return [documents[str(row["material_version_id"])] for row in evidence]
+
+
 def support_hit(case, evidence, documents):
     return all(
         any(
@@ -80,7 +96,7 @@ def support_hit(case, evidence, documents):
     )
 
 
-async def evaluate_case(case, scope, documents, strategy):
+async def evaluate_case(case, scope, documents, strategy, k_values=DEFAULT_METRIC_K, retrieval_only=False):
     """Both strategies share the same original query vector and index snapshot."""
     rewritten = None
     if strategy in ("rewrite", "compare") and scope["index_version_ids"]:
@@ -101,32 +117,38 @@ async def evaluate_case(case, scope, documents, strategy):
             if case["answerable"] and support_hit(case, evidence[:rank], documents):
                 reciprocal_rank = 1 / rank
                 break
+        retrieved = retrieved_documents(evidence, documents)
+        retrieval_ir = evaluate_ranking(retrieved, expected_documents(case), k_values)
         usage, answer_error = None, None
         calls = 0
-        started = time.monotonic()
-        if not evidence:
-            answer = "当前资料不足，无法根据所选知识库回答。请补充相关资料或调整提问。"
-        else:
-            calls = 1
-            try:
-                reply = await chat_model().ainvoke(
-                    chat.prompt(
-                        {**scope, "content": case["question"]},
-                        evidence,
-                        [],
+        answer_ms = 0.0
+        answer = ""
+        citations, citation_valid = [], True
+        if not retrieval_only:
+            started = time.monotonic()
+            if not evidence:
+                answer = "当前资料不足，无法根据所选知识库回答。请补充相关资料或调整提问。"
+            else:
+                calls = 1
+                try:
+                    reply = await chat_model().ainvoke(
+                        chat.prompt(
+                            {**scope, "content": case["question"]},
+                            evidence,
+                            [],
+                        )
                     )
-                )
-                answer, usage = reply.content, reply.usage_metadata
-                if not isinstance(answer, str):
-                    raise ValueError("Non-text answer")
-            except Exception as error:
-                answer, answer_error = "", type(error).__name__
-        answer_ms = (time.monotonic() - started) * 1000
-        try:
-            citations = chat.cited_chunks(answer, evidence) if not answer_error else []
-            citation_valid = not answer_error
-        except Exception:
-            citations, citation_valid = [], False
+                    answer, usage = reply.content, reply.usage_metadata
+                    if not isinstance(answer, str):
+                        raise ValueError("Non-text answer")
+                except Exception as error:
+                    answer, answer_error = "", type(error).__name__
+            answer_ms = (time.monotonic() - started) * 1000
+            try:
+                citations = chat.cited_chunks(answer, evidence) if not answer_error else []
+                citation_valid = not answer_error
+            except Exception:
+                citations, citation_valid = [], False
         results.append(
             {
                 "id": case["id"],
@@ -140,6 +162,8 @@ async def evaluate_case(case, scope, documents, strategy):
                 "support": case["support"],
                 "retrieval_support_hit": supported,
                 "reciprocal_rank": reciprocal_rank,
+                "retrieval_ir": retrieval_ir,
+                "retrieved_documents": retrieved,
                 "scope_valid": all(
                     str(row["index_version_id"]) in scope["index_version_ids"] for row in evidence
                 ),
@@ -280,8 +304,43 @@ def quality_gate(report, review=None):
     }
 
 
+def summarize_retrieval(report, k_values=DEFAULT_METRIC_K):
+    rows = []
+    for row in report.get("cases", []):
+        metrics = row.get("retrieval_ir")
+        if metrics is None:
+            continue
+        rows.append({**metrics, "knowledge_base": row["knowledge_base"]})
+    if not rows:
+        return None
+    return {"k_values": list(k_values), "by_scope": aggregate_by_knowledge_base(rows, k_values)}
+
+
+def format_retrieval_table(retrieval_summary):
+    lines = ["scope | n_scored | mrr | " + " | ".join(
+        f"R@{k} nDCG@{k} H@{k}" for k in retrieval_summary["k_values"]
+    )]
+    for scope, values in retrieval_summary["by_scope"].items():
+        parts = [scope, str(values["n_scored"]), _format_float(values.get("mrr"))]
+        for k in retrieval_summary["k_values"]:
+            parts.extend(
+                [
+                    _format_float(values.get(f"recall@{k}")),
+                    _format_float(values.get(f"ndcg@{k}")),
+                    _format_float(values.get(f"hit@{k}")),
+                ]
+            )
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
+def _format_float(value):
+    return "-" if value is None else f"{value:.4f}"
+
+
 def summarize(report):
-    summary = {}
+    k_values = tuple(report.get("metric_k") or DEFAULT_METRIC_K)
+    summary = {"retrieval": summarize_retrieval(report, k_values)}
     for strategy in sorted({row["strategy"] for row in report["cases"]}):
         rows = [row for row in report["cases"] if row["strategy"] == strategy]
         groups = {}

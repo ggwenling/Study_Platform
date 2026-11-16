@@ -31,11 +31,14 @@ from study_platform.persistence.models import (
 from study_platform.services import ingestion
 from study_platform.services.models import embed_texts
 from study_platform.services.rag_evaluation import (
+    DEFAULT_METRIC_K,
     evaluate_case,
+    format_retrieval_table,
     quality_gate,
     read_dataset,
     review_template,
     summarize,
+    summarize_retrieval,
 )
 from study_platform.services.storage import source_path, version_dir
 
@@ -273,7 +276,9 @@ async def live_evaluation(args, cases, materials, output):
             "expected_case_ids": [case["id"] for case in cases],
             "strategy": args.strategy,
             "status": "running",
-            "chat_model": settings.chat_model,
+            "retrieval_only": args.retrieval_only,
+            "metric_k": list(args.metric_k),
+            "chat_model": None if args.retrieval_only else settings.chat_model,
             "embedding_model": settings.embedding_model,
             "dimensions": 1024,
             "top_k": settings.retrieval_top_k,
@@ -285,15 +290,32 @@ async def live_evaluation(args, cases, materials, output):
         report.update(source_hashes=hashes, corpus_embedding=corpus_embedding)
         for number, case in enumerate(cases, 1):
             report["cases"].extend(
-                await evaluate_case(case, scopes[case["knowledge_base"]], documents, args.strategy)
+                await evaluate_case(
+                    case,
+                    scopes[case["knowledge_base"]],
+                    documents,
+                    args.strategy,
+                    k_values=args.metric_k,
+                    retrieval_only=args.retrieval_only,
+                )
             )
             write_json(output / "report.json", report)
             print(f"Evaluated {number}/{len(cases)}: {case['id']}", flush=True)
     report["status"] = "completed"
     write_json(output / "report.json", report)
-    write_json(output / "review.json", review_template(report))
-    write_json(output / "gate.json", quality_gate(report))
-    write_json(output / "summary.json", summarize(report))
+    if not args.retrieval_only:
+        write_json(output / "review.json", review_template(report))
+        write_json(output / "gate.json", quality_gate(report))
+    retrieval = summarize_retrieval(report, args.metric_k)
+    if retrieval:
+        write_json(output / "retrieval_metrics.json", retrieval)
+    summary = summarize(report)
+    write_json(output / "summary.json", summary)
+    if retrieval:
+        if args.metrics_format == "table":
+            print(format_retrieval_table(retrieval), flush=True)
+        else:
+            print(json.dumps(retrieval, ensure_ascii=False, indent=2))
     print(f"Evaluation complete; isolated database removed. Review report: {output}")
 
 
@@ -304,6 +326,25 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--live", action="store_true", help="explicitly allow paid provider calls in a new test DB"
+    )
+    parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="retrieve and score IR metrics only; skip chat-model answers",
+    )
+    parser.add_argument(
+        "--metric-k",
+        type=int,
+        nargs="+",
+        default=list(DEFAULT_METRIC_K),
+        metavar="K",
+        help="cutoff list for Recall@k, nDCG@k and Hit@k (default: 1 3 6 10)",
+    )
+    parser.add_argument(
+        "--metrics-format",
+        choices=("json", "table"),
+        default="table",
+        help="stdout format for aggregated retrieval metrics after a live run",
     )
     parser.add_argument(
         "--review",
@@ -324,6 +365,9 @@ def main():
             write_json(args.output / "summary.json", summarize(report))
             print(json.dumps(gate, ensure_ascii=False))
             return
+        if any(k <= 0 for k in args.metric_k):
+            raise ValueError("--metric-k values must be positive integers")
+        args.metric_k = sorted(set(args.metric_k))
         cases, materials = read_dataset(args.dataset)
         if not args.live:
             print(
