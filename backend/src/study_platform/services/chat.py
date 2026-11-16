@@ -26,7 +26,9 @@ from study_platform.persistence.models.materials import (
 )
 from study_platform.persistence.models.operations import AiWorkflowRun, IdempotencyKey
 from study_platform.services.lexical import plain_tsquery
-from study_platform.services.models import chat_model, embed_texts, provider_error
+from study_platform.services.model_calls import astream_chat
+from study_platform.services.model_usage import ModelUsageContext
+from study_platform.services.models import embed_texts, provider_error
 from study_platform.services.query_rewrite import rewrite_query
 
 ACTIVE = ("created", "running")
@@ -352,10 +354,11 @@ def retrieve(scope, content, owner: UUID, *, rewritten_query=None, diagnostics=N
     queries = [content]
     if rewritten_query and rewritten_query != content:
         queries.append(rewritten_query)
+    usage_ctx = ModelUsageContext(owner, "embedding")
     if diagnostics is None:
-        vectors = embed_texts(queries)
+        vectors = embed_texts(queries, context=usage_ctx)
     else:
-        vectors = embed_texts(queries, diagnostics=diagnostics)
+        vectors = embed_texts(queries, diagnostics=diagnostics, context=usage_ctx)
     return retrieve_hybrid(scope, queries, vectors, owner)
 
 
@@ -533,8 +536,6 @@ async def stream(owner, run_id, fence, replay=False):
         return
     content = ""
     usage = None
-    pending = None
-    iterator = None
     try:
         yield meta
         yield event("phase", turn_id=run_id, phase="working")
@@ -549,7 +550,7 @@ async def stream(owner, run_id, fence, replay=False):
                 if not await run_in_threadpool(checkpoint, run_id, fence, content):
                     yield await ended_event(owner, conv_id, run_id)
                     return
-                rewritten = await rewrite_query(scope["content"])
+                rewritten = await rewrite_query(scope["content"], owner_user_id=owner)
                 if not await run_in_threadpool(checkpoint, run_id, fence, content):
                     yield await ended_event(owner, conv_id, run_id)
                     return
@@ -567,23 +568,17 @@ async def stream(owner, run_id, fence, replay=False):
                 yield await ended_event(owner, conv_id, run_id)
                 return
             yield event("phase", turn_id=run_id, phase="composing")
-            iterator = chat_model().astream(prompt(scope, evidence, history)).__aiter__()
+            stream = astream_chat(
+                prompt(scope, evidence, history),
+                context=ModelUsageContext(owner, "chat"),
+            )
             last_save = time.monotonic()
-            while True:
-                if pending is None:
-                    pending = asyncio.create_task(anext(iterator))
-                completed, _ = await asyncio.wait({pending}, timeout=1)
-                if completed:
-                    try:
-                        chunk = pending.result()
-                    except StopAsyncIteration:
-                        break
-                    pending = None
-                    if isinstance(chunk.content, str) and chunk.content:
-                        content += chunk.content
-                        yield event("delta", turn_id=run_id, delta=chunk.content)
-                    if chunk.usage_metadata:
-                        usage = chunk.usage_metadata
+            async for chunk in stream:
+                if isinstance(chunk.content, str) and chunk.content:
+                    content += chunk.content
+                    yield event("delta", turn_id=run_id, delta=chunk.content)
+                if chunk.usage_metadata:
+                    usage = chunk.usage_metadata
                 if time.monotonic()-last_save >= 1:
                     if not await run_in_threadpool(checkpoint, run_id, fence, content):
                         yield await ended_event(owner, conv_id, run_id)
@@ -615,9 +610,3 @@ async def stream(owner, run_id, fence, replay=False):
         error = exc if isinstance(exc, ApiError) else provider_error(exc)
         await run_in_threadpool(checkpoint, run_id, fence, content, "failed", None, error.code)
         yield event("error", turn_id=run_id, **error.payload())
-    finally:
-        if pending is not None:
-            pending.cancel()
-            await asyncio.gather(pending, return_exceptions=True)
-        if iterator is not None:
-            await iterator.aclose()

@@ -352,6 +352,19 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 .learning-actions, .learning-nav { display: flex; flex-wrap: wrap; gap: 8px; }
 .learning-wrong-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
 .learning-wrong-list li { border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: grid; gap: 6px; }
+.settings-page { max-width: 720px; margin: 0 auto; padding: 24px clamp(16px, 5vw, 40px) 48px; display: grid; gap: 20px; }
+.settings-header h1 { margin: 0 0 6px; font-size: 1.5rem; }
+.settings-header p { margin: 0; color: var(--muted); font-size: .95rem; }
+.settings-grid { display: grid; gap: 16px; }
+.settings-card { border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: grid; gap: 12px; }
+.settings-card h2 { margin: 0; font-size: 1rem; display: flex; align-items: center; gap: 8px; }
+.settings-kv { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.settings-kv div { display: grid; gap: 4px; }
+.settings-kv dt { margin: 0; font-size: .8rem; color: var(--muted); }
+.settings-kv dd { margin: 0; font-size: 1.1rem; font-weight: 600; }
+.settings-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.settings-list li { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: .95rem; }
+.settings-list li span:last-child { color: var(--muted); }
 
 .resource-page { max-width: 900px; margin: 0 auto; padding: 24px clamp(16px, 5vw, 65px) 48px; display: grid; gap: 22px; }
 .resource-page > a { justify-self: start; }
@@ -398,7 +411,7 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
   .source-panel-inner { width: 100%; }
   .chat[data-sources="false"] .source-panel { display: none; }
   .home { padding-inline: var(--page-gutter); }
-  .resource-page, .learning-page { padding-inline: var(--page-gutter); }
+  .resource-page, .learning-page, .settings-page { padding-inline: var(--page-gutter); }
   .home-hero { padding-block: 35px; }
   .shortcuts { width: 100%; grid-template-columns: 1fr; gap: 8px; }
   .shortcut:is(button) { min-height: 72px; }

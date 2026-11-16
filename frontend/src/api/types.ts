@@ -21,6 +21,9 @@ export interface Conversation { id: string; project_knowledge_base_id: string | 
 export interface SearchItem { id: string; type: 'knowledge_base' | 'material' | 'conversation'; title: string; knowledge_base_id: string | null }
 export interface Dashboard { knowledge_base_count: number; material_count: number; conversation_count: number; completed_qa_count: number; activity: { date: string; count: number }[] }
 export interface Capabilities { rag: boolean; ocr: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
+export interface ModelUsageBucket { key: string; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }
+export interface ModelUsageTotals { calls: number; successes: number; failures: number; fallback_calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }
+export interface ModelUsageSummary { days: number; since: string; totals: ModelUsageTotals; by_day: ModelUsageBucket[]; by_purpose: ModelUsageBucket[]; by_model: ModelUsageBucket[] }
 export interface Turn { turn_id: string; conversation_id: string; status: string; scope: Scope; messages: Message[]; error_code: string | null }
 
 export interface LearningItem {

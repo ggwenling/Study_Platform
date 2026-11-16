@@ -72,7 +72,18 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
     }
     expected["study.google_identities"] = {"subject", "user_id"}
     expected["study.password_resets"] = {"token_hash", "user_id", "email_hash", "client_hash", "created_at", "used_at"}
-    assert len(expected) == 40
+    expected["study.model_call_records"] = {
+        "id",
+        "owner_user_id",
+        "purpose",
+        "model_name",
+        "used_fallback",
+        "usage",
+        "elapsed_ms",
+        "success",
+        "created_at",
+    }
+    assert len(expected) == 41
     assert set(Base.metadata.tables) == set(expected)
     for name, fields in expected.items():
         assert set(Base.metadata.tables[name].columns.keys()) == fields, name

@@ -26,6 +26,7 @@ from study_platform.persistence.models.materials import (
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
 from study_platform.services import classification
 from study_platform.services.lexical import lexical_column_values
+from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.models import embed_texts
 from study_platform.services.storage import source_path, version_dir
 
@@ -321,7 +322,7 @@ def run_once():
                 job = locked_job(db, job_id, fence)
                 payload = classification.suggestion_input(db, job)
                 db.commit()
-                result = classification.suggest(payload)
+                result = classification.suggest(payload, owner_user_id=job.owner_user_id)
                 job = locked_job(db, job_id, fence)
                 active = classification.active_index(db, db.get(MaterialVersion, version_id).material_id)
                 if active is None or str(active.id) != job.payload["index_id"]:
@@ -384,7 +385,11 @@ def run_once():
                 update_phase(db, job_id, fence, "indexing",
                              chunk_count=len(chunk_rows), embedded_count=len(vectors))
                 batch = chunk_rows[offset : offset + 20]
-                result = embed_texts([row[0] for row in batch])
+                job = locked_job(db, job_id, fence)
+                result = embed_texts(
+                    [row[0] for row in batch],
+                    context=ModelUsageContext(job.owner_user_id, "embedding"),
+                )
                 if len(result) != len(batch) or any(len(v) != 1024 for v in result):
                     raise ApiError(502, "embedding_invalid", "向量模型返回维度或内容不正确")
                 vectors.extend(result)

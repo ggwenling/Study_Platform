@@ -141,7 +141,7 @@ def test_grade_llm_respects_threshold(monkeypatch):
     monkeypatch.setattr("study_platform.services.learning_grade.get_settings", lambda: settings)
     monkeypatch.setattr(
         "study_platform.services.learning_grade.grade_with_llm",
-        lambda stem, ref, ans: GradeResult("correct", 0.5, "部分一致"),
+        lambda stem, ref, ans, **_: GradeResult("correct", 0.5, "部分一致"),
     )
     verdict, conf, feedback, profile = grade_text_answer("完全不同", "参考答案", 0.9, stem="题干")
     assert verdict == "pending" and conf == 0.5

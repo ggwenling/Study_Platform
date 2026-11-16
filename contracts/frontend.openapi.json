@@ -2849,6 +2849,56 @@
           }
         }
       }
+    },
+    "/api/v1/me/model-usage": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "My Model Usage",
+        "operationId": "my_model_usage_api_v1_me_model_usage_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 365,
+              "minimum": 1,
+              "default": 30,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelUsageSummaryDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4205,6 +4255,52 @@
         ],
         "title": "MessagePage"
       },
+      "ModelUsageSummaryDTO": {
+        "properties": {
+          "days": {
+            "type": "integer",
+            "title": "Days"
+          },
+          "since": {
+            "type": "string",
+            "title": "Since"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/UsageTotalsDTO"
+          },
+          "by_day": {
+            "items": {
+              "$ref": "#/components/schemas/UsageBucketDTO"
+            },
+            "type": "array",
+            "title": "By Day"
+          },
+          "by_purpose": {
+            "items": {
+              "$ref": "#/components/schemas/UsageBucketDTO"
+            },
+            "type": "array",
+            "title": "By Purpose"
+          },
+          "by_model": {
+            "items": {
+              "$ref": "#/components/schemas/UsageBucketDTO"
+            },
+            "type": "array",
+            "title": "By Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "days",
+          "since",
+          "totals",
+          "by_day",
+          "by_purpose",
+          "by_model"
+        ],
+        "title": "ModelUsageSummaryDTO"
+      },
       "NameBody": {
         "properties": {
           "name": {
@@ -4542,6 +4638,87 @@
           "status"
         ],
         "title": "UploadResponse"
+      },
+      "UsageBucketDTO": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "successes": {
+            "type": "integer",
+            "title": "Successes"
+          },
+          "failures": {
+            "type": "integer",
+            "title": "Failures"
+          },
+          "fallback_calls": {
+            "type": "integer",
+            "title": "Fallback Calls"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "calls",
+          "successes",
+          "failures",
+          "fallback_calls",
+          "total_tokens"
+        ],
+        "title": "UsageBucketDTO"
+      },
+      "UsageTotalsDTO": {
+        "properties": {
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "successes": {
+            "type": "integer",
+            "title": "Successes"
+          },
+          "failures": {
+            "type": "integer",
+            "title": "Failures"
+          },
+          "fallback_calls": {
+            "type": "integer",
+            "title": "Fallback Calls"
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "title": "Prompt Tokens"
+          },
+          "completion_tokens": {
+            "type": "integer",
+            "title": "Completion Tokens"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "calls",
+          "successes",
+          "failures",
+          "fallback_calls",
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens"
+        ],
+        "title": "UsageTotalsDTO"
       },
       "UserDTO": {
         "properties": {

@@ -43,34 +43,39 @@ def test_rewrite_calls_once_with_bounded_client_and_only_current_question(monkey
             usage_metadata={"total_tokens": 32},
         )
     )
-    factory = Mock(return_value=SimpleNamespace(ainvoke=invoke))
-    monkeypatch.setattr(query_rewrite, "chat_model", factory)
+    monkeypatch.setattr(query_rewrite, "ainvoke_chat", invoke)
     result = asyncio.run(query_rewrite.rewrite_query("雪松库房最多能热到什么程度？"))
-    factory.assert_called_once_with(timeout=8, max_tokens=256, temperature=0)
+    invoke.assert_awaited_once()
+    assert invoke.await_args.kwargs["timeout"] == 8
+    assert invoke.await_args.kwargs["max_tokens"] == 256
     assert result.query and result.reason == "rewritten"
     assert result.usage == {"total_tokens": 32}
-    assert len(invoke.call_args.args[0]) == 2
-    assert invoke.call_args.args[0][-1].content == "雪松库房最多能热到什么程度？"
+    messages = invoke.await_args.args[0]
+    assert len(messages) == 2
+    assert messages[-1].content == "雪松库房最多能热到什么程度？"
 
 
 def test_timeout_falls_back_without_retry_and_cancellation_is_not_swallowed(monkeypatch):
-    async def slow(_):
+    calls: list[int] = []
+
+    async def tracked_slow(*_args, **_kwargs):
+        calls.append(1)
         await asyncio.sleep(60)
 
-    invoke = AsyncMock(side_effect=slow)
     monkeypatch.setattr(query_rewrite, "REWRITE_TIMEOUT", 0.01)
-    monkeypatch.setattr(query_rewrite, "chat_model", lambda **_: SimpleNamespace(ainvoke=invoke))
+    monkeypatch.setattr(query_rewrite, "ainvoke_chat", tracked_slow)
     result = asyncio.run(query_rewrite.rewrite_query("问题"))
     assert result.query is None and result.reason == "timeout"
-    assert invoke.call_count == 1
-    invoke.side_effect = asyncio.CancelledError()
+    assert len(calls) == 1
+    invoke = AsyncMock(side_effect=asyncio.CancelledError())
+    monkeypatch.setattr(query_rewrite, "ainvoke_chat", invoke)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(query_rewrite.rewrite_query("问题"))
 
 
 def test_provider_and_parse_errors_fall_back(monkeypatch):
     invoke = AsyncMock(side_effect=RuntimeError("private details"))
-    monkeypatch.setattr(query_rewrite, "chat_model", lambda **_: SimpleNamespace(ainvoke=invoke))
+    monkeypatch.setattr(query_rewrite, "ainvoke_chat", invoke)
     assert asyncio.run(query_rewrite.rewrite_query("问题")).reason == "unavailable"
     invoke.side_effect = None
     invoke.return_value = SimpleNamespace(content="broken JSON", usage_metadata=None)
@@ -102,7 +107,9 @@ def test_retrieval_batches_both_queries_and_keeps_scope(monkeypatch):
     owner = uuid4()
     scope = {"index_version_ids": ["fixed"]}
     chat.retrieve(scope, "原问题", owner, rewritten_query="同义问题")
-    embed.assert_called_once_with(["原问题", "同义问题"])
+    embed.assert_called_once()
+    assert embed.call_args.args[0] == ["原问题", "同义问题"]
+    assert embed.call_args.kwargs["context"].purpose == "embedding"
     retrieve.assert_called_once_with(scope, ["原问题", "同义问题"], [[1], [2]], owner)
     assert scope == {"index_version_ids": ["fixed"]}
     embed.reset_mock()

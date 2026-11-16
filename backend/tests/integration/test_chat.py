@@ -184,7 +184,7 @@ def test_with_general_empty_kb_still_composes(chat_db, monkeypatch):
     async def chunks():
         yield SimpleNamespace(content="【知识库依据】\n当前资料不足。\n【通用补充】\n示例回答。", usage_metadata=None)
 
-    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=lambda _: chunks()))
+    monkeypatch.setattr(chat, "astream_chat", lambda messages, **_: chunks())
     data = request(s.kb_a, content="空库通用问题")
     data["answer_mode"] = "with_general"
     run, fence, _ = chat.prepare(s.owner, data, uuid4().hex)
@@ -206,7 +206,7 @@ def test_no_evidence_stream_never_calls_cloud(chat_db, monkeypatch):
         raise AssertionError("Provider must not be called without evidence")
 
     monkeypatch.setattr(chat, "embed_texts", forbidden)
-    monkeypatch.setattr(chat, "chat_model", forbidden)
+    monkeypatch.setattr(chat, "astream_chat", forbidden)
     run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
 
     async def consume():
@@ -251,7 +251,7 @@ def test_stream_reports_phases_at_real_execution_boundaries(chat_db, monkeypatch
         yield SimpleNamespace(content="Answer [S1]", usage_metadata=None)
 
     monkeypatch.setattr(chat, "retrieve", retrieve)
-    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=lambda _: chunks()))
+    monkeypatch.setattr(chat, "astream_chat", lambda messages, **_: chunks())
     data = request(s.kb_a)
     if intent == "summary":
         data.update(intent=intent, material_ids=[str(evidence["material_id"])])
@@ -420,7 +420,7 @@ def test_cancel_during_rewrite_does_not_embed_or_generate(chat_db, monkeypatch):
 
     monkeypatch.setattr(chat, "rewrite_query", rewrite)
     monkeypatch.setattr(chat, "retrieve", forbidden)
-    monkeypatch.setattr(chat, "chat_model", forbidden)
+    monkeypatch.setattr(chat, "astream_chat", forbidden)
 
     async def consume():
         return [payload(frame) async for frame in chat.stream(s.owner, run, fence)]
@@ -486,7 +486,7 @@ def test_enabled_rewrite_batches_queries_answers_original_and_replay_calls_nothi
         assert messages[-1].content == "Original question"
         yield SimpleNamespace(content="Private evidence text [S1]", usage_metadata=None)
 
-    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=chunks))
+    monkeypatch.setattr(chat, "astream_chat", chunks)
     run, fence, _ = chat.prepare(s.owner, request(s.kb_a, content="Original question"), uuid4().hex)
 
     async def consume(replay=False):
@@ -494,7 +494,8 @@ def test_enabled_rewrite_batches_queries_answers_original_and_replay_calls_nothi
 
     events = asyncio.run(consume())
     assert events[-1]["type"] == "done" and events[-1]["message"]["citations"]
-    embed.assert_called_once_with(["Original question", "Equivalent question"])
+    embed.assert_called_once()
+    assert embed.call_args.args[0] == ["Original question", "Equivalent question"]
     asyncio.run(consume(True))
     assert rewritten.call_count == 1 and embed.call_count == 1
 
@@ -621,7 +622,7 @@ def test_summary_and_empty_library_skip_rewrite_even_when_enabled(chat_db, monke
     async def answer(_):
         yield SimpleNamespace(content="Summary [S1]", usage_metadata=None)
 
-    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=answer))
+    monkeypatch.setattr(chat, "astream_chat", answer)
     run, fence, _ = chat.prepare(s.owner, data, uuid4().hex)
 
     async def consume():
@@ -659,9 +660,7 @@ def test_provider_stream_failure_preserves_partial_and_error_event(chat_db, monk
         yield SimpleNamespace(content="Partial answer", usage_metadata=None)
         raise ApiError(502, "provider_test_failure", "Test failure", retryable=True)
 
-    monkeypatch.setattr(
-        chat, "chat_model", lambda: SimpleNamespace(astream=lambda prompt: chunks())
-    )
+    monkeypatch.setattr(chat, "astream_chat", lambda messages, **_: chunks())
     run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
 
     async def consume():
@@ -684,9 +683,7 @@ def test_cancel_during_actual_stream_fences_late_tokens(chat_db, monkeypatch):
         yield SimpleNamespace(content="Partial ", usage_metadata=None)
         yield SimpleNamespace(content="late answer [S1]", usage_metadata=None)
 
-    monkeypatch.setattr(
-        chat, "chat_model", lambda: SimpleNamespace(astream=lambda prompt: chunks())
-    )
+    monkeypatch.setattr(chat, "astream_chat", lambda messages, **_: chunks())
     run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
     conv = conversation_for(s, run)
 

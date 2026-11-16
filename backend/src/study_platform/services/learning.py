@@ -106,7 +106,9 @@ def generate_learning_quiz(
         fragments = map_fragment_hits(hits)
         if not fragments:
             raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
-        generated, insufficient = generate_questions_with_llm(fragments, count)
+        generated, insufficient = generate_questions_with_llm(
+            fragments, count, owner_user_id=owner_user_id
+        )
         if insufficient:
             raise ApiError(409, "insufficient_material", insufficient)
         by_index = index_to_fragment(fragments)
@@ -291,7 +293,7 @@ def submit_image_answer(
     ocr_text, ocr_conf = ocr_answer_bytes(image_bytes)
     reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
     verdict, conf, feedback, grader_profile = grade_text_answer(
-        ocr_text, reference, ocr_conf, stem=item.stem
+        ocr_text, reference, ocr_conf, stem=item.stem, owner_user_id=owner_user_id
     )
     row.answer = {
         "type": "image",

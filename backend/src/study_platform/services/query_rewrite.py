@@ -6,10 +6,12 @@ import re
 import time
 import unicodedata
 from dataclasses import dataclass
+from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from study_platform.services.models import chat_model
+from study_platform.services.model_calls import ainvoke_chat
+from study_platform.services.model_usage import ModelUsageContext
 
 REWRITE_TIMEOUT = 8
 RULES = (
@@ -57,19 +59,26 @@ def validated_query(question: str, content: str) -> str | None:
     return query.strip() if rewritten.casefold() != original.casefold() else None
 
 
-async def rewrite_query(question: str) -> RewriteResult:
+async def rewrite_query(question: str, *, owner_user_id: UUID | None = None) -> RewriteResult:
     started = time.monotonic()
     usage = None
+    context = ModelUsageContext(owner_user_id, "query_rewrite") if owner_user_id else None
     try:
         async with asyncio.timeout(REWRITE_TIMEOUT):
-            reply = await chat_model(
-                timeout=REWRITE_TIMEOUT, max_tokens=256, temperature=0
-            ).ainvoke([SystemMessage(content=RULES), HumanMessage(content=question)])
+            reply = await ainvoke_chat(
+                [SystemMessage(content=RULES), HumanMessage(content=question)],
+                context=context,
+                timeout=REWRITE_TIMEOUT,
+                max_tokens=256,
+                temperature=0,
+            )
         usage = reply.usage_metadata
         query = validated_query(question, reply.content) if isinstance(reply.content, str) else None
         reason = "rewritten" if query else "invalid_or_unchanged"
-    except TimeoutError:
+    except (TimeoutError, asyncio.TimeoutError):
         query, reason = None, "timeout"
+    except asyncio.CancelledError:
+        raise
     except Exception:
         query, reason = None, "unavailable"
     return RewriteResult(query, reason, (time.monotonic() - started) * 1000, usage)
