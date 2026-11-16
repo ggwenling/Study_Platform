@@ -24,7 +24,7 @@ from study_platform.persistence.models import (
     QuizResponse,
     WrongQuestion,
 )
-from study_platform.services.chat import retrieve, visible_indices
+from study_platform.services.chat import chunk_dto, chunk_query, retrieve, visible_indices
 from study_platform.services.learning_anchor import ensure_course_anchor
 from study_platform.services.learning_grade import grade_text_answer, ocr_answer_bytes
 
@@ -73,7 +73,15 @@ def generate_learning_quiz(
     if not scope_ids:
         raise ApiError(409, "library_not_ready", "当前知识库尚无可用索引，请先上传并完成处理。")
     scope = {"index_version_ids": scope_ids}
-    hits = retrieve(scope, "重要概念、定义、公式与例题", owner_user_id)
+    settings = get_settings()
+    if settings.learning_stub_grader:
+        indices = [UUID(x) if isinstance(x, str) else x for x in scope_ids]
+        rows = db.execute(
+            chunk_query(indices, owner_user_id).order_by(MaterialChunk.ordinal).limit(max(count * 3, 10))
+        ).all()
+        hits = [chunk_dto(row, title) for row, title in rows]
+    else:
+        hits = retrieve(scope, "重要概念、定义、公式与例题", owner_user_id)
     if not hits:
         raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
     quiz = Quiz(
