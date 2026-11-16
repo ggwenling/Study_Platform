@@ -2,6 +2,7 @@
 
 from uuid import UUID
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -11,7 +12,7 @@ from study_platform.api.v1.materials import owned_kb
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
 from study_platform.persistence.database import get_db
-from study_platform.persistence.models import User
+from study_platform.persistence.models import QuizItem, User
 from study_platform.services import learning
 
 router = APIRouter(prefix="/learning", tags=["learning"])
@@ -47,8 +48,12 @@ def generate_quiz(
         knowledge_base_id=kb_id,
         count=body.count,
     )
+    db.flush()
+    item_count = db.scalar(
+        sa.select(sa.func.count()).select_from(QuizItem).where(QuizItem.quiz_id == quiz.id)
+    )
     db.commit()
-    return {"quiz_id": str(quiz.id), "title": quiz.title, "item_count": body.count}
+    return {"quiz_id": str(quiz.id), "title": quiz.title, "item_count": int(item_count or 0)}
 
 
 @router.post("/attempts")

@@ -436,6 +436,13 @@ def mark_wrong_mastered(db: Session, owner_user_id: UUID, wrong_id: UUID) -> Non
     db.flush()
 
 
+def _reference_revealed(response: QuizResponse) -> bool:
+    if response.verdict is not None:
+        return True
+    answer = response.answer if isinstance(response.answer, dict) else {}
+    return answer.get("type") == "image"
+
+
 def attempt_payload(db: Session, attempt_id: UUID, owner_user_id: UUID) -> dict:
     attempt = (
         db.execute(
@@ -461,21 +468,21 @@ def attempt_payload(db: Session, attempt_id: UUID, owner_user_id: UUID) -> dict:
     items = []
     for resp, item in responses:
         ref = resp.reference_answer_effective or _reference_from_answer_key(item.answer_key)
-        items.append(
-            {
-                "response_id": str(resp.id),
-                "quiz_item_id": str(item.id),
-                "ordinal": item.ordinal,
-                "stem": item.stem,
-                "item_type": item.item_type,
-                "reference_answer": ref,
-                "verdict": resp.verdict,
-                "verdict_source": resp.verdict_source,
-                "confidence": float(resp.confidence) if resp.confidence is not None else None,
-                "feedback": resp.feedback,
-                "answer": resp.answer,
-            }
-        )
+        row = {
+            "response_id": str(resp.id),
+            "quiz_item_id": str(item.id),
+            "ordinal": item.ordinal,
+            "stem": item.stem,
+            "item_type": item.item_type,
+            "verdict": resp.verdict,
+            "verdict_source": resp.verdict_source,
+            "confidence": float(resp.confidence) if resp.confidence is not None else None,
+            "feedback": resp.feedback,
+            "answer": resp.answer,
+        }
+        if _reference_revealed(resp):
+            row["reference_answer"] = ref
+        items.append(row)
     return {
         "id": str(attempt.id),
         "quiz_id": str(attempt.quiz_id),

@@ -32,7 +32,7 @@ export interface LearningItem {
   ordinal: number
   stem: string
   item_type: string
-  reference_answer: string
+  reference_answer?: string | null
   verdict: string | null
   verdict_source: string | null
   confidence: number | null
