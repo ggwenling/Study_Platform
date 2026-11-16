@@ -16,15 +16,16 @@ from study_platform.persistence.models import User
 from study_platform.services.auth import (
     access_session,
     account_can_login,
+    allowed_request_origin,
     check_csrf,
-    check_origin,
     create_session,
     credentials_valid,
     find_session,
     hasher,
-    issue_token,
+    rotate_session,
     signing_key,
 )
+from study_platform.services.auth_limits import rate_limit_auth
 
 router = APIRouter()
 bearer = HTTPBearer(auto_error=False)
@@ -40,6 +41,7 @@ class UserDTO(BaseModel):
 class AuthDTO(BaseModel):
     user: UserDTO
     access_token: str
+    csrf_token: str
 
 
 class LoginErrorDTO(BaseModel):
@@ -107,7 +109,8 @@ def me(user: User = Depends(get_current_user)) -> dict:
 def register(
     body: RegisterBody, request: Request, response: Response, db: Session = Depends(get_db)
 ) -> dict:
-    check_origin(request)
+    rate_limit_auth(request, limit=request.app.state.settings.auth_rate_limit_per_minute)
+    allowed_request_origin(request)
     signing_key(request)
     user = User(
         email=body.email, password_hash=hasher.hash(body.password), display_name=body.display_name
@@ -118,7 +121,8 @@ def register(
     except IntegrityError:
         db.rollback()
         raise ApiError(400, "registration_failed", "无法注册，请检查输入或尝试登录") from None
-    return {"user": user_payload(user), "access_token": create_session(db, user, request, response)}
+    access, csrf = create_session(db, user, request, response)
+    return {"user": user_payload(user), "access_token": access, "csrf_token": csrf}
 
 
 @router.post(
@@ -139,7 +143,8 @@ def register(
 def login(
     body: LoginBody, request: Request, response: Response, db: Session = Depends(get_db)
 ) -> dict:
-    check_origin(request)
+    rate_limit_auth(request, limit=request.app.state.settings.auth_rate_limit_per_minute)
+    allowed_request_origin(request)
     user = db.scalar(select(User).where(User.email == body.email).with_for_update())
     if not credentials_valid(user, body.password):
         if request.app.state.settings.login_detailed_errors:
@@ -147,27 +152,28 @@ def login(
                 raise ApiError(401, "invalid_account", "此邮箱对应的账号不可登录")
             raise ApiError(401, "invalid_password", "密码错误")
         raise ApiError(401, "invalid_credentials", "邮箱或密码错误")
-    return {"user": user_payload(user), "access_token": create_session(db, user, request, response)}
+    access, csrf = create_session(db, user, request, response)
+    return {"user": user_payload(user), "access_token": access, "csrf_token": csrf}
 
 
 @router.post("/auth/refresh", response_model=AuthDTO)
 def refresh(request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
-    check_origin(request)
     session = find_session(db, request)
     user = db.get(User, session.user_id) if session else None
     if not session or user is None or not account_can_login(user):
         raise ApiError(401, "unauthenticated", "请先登录")
     check_csrf(request, session)
     response.headers["Cache-Control"] = "no-store"
-    return {"user": user_payload(user), "access_token": issue_token(request, session)}
+    access, csrf = rotate_session(db, session, request, response)
+    return {"user": user_payload(user), "access_token": access, "csrf_token": csrf}
 
 
 @router.post("/auth/logout", status_code=204)
 def logout(request: Request, db: Session = Depends(get_db)) -> Response:
-    check_origin(request)
     session = find_session(db, request)
     if session:
         check_csrf(request, session)
+    if session:
         session.revoked_at = datetime.now(UTC)
         db.commit()
     response = Response(status_code=204)

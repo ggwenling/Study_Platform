@@ -10,7 +10,7 @@ from study_platform.persistence.base import Base
 # Source dictionary section 3. Only users.status's width needs the documented correction.
 FIELD_CONTRACT = """
 users: id email password_hash display_name role status email_verified_at last_login_at created_at updated_at deleted_at
-user_sessions: id user_id refresh_token_hash csrf_secret_hash user_agent_hash expires_at revoked_at created_at updated_at
+user_sessions: id user_id refresh_token_hash csrf_secret_hash user_agent_hash access_generation expires_at revoked_at created_at updated_at
 courses: id owner_user_id name subject description language settings created_at updated_at deleted_at
 materials: id owner_user_id course_id title kind status created_at updated_at deleted_at
 material_versions: id material_id version_no is_current source_mime source_sha256 byte_size object_key page_count parser_profile parse_status failure_code created_at updated_at
