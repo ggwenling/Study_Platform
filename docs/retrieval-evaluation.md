@@ -39,6 +39,11 @@ uv run --no-sync study-eval-rag --dataset evaluation/retrieval_mini.jsonl \
   --strategy baseline --retrieval-only --metric-k 1 3 6 \
   --metrics-format table --live --output ../.local/rag-retrieval/mini-01
 
+# 向量 baseline 与混合（向量 + 中文关键词）对比
+uv run --no-sync study-eval-rag --dataset evaluation/retrieval_mini.jsonl \
+  --strategy hybrid_compare --retrieval-only --metric-k 1 3 6 \
+  --metrics-format table --live --output ../.local/rag-retrieval/mini-hybrid-01
+
 # 完整事实问答对照（检索指标写入 retrieval_metrics.json 与 summary.json）
 uv run --no-sync study-eval-rag --strategy compare --live --output ../.local/rag-eval/run-01
 ```

@@ -29,6 +29,7 @@ from study_platform.persistence.models import (
     User,
 )
 from study_platform.services import ingestion
+from study_platform.services.lexical import lexical_column_values
 from study_platform.services.models import embed_texts
 from study_platform.services.rag_evaluation import (
     DEFAULT_METRIC_K,
@@ -146,7 +147,7 @@ def render_source(material, target):
 def seed_corpus(factory, materials):
     settings = get_settings()
     owner = uuid4()
-    scopes, documents, hashes, embedding_metrics = {}, {}, {}, []
+    scopes, documents, hashes, embedding_metrics, eval_owner = {}, {}, {}, [], owner
     with factory.begin() as db:
         db.add(
             User(
@@ -243,6 +244,7 @@ def seed_corpus(factory, materials):
                     text=text,
                     text_sha256=hashlib.sha256(text.encode()).hexdigest(),
                     locator=locator,
+                    **lexical_column_values(text),
                 )
                 db.add(chunk)
                 db.flush()
@@ -256,7 +258,7 @@ def seed_corpus(factory, materials):
             scopes[item["knowledge_base"]]["index_version_ids"].append(str(index.id))
             documents[str(version.id)] = item["id"]
             print(f"Indexed evaluation document {item['id']}", flush=True)
-    return scopes, documents, hashes, embedding_metrics
+    return scopes, documents, hashes, embedding_metrics, eval_owner
 
 
 def write_json(path, value):
@@ -286,7 +288,7 @@ async def live_evaluation(args, cases, materials, output):
             "cases": [],
         }
         write_json(output / "report.json", report)
-        scopes, documents, hashes, corpus_embedding = seed_corpus(factory, materials)
+        scopes, documents, hashes, corpus_embedding, eval_owner = seed_corpus(factory, materials)
         report.update(source_hashes=hashes, corpus_embedding=corpus_embedding)
         for number, case in enumerate(cases, 1):
             report["cases"].extend(
@@ -295,6 +297,7 @@ async def live_evaluation(args, cases, materials, output):
                     scopes[case["knowledge_base"]],
                     documents,
                     args.strategy,
+                    eval_owner,
                     k_values=args.metric_k,
                     retrieval_only=args.retrieval_only,
                 )
@@ -322,7 +325,11 @@ async def live_evaluation(args, cases, materials, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=BACKEND / "evaluation/facts.jsonl")
-    parser.add_argument("--strategy", choices=("baseline", "rewrite", "compare"), default="compare")
+    parser.add_argument(
+        "--strategy",
+        choices=("baseline", "rewrite", "compare", "hybrid", "hybrid_compare"),
+        default="compare",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--live", action="store_true", help="explicitly allow paid provider calls in a new test DB"

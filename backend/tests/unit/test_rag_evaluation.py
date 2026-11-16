@@ -4,6 +4,7 @@ import json
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -89,7 +90,9 @@ def test_interrupted_live_evaluation_keeps_planned_questions_and_running_status(
     )
     cases = [{"id": n, "knowledge_base": "kb"} for n in ("first", "second")]
     monkeypatch.setattr(evaluate_rag, "isolated_database", lambda _: nullcontext(None))
-    monkeypatch.setattr(evaluate_rag, "seed_corpus", lambda *_: ({"kb": {}}, {}, {}, []))
+    monkeypatch.setattr(
+        evaluate_rag, "seed_corpus", lambda *_: ({"kb": {}}, {}, {}, [], uuid4())
+    )
 
     async def eval_case(case, *_args, **_kwargs):
         if case["id"] == "second":

@@ -96,20 +96,39 @@ def support_hit(case, evidence, documents):
     )
 
 
-async def evaluate_case(case, scope, documents, strategy, k_values=DEFAULT_METRIC_K, retrieval_only=False):
-    """Both strategies share the same original query vector and index snapshot."""
+async def evaluate_case(
+    case,
+    scope,
+    documents,
+    strategy,
+    owner,
+    k_values=DEFAULT_METRIC_K,
+    retrieval_only=False,
+):
+    """Strategies share the same original query vector and index snapshot."""
     rewritten = None
-    if strategy in ("rewrite", "compare") and scope["index_version_ids"]:
+    if strategy in ("rewrite", "compare", "hybrid", "hybrid_compare") and scope["index_version_ids"]:
         rewritten = await rewrite_query(case["question"])
     queries = [case["question"]]
-    if rewritten and rewritten.query:
+    if strategy in ("rewrite", "compare") and rewritten and rewritten.query:
         queries.append(rewritten.query)
     embedding = {"calls": 0, "input_count": 0, "usage": None}
     vectors = embed_texts(queries, diagnostics=embedding) if scope["index_version_ids"] else []
     results = []
-    for name in ["baseline", "rewrite"] if strategy == "compare" else [strategy]:
+    if strategy == "compare":
+        strategy_names = ["baseline", "rewrite"]
+    elif strategy == "hybrid_compare":
+        strategy_names = ["baseline", "hybrid"]
+    else:
+        strategy_names = [strategy]
+    for name in strategy_names:
         started = time.monotonic()
-        evidence = chat.retrieve_vectors(scope, vectors[:1] if name == "baseline" else vectors)
+        if name == "hybrid":
+            evidence = chat.retrieve_hybrid(scope, [case["question"]], vectors[:1], owner)
+        elif name == "baseline":
+            evidence = chat.retrieve_vectors(scope, vectors[:1], owner)
+        else:
+            evidence = chat.retrieve_vectors(scope, vectors, owner)
         retrieval_ms = (time.monotonic() - started) * 1000
         supported = support_hit(case, evidence, documents) if case["answerable"] else None
         reciprocal_rank = 0

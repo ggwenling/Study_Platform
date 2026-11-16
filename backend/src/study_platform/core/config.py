@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     model_max_output_tokens: int = 2048
     retrieval_top_k: int = 6
     retrieval_min_similarity: float = 0.35
+    retrieval_hybrid_enabled: bool = True
+    retrieval_lexical_weight: float = 1.0
     rag_query_rewrite_enabled: bool = False
     learning_confidence_threshold: float = 0.85
     learning_stub_grader: bool = False

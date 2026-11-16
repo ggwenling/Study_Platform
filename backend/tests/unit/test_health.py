@@ -30,7 +30,7 @@ def configured(tmp_path):
 def test_readiness_checks_migrated_database(monkeypatch, tmp_path):
     settings = configured(tmp_path)
     connection = AsyncMock()
-    connection.scalar.return_value = "0007_learning_verdict"
+    connection.scalar.return_value = "0008_lexical_backfill"
 
     @asynccontextmanager
     async def connect():
@@ -77,7 +77,7 @@ def test_readiness_requires_keys_revision_and_writable_storage(monkeypatch, tmp_
     )
     with TestClient(create_app(settings)) as client:
         assert client.get("/health/ready").status_code == 503
-        connection.scalar.return_value = "0007_learning_verdict"
+        connection.scalar.return_value = "0008_lexical_backfill"
         settings.embedding_api_key = SecretStr("")
         assert client.get("/health/ready").status_code == 503
         settings.embedding_api_key = SecretStr("test")
