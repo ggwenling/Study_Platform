@@ -23,6 +23,37 @@ export interface Dashboard { knowledge_base_count: number; material_count: numbe
 export interface Capabilities { rag: boolean; ocr: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
 export interface Turn { turn_id: string; conversation_id: string; status: string; scope: Scope; messages: Message[]; error_code: string | null }
 
+export interface LearningItem {
+  response_id: string
+  quiz_item_id: string
+  ordinal: number
+  stem: string
+  item_type: string
+  reference_answer: string
+  verdict: string | null
+  verdict_source: string | null
+  confidence: number | null
+  feedback: string | null
+  answer: Record<string, unknown> | null
+}
+
+export interface LearningAttempt {
+  id: string
+  quiz_id: string
+  knowledge_base_id: string | null
+  status: string
+  items: LearningItem[]
+}
+
+export interface WrongQuestionItem {
+  id: string
+  quiz_item_id: string
+  stem: string
+  status: string
+  wrong_count: number
+  last_wrong_at: string
+}
+
 export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null }
 export interface Job { id: string; status: string; phase: string | null; progress: number; error_code: string | null; attempt_count: number }
 export interface MaterialPreview { version_id: string; mime_type: string; page_count: number | null; sections: { text: string; locator: Record<string, unknown> }[] }

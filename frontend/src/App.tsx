@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { BookOpen, ChevronRight, History, Layers, MessageCircle, PanelLeft, Search, Settings } from 'lucide-react'
+import { BookOpen, ChevronRight, GraduationCap, History, Layers, MessageCircle, PanelLeft, Search, Settings } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { Button } from '@/components/arc/button/button'
@@ -19,13 +19,23 @@ import { allPages, errorMessage } from './api/ui'
 const DemoChat = lazy(() => import('./components/DemoChat'))
 const LiveChat = lazy(() => import('./components/LiveChat'))
 const Library = lazy(() => import('./components/Library'))
+const Learning = lazy(() => import('./components/Learning').then((m) => ({ default: m.Learning })))
 
 const navigation = [
   { label: '新对话', path: '/', icon: MessageCircle },
   { label: '历史', path: '/history', icon: History },
   { label: '知识库', path: '/knowledge', icon: Layers },
+  { label: '学习', path: '/learning', icon: GraduationCap },
   { label: '设置', path: '/settings', icon: Settings },
 ]
+
+function LearningRoute({ notify }: { notify: (message: string) => void }) {
+  const { user, libraries, requireLogin } = useWorkspace()
+  if (!user) {
+    return <div className="placeholder-page"><EmptyState title="登录后使用学习" description="练习、拍照作答与错题本。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
+  }
+  return <Learning knowledgeBases={libraries} notify={notify} />
+}
 
 function Placeholder({ title, description }: { title: string; description: string }) {
   return (
@@ -241,6 +251,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             <Route path="/chat/:id" element={<ChatRoute notify={notify} />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/knowledge" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开知识库…</div>}><Library preferredId={libraryId ?? undefined} /></Suspense>} />
+            <Route path="/learning" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开学习…</div>}><LearningRoute notify={notify} /></Suspense>} />
             <Route path="/settings" element={<Placeholder title="设置暂未开放" description="个人偏好将在这里管理。" />} />
             <Route path="*" element={<Placeholder title="页面不存在" description="请检查访问地址，或返回首页。" />} />
           </Routes>}

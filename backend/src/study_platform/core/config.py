@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 6
     retrieval_min_similarity: float = 0.35
     rag_query_rewrite_enabled: bool = False
+    learning_confidence_threshold: float = 0.85
+    learning_stub_grader: bool = False
 
 
 @lru_cache
