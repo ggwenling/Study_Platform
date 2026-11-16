@@ -267,7 +267,7 @@ def test_authenticated_upload_persists_original_and_job(state):
         app.include_router(router)
         app.dependency_overrides[get_db] = lambda: db
         app.dependency_overrides[get_current_user] = lambda: user
-        with TestClient(app) as client:
+        with TestClient(app, headers={"Origin": "http://localhost:5173"}) as client:
             response = client.post(
                 f"/knowledge-bases/{kb_id}/materials",
                 files={"file": ("sample.txt", b"uploaded", "text/plain")},

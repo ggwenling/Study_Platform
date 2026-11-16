@@ -9,7 +9,7 @@ function byteStream(text: string): ReadableStream<Uint8Array> {
 
 afterEach(() => { api.clearSession(); vi.unstubAllGlobals() })
 
-const auth = (token: string) => Response.json({ user: { id: 'u' }, access_token: token })
+const auth = (token: string) => Response.json({ user: { id: 'u' }, access_token: token, csrf_token: 'csrf-mem' })
 
 describe('chat stream', () => {
   it('decodes split UTF-8, CRLF, heartbeats and an unterminated final frame', async () => {
@@ -56,7 +56,7 @@ describe('HTTP client', () => {
       const headers = new Headers(init.headers)
       if (url.endsWith('/login')) return auth('old')
       if (url.endsWith('/refresh')) {
-        expect(headers.get('X-CSRF-Token')).toBe('token')
+        expect(headers.get('X-CSRF-Token')).toBe('csrf-mem')
         return auth('new')
       }
       expect(headers.get('X-CSRF-Token')).toBeNull()

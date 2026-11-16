@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     storage_dir: Path = Path(__file__).resolve().parents[4] / ".local" / "storage"
     session_ttl_seconds: int = 604800
     cookie_secure: bool = False
+    auth_rate_limit_per_minute: int = 30
+    max_docx_uncompressed_bytes: int = 80 * 1024 * 1024
+    max_pdf_page_preview: int = 50
     login_detailed_errors: bool = False
     auth_jwt_secret: SecretStr = SecretStr("")
     auth_public_url: str = "http://127.0.0.1:5173"

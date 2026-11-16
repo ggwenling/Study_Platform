@@ -28,6 +28,7 @@ from study_platform.persistence.models import User, UserSession
 from study_platform.persistence.models.identity import GoogleIdentity, PasswordReset
 from study_platform.services.auth import (
     account_can_login,
+    allowed_request_origin,
     check_origin,
     create_session,
     credentials_valid,
@@ -183,19 +184,19 @@ class PasswordBody(BaseModel):
 
 @router.post("/google/link", response_model=AuthDTO)
 def google_link(body: PasswordBody, request: Request, response: Response, db: Session = Depends(get_db)):
-    check_origin(request)
+    allowed_request_origin(request)
     flow = get_flow(request, LINK_COOKIE)
     user = db.get(User, UUID(flow["uid"]), with_for_update=True)
     if not credentials_valid(user, body.password):
         raise ApiError(401, "invalid_password", "密码错误")
     db.add(GoogleIdentity(subject=flow["subject"], user_id=user.id))
     try:
-        token = create_session(db, user, request, response)
+        access, csrf = create_session(db, user, request, response)
     except IntegrityError as exc:
         db.rollback()
         raise ApiError(409, "google_already_linked", "此账号已有 Google 绑定") from exc
     response.delete_cookie(LINK_COOKIE, path=COOKIE_PATH)
-    return {"user": user_payload(user), "access_token": token}
+    return {"user": user_payload(user), "access_token": access, "csrf_token": csrf}
 
 
 def clean_email(value: str) -> str:

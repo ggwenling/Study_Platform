@@ -80,6 +80,27 @@ for await (const event of streamChat({
 
 可选查询改写由后端 `RAG_QUERY_REWRITE_ENABLED` 控制，默认关闭；不增加请求字段或 SSE 事件，实验步骤仍显示为 searching。它只补充当前库内的检索问题，最终回答针对原问题，不能扩大知识范围。行为与实测边界见 [质量回归说明](rag-quality.md)。
 
+## 知识库详情与片段
+
+均需 Bearer。路径前缀 `/knowledge-bases/{kb_id}`。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/overview` | 库内文件数、索引/OCR 进度、主题标签与按日活跃统计 |
+| POST | `/sync` | 刷新统计并写 `last_synced_at` |
+| GET | `/documents/{material_id}/locations` | 按原文段落/页聚合的片段位置 |
+| GET | `/fragments` | 分页列出可检索片段（`q`、`tag`、`day`、`material_id`、`section_id` 等筛选） |
+| PATCH | `/fragments/retrieval` | JSON `{"ids":["UUID",…],"enabled":true\|false}` 批量开关片段是否参与检索 |
+| GET/POST/PATCH | `/documents/{material_id}/classification` | 主题/标签建议与确认 |
+
+片段 `retrieval_enabled=false` 时不进入向量检索与摘要汇总，但不影响历史消息展示；关闭后仍会参与同 scope 的对话历史（仅作表达参考，不作事实依据）。
+
+## 认证强化说明
+
+注册、登录、刷新与退出要求请求带受信任 `Origin` 或 `Referer`（与 `allowed_origins` 一致）。`POST /auth/login` 与 `POST /auth/register` 受每 IP 速率限制（默认 30 次/分钟，超出返回 `429 rate_limited`）。响应体 `AuthDTO` 含 `csrf_token`；刷新会轮转 `study_refresh` 与 `csrf_token`，并使上一枚 access JWT 立即失效（`tg` 代次）。`study_csrf` Cookie 为 HttpOnly，前端应用内存中的 `csrf_token` 设置 `X-CSRF-Token`。部署 HTTPS 时须 `COOKIE_SECURE=true`（且 `AUTH_PUBLIC_URL` 为 `https://` 时启动会校验）。
+
+资料 `GET .../content` 仅在 `parse_status=ready` 时提供原件；上传校验文件头与扩展名一致。进行中返回 `409 content_not_ready`。
+
 ## 运行与费用
 
 开发库执行 `uv run alembic upgrade head`；如需独立的 LangGraph 表再执行 `uv run study-setup-checkpointer`。启动 `uv run study-api` 与独立的 `uv run study-worker`。应用的问答流程通过 LangChain 调用模型、在业务数据库记录轮次，不使用 LangGraph checkpointer 恢复执行。

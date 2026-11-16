@@ -1,8 +1,6 @@
 from fastapi import APIRouter
 
-from study_platform.api.v1 import account_recovery, auth, chat, materials, resources
-
-from study_platform.api.v1 import library_detail
+from study_platform.api.v1 import account_recovery, auth, chat, library_detail, materials, resources
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(auth.router, tags=["authentication"])

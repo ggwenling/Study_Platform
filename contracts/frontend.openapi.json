@@ -2571,12 +2571,17 @@
           "access_token": {
             "type": "string",
             "title": "Access Token"
+          },
+          "csrf_token": {
+            "type": "string",
+            "title": "Csrf Token"
           }
         },
         "type": "object",
         "required": [
           "user",
-          "access_token"
+          "access_token",
+          "csrf_token"
         ],
         "title": "AuthDTO"
       },

@@ -3,14 +3,15 @@ import type { LibraryOverview, FragmentPage, DocumentLocation, ClassificationSta
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
-type AuthResponse = { user: User; access_token: string }
+type AuthResponse = { user: User; access_token: string; csrf_token: string }
+/** CSRF 仅存内存，避免依赖可被 XSS 读取的 document.cookie（HttpOnly Cookie 由浏览器随请求发送）。 */
 let session: AuthResponse | null = null
+let csrfMemory: string | undefined
 let refreshing: Promise<User> | null = null
 let sessionVersion = 0
 
 function csrfToken(): string | undefined {
-  const cookie = document.cookie.split(/;\s*/).find((part) => part.startsWith('study_csrf='))
-  return cookie ? decodeURIComponent(cookie.slice('study_csrf='.length)) : undefined
+  return csrfMemory ?? session?.csrf_token
 }
 function headersFor(headers?: HeadersInit, csrf = false): Headers {
   const result = new Headers(headers)
@@ -60,6 +61,7 @@ const json = (method: string, body?: unknown): RequestInit => ({ method, ...(bod
 function clearSession() {
   sessionVersion += 1
   session = null
+  csrfMemory = undefined
   refreshing = null
 }
 
@@ -71,6 +73,7 @@ function refresh() {
         throw new ApiError({ code: 'unauthenticated', message: '请重新登录', retryable: false }, 401)
       }
       session = result
+      csrfMemory = result.csrf_token
       return result.user
     }).catch((error) => {
       if (version === sessionVersion && error instanceof ApiError && error.status === 401) session = null
@@ -86,6 +89,7 @@ async function authenticate(path: string, body: unknown) {
   const result = await request<AuthResponse>(path, json('POST', body), 'public')
   clearSession()
   session = result
+  csrfMemory = result.csrf_token
   return result.user
 }
 const query = (values: Record<string, string | undefined>) => {

@@ -3,6 +3,7 @@
 import hashlib
 import shutil
 import socket
+import zipfile
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -61,7 +62,16 @@ def ocr_image(image):
     )
 
 
+def ensure_docx_uncompressed_limit(path):
+    settings = get_settings()
+    with zipfile.ZipFile(path) as archive:
+        total = sum(info.file_size for info in archive.infolist())
+        if total > settings.max_docx_uncompressed_bytes:
+            raise ValueError("DOCX uncompressed payload too large")
+
+
 def extract_docx(path, *, legacy_columns=False):
+    ensure_docx_uncompressed_limit(path)
     from docx import Document
     from docx.table import Table
     from docx.text.paragraph import Paragraph
