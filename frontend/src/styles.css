@@ -379,7 +379,6 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
   :root[data-theme="dark"] { --page-gutter: 24px; }
 }
 @media (max-width: 760px) {
-  .orbit-light { display: none; }
   .search-button > span, .search-button kbd { display: none; }
   .search-button:is(button) {
     width: 44px;

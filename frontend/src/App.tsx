@@ -20,6 +20,7 @@ const DemoChat = lazy(() => import('./components/DemoChat'))
 const LiveChat = lazy(() => import('./components/LiveChat'))
 const Library = lazy(() => import('./components/Library'))
 const Learning = lazy(() => import('./components/Learning').then((m) => ({ default: m.Learning })))
+const VisualOrbSmoke = lazy(() => import('./components/VisualOrbSmoke').then((m) => ({ default: m.VisualOrbSmoke })))
 
 const navigation = [
   { label: '新对话', path: '/', icon: MessageCircle },
@@ -259,6 +260,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             <Route path="/knowledge" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开知识库…</div>}><Library preferredId={libraryId ?? undefined} /></Suspense>} />
             <Route path="/learning" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开学习…</div>}><LearningRoute notify={notify} /></Suspense>} />
             <Route path="/settings" element={<Placeholder title="设置暂未开放" description="个人偏好将在这里管理。" />} />
+            <Route path="/__visual/orb" element={<Suspense fallback={<div className="placeholder-page" role="status">正在加载…</div>}><VisualOrbSmoke /></Suspense>} />
             <Route path="*" element={<Placeholder title="页面不存在" description="请检查访问地址，或返回首页。" />} />
           </Routes>}
         </main>

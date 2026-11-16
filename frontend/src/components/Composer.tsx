@@ -2,8 +2,6 @@ import { lazy, Suspense, useEffect, useImperativeHandle, useRef, useState } from
 import type { Ref } from 'react'
 import { ArrowUp, Globe, Image, Paperclip, Plus, Square } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
-import { useCoarsePointer } from '../useCoarsePointer'
-
 const ComposerMetalSend = lazy(() =>
   import('./ComposerMetalSend').then((m) => ({ default: m.ComposerMetalSend })),
 )
@@ -54,12 +52,15 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   const imageInput = useRef<HTMLInputElement>(null)
   const libraryControl = useRef<HTMLButtonElement>(null)
   const reducedMotion = useReducedMotion() ?? false
-  const coarsePointer = useCoarsePointer()
-  const enableMetal = !coarsePointer && !reducedMotion
+  const enableMetal = !reducedMotion
   const requestedLibrary = selected || preferredLibrary
   const libraryId = requestedLibrary ? libraries.find((library) => library.id === requestedLibrary)?.id : libraries[0]?.id
   const active = chat.active?.conversationId === conversationId ? chat.active : null
   const pending = !demo && chat.pending && (chat.pending.body.conversation_id ?? undefined) === conversationId
+
+  useEffect(() => {
+    if (!reducedMotion) void import('./ComposerMetalSend')
+  }, [reducedMotion])
 
   useEffect(() => () => uploadController.current?.abort(), [user?.id])
 

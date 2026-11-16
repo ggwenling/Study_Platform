@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frontend Performance"
+  short_description: "Measure, diagnose, and improve frontend performance"
+  default_prompt: "Use $frontend-performance to investigate this project's performance and tell me what evidence to collect first."

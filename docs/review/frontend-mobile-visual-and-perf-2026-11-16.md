@@ -13,8 +13,8 @@
 | --- | --- |
 | `layout-v4.md` 等宽边距、320/390 无横向溢出 | `--page-gutter`、`overflow-x: clip`、统一 `resource-page` / `learning-page` / `home` 内边距 |
 | `gate.md` tap-size / collide（390、320） | 粗指针下导航、工具栏图标 44px；学习 Tab `min-height: 44px`；登录弹窗关闭钮 44px |
-| `motion.md` prefers-reduced-motion | 保留既有 `MotionConfig`；手机隐藏 `orbit-light`；粗指针下跳过 WebGL 发送钮与 ThinkingOrb |
-| `perf.md` 手机 WebGL 减负 | 粗指针或 `prefers-reduced-motion` 时不加载 `metal-fx` / `thinking-orbs` |
+| `motion.md` prefers-reduced-motion | 保留 `MotionConfig`；**仅**在 `prefers-reduced-motion` 时隐藏 `orbit-light`（不因屏宽关闭）；触控端仍保留首页轨道、ThinkingOrb、`metal-fx` 发送钮 |
+| `perf.md` WebGL | 分包 + 懒加载减小首包，**不**在粗指针上关闭 WebGL；仅 `prefers-reduced-motion` 时停用 `metal-fx` 动效 |
 | `system.md` 触控与 safe-area | `viewport-fit=cover`、通知区与侧栏 `env(safe-area-inset-*)`、聊天 `chat-footer` 已有 safe-area |
 
 **刻意跳过（营销站 / 与本产品不符）**
@@ -65,7 +65,18 @@
 
 仍 FAIL / WARN：`font bytes`（MiSans 多切片 + Geist，见 `frontend/src/fonts`）、`auth/refresh` 断连（预览环境无 API）。字体优化未在本迭代改动，仅记录。
 
-### 浏览器截图（改后）
+### 浏览器截图（390 视觉回归，2026-11-16 跟进）
+
+恢复触控端 WebGL / 轨道动画后重拍：
+
+| 说明 | 路径 |
+| --- | --- |
+| 首页：轨道 `.orbit-light` + 发送区 `metal-fx`（`shoot.mjs --wait 2500`） | `/opt/cursor/artifacts/mobile-390/home-visual-restored.png` |
+| ThinkingOrb（路由 `/__visual/orb`，无导航入口，同 `AssistantActivity` 组件链） | `/opt/cursor/artifacts/mobile-390/thinking-orb-visual-restored.png` |
+
+历史截图（粗指针降级 WebGL 时期，仅作记录）：`mobile-390/home.png`、`mobile-390-chat-demo.png` 等。
+
+### 浏览器截图（首轮改后）
 
 | 路径 | 390×844 | 768×1024 |
 | --- | --- | --- |
@@ -73,8 +84,6 @@
 | Demo 会话 | `/opt/cursor/artifacts/mobile-390-chat-demo.png` | — |
 | 学习 | `/opt/cursor/artifacts/mobile-390-learning.png` | — |
 | 知识库 | `/opt/cursor/artifacts/mobile-390-knowledge.png` | — |
-
-改前未保留独立截图（与改后对比以本文件「改进成果」条目与代码 diff 为准）。
 
 ## 送审清单
 
@@ -89,4 +98,14 @@
 ## 变更文件索引（摘要）
 
 - 手机视觉：`frontend/src/styles.css`、`frontend/index.html`、`frontend/src/components/Account.module.css`、`frontend/src/components/AssistantActivity.css`
-- 性能：`frontend/vite.config.ts`、`frontend/src/App.tsx`、`frontend/src/components/{Composer,ComposerMetalSend,MarkdownContent,AssistantActivity,ThinkingOrbLazy}.tsx`、`frontend/src/useCoarsePointer.ts`、测试更新
+- 性能：`frontend/vite.config.ts`、`frontend/src/App.tsx`、`frontend/src/components/{Composer,ComposerMetalSend,MarkdownContent,AssistantActivity,ThinkingOrbLazy}.tsx`、测试更新
+
+## 跟进：恢复手机端视觉（同 PR #5）
+
+| 项 | 处理 |
+| --- | --- |
+| 760 以下隐藏 `orbit-light` | 已撤销；仅 `prefers-reduced-motion` 隐藏 |
+| 粗指针用图标代替 ThinkingOrb | 已撤销；`ThinkingOrbLazy` 全设备 |
+| 粗指针跳过 `metal-fx` | 已撤销；仅 `prefers-reduced-motion` 走平面发送钮；`Composer` 挂载时预 `import('./ComposerMetalSend')` |
+| `useCoarsePointer` | 已删除（无其它引用） |
+| ThinkingOrb 390 截图 | 无公开 API 流式会话时用 `/__visual/orb` 烟测路由（`VisualOrbSmoke.tsx`） |

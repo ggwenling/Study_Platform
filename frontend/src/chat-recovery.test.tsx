@@ -15,7 +15,6 @@ vi.mock('./components/Composer', () => ({ Composer: () => null }))
 vi.mock('./components/MarkdownContent', () => ({ MarkdownContent: ({ children }: { children: React.ReactNode }) => <span>{children}</span> }))
 vi.mock('./components/ProtectedMaterial', () => ({ DownloadMaterial: () => null, MaterialPage: () => null }))
 // Exercise the chat lifecycle independently of Canvas rendering (checked in a browser).
-vi.mock('./useCoarsePointer', () => ({ useCoarsePointer: () => false }))
 vi.mock('./components/ThinkingOrbLazy', () => ({
   ThinkingOrbLazy: ({ state, size, theme }: { state: string; size: number; theme: string }) => (
     <canvas data-phase={state} data-size={size} data-theme={theme} />
