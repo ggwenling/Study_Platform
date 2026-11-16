@@ -215,7 +215,9 @@ def retry(owner, conversation_id, turn_id):
                 or run.source_scope.get("intent") not in ("qa", "summary")):
             raise ApiError(404, "not_found", "轮次不存在")
         kb = db.scalar(sa.select(KnowledgeBase).where(
-            KnowledgeBase.id == run.knowledge_base_id, KnowledgeBase.deleted_at.is_(None),
+            KnowledgeBase.id == run.knowledge_base_id,
+            KnowledgeBase.owner_user_id == owner,
+            KnowledgeBase.deleted_at.is_(None),
         ).with_for_update())
         if kb is None:
             raise ApiError(409, "scope_unavailable", "原知识库已不可用")
@@ -296,8 +298,8 @@ def context(run_id):
         indices = [UUID(x) for x in scope["index_version_ids"]]
         chunks = []
         if scope["intent"] == "summary":
-            rows = db.execute(chunk_query(indices).order_by(Material.id, MaterialChunk.ordinal)
-                              .limit(41)).all()
+            rows = db.execute(chunk_query(indices, run.owner_user_id).order_by(
+                Material.id, MaterialChunk.ordinal).limit(41)).all()
             chunks = [chunk_dto(row, title) for row, title in rows]
         history = []
         # Only completed turns from exactly the same scope can enter model history.
@@ -306,11 +308,6 @@ def context(run_id):
             AiWorkflowRun.id != run.id, AiWorkflowRun.status == "completed",
             AiWorkflowRun.knowledge_base_id == run.knowledge_base_id,
             AiWorkflowRun.answer_mode == run.answer_mode,
-            ~sa.exists(sa.select(MessageCitation.id)
-                       .join(Message, Message.id == MessageCitation.message_id)
-                       .join(MaterialChunk, MaterialChunk.id == MessageCitation.chunk_id)
-                       .where(Message.workflow_run_id == AiWorkflowRun.id,
-                              MaterialChunk.retrieval_enabled.is_(False))),
         ).order_by(AiWorkflowRun.created_at.desc()).limit(4)).all()
         for prior in reversed(previous):
             if prior.source_scope.get("index_version_ids") != scope["index_version_ids"]:
@@ -323,14 +320,22 @@ def context(run_id):
         return scope, chunks, history
 
 
-def chunk_query(index_ids):
-    return sa.select(MaterialChunk, Material.title).join(
-        MaterialVersion, MaterialChunk.material_version_id == MaterialVersion.id,
-    ).join(Material, MaterialVersion.material_id == Material.id).where(
-        MaterialChunk.index_version_id == sa.any_(sa.bindparam(
-            "indices", index_ids, type_=sa.ARRAY(sa.Uuid))),
-        Material.deleted_at.is_(None), Material.status == "active",
-        MaterialChunk.retrieval_enabled.is_(True),
+def chunk_query(index_ids, owner: UUID):
+    return (
+        sa.select(MaterialChunk, Material.title)
+        .join(MaterialVersion, MaterialChunk.material_version_id == MaterialVersion.id)
+        .join(Material, MaterialVersion.material_id == Material.id)
+        .join(KnowledgeBase, KnowledgeBase.id == Material.knowledge_base_id)
+        .where(
+            MaterialChunk.index_version_id == sa.any_(sa.bindparam(
+                "indices", index_ids, type_=sa.ARRAY(sa.Uuid))),
+            Material.owner_user_id == owner,
+            KnowledgeBase.owner_user_id == owner,
+            Material.deleted_at.is_(None),
+            Material.status == "active",
+            KnowledgeBase.deleted_at.is_(None),
+            MaterialChunk.retrieval_enabled.is_(True),
+        )
     )
 
 
@@ -340,7 +345,7 @@ def chunk_dto(row, title):
             "locator": row.locator, "title": title}
 
 
-def retrieve(scope, content, *, rewritten_query=None, diagnostics=None):
+def retrieve(scope, content, owner: UUID, *, rewritten_query=None, diagnostics=None):
     if not scope["index_version_ids"]:
         return []
     queries = [content]
@@ -350,7 +355,7 @@ def retrieve(scope, content, *, rewritten_query=None, diagnostics=None):
         vectors = embed_texts(queries)
     else:
         vectors = embed_texts(queries, diagnostics=diagnostics)
-    return retrieve_vectors(scope, vectors)
+    return retrieve_vectors(scope, vectors, owner)
 
 
 def fuse_rankings(rankings, limit):
@@ -366,7 +371,7 @@ def fuse_rankings(rankings, limit):
     return [rows[key] for key in ordered[:limit]]
 
 
-def retrieve_vectors(scope, vectors):
+def retrieve_vectors(scope, vectors, owner: UUID):
     indices = [UUID(x) for x in scope["index_version_ids"]]
     if not indices:
         return []
@@ -377,7 +382,7 @@ def retrieve_vectors(scope, vectors):
     with session_factory()() as db:
         # MATERIALIZED scoped candidates prevent an ANN global top-k from dropping
         # a private knowledge base's matches before the ownership filter is applied.
-        query = chunk_query(indices)
+        query = chunk_query(indices, owner)
         scoped = query.with_only_columns(ChunkEmbedding.chunk_id, ChunkEmbedding.embedding,
                                          maintain_column_froms=True).join(
             ChunkEmbedding, ChunkEmbedding.chunk_id == MaterialChunk.id,
@@ -493,10 +498,11 @@ async def stream(owner, run_id, fence, replay=False):
                     yield await ended_event(owner, conv_id, run_id)
                     return
                 evidence = await run_in_threadpool(
-                    retrieve, scope, scope["content"], rewritten_query=rewritten.query,
+                    retrieve, scope, scope["content"], owner,
+                    rewritten_query=rewritten.query,
                 )
             else:
-                evidence = await run_in_threadpool(retrieve, scope, scope["content"])
+                evidence = await run_in_threadpool(retrieve, scope, scope["content"], owner)
         if not evidence and scope["answer_mode"] == "knowledge_only":
             content = "当前资料不足，无法根据所选知识库回答。请补充相关资料或调整提问。"
             yield event("delta", turn_id=run_id, delta=content)

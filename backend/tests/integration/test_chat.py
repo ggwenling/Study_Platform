@@ -132,6 +132,15 @@ def test_first_send_idempotency_and_per_conversation_concurrency(chat_db):
     assert "conversation_busy" in results
 
 
+def test_chunk_query_rejects_foreign_owner_index(chat_db):
+    s = chat_db
+    evidence = seed_evidence(s)
+    foreign = uuid4()
+    with s.factory() as db:
+        rows = db.execute(chat.chunk_query([evidence["index_version_id"]], foreign)).all()
+    assert rows == []
+
+
 def test_scope_switch_excludes_old_history_and_enforces_owner(chat_db):
     s = chat_db
     first, fence, _ = chat.prepare(
@@ -167,6 +176,27 @@ def test_cancel_retry_and_expired_lease_reject_stale_publication(chat_db):
     state = chat.turn(s.owner, conv, run)
     assert state["status"] == "failed" and state["error_code"] == "turn_interrupted"
     assert len(state["messages"]) == 2
+
+
+def test_with_general_empty_kb_still_composes(chat_db, monkeypatch):
+    s = chat_db
+
+    async def chunks():
+        yield SimpleNamespace(content="【知识库依据】\n当前资料不足。\n【通用补充】\n示例回答。", usage_metadata=None)
+
+    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=lambda _: chunks()))
+    data = request(s.kb_a, content="空库通用问题")
+    data["answer_mode"] = "with_general"
+    run, fence, _ = chat.prepare(s.owner, data, uuid4().hex)
+
+    async def consume():
+        return [event async for event in chat.stream(s.owner, run, fence)]
+
+    events = asyncio.run(consume())
+    assert any("event: done" in event for event in events)
+    conv = conversation_for(s, run)
+    content = chat.turn(s.owner, conv, run)["messages"][-1]["content"]
+    assert "【知识库依据】" in content and "【通用补充】" in content
 
 
 def test_no_evidence_stream_never_calls_cloud(chat_db, monkeypatch):
@@ -211,8 +241,9 @@ def test_stream_reports_phases_at_real_execution_boundaries(chat_db, monkeypatch
     def phases():
         return [e["phase"] for e in events if e["type"] == "phase"]
 
-    def retrieve(scope, content):
+    def retrieve(scope, content, owner, **_kwargs):
         assert phases() == ["working", "searching"]
+        assert owner == s.owner
         return [evidence]
 
     async def chunks():
@@ -421,15 +452,15 @@ def test_retrieval_keeps_scope_and_only_caps_six_for_fusion(chat_db, monkeypatch
     settings = chat.get_settings().model_copy(update={"retrieval_top_k": 12})
     monkeypatch.setattr(chat, "get_settings", lambda: settings)
     monkeypatch.setattr(chat, "embed_texts", lambda queries: [vector for _ in queries])
-    baseline = chat.retrieve(scope, "Original question")
+    baseline = chat.retrieve(scope, "Original question", s.owner)
     assert len(baseline) == 12
-    hits = chat.retrieve(scope, "Original question", rewritten_query="Equivalent question")
+    hits = chat.retrieve(scope, "Original question", s.owner, rewritten_query="Equivalent question")
     assert len(hits) == 6 and len({row["id"] for row in hits}) == 6
     assert {row["material_version_id"] for row in hits} == {evidence["material_version_id"]}
     assert {row["material_version_id"] for row in baseline} == {evidence["material_version_id"]}
     with s.factory.begin() as db:
         db.get(Material, evidence["material_id"]).deleted_at = chat.now()
-    assert chat.retrieve_vectors(scope, [vector, vector]) == []
+    assert chat.retrieve_vectors(scope, [vector, vector], s.owner) == []
 
 
 def test_enabled_rewrite_batches_queries_answers_original_and_replay_calls_nothing(chat_db, monkeypatch):
@@ -622,7 +653,7 @@ def test_deleted_material_or_retired_index_cannot_publish(chat_db, deleted):
 def test_provider_stream_failure_preserves_partial_and_error_event(chat_db, monkeypatch):
     s = chat_db
     evidence = seed_evidence(s)
-    monkeypatch.setattr(chat, "retrieve", lambda chunks, content: [evidence])
+    monkeypatch.setattr(chat, "retrieve", lambda _scope, _content, _owner, **_kw: [evidence])
 
     async def chunks():
         yield SimpleNamespace(content="Partial answer", usage_metadata=None)
@@ -647,7 +678,7 @@ def test_provider_stream_failure_preserves_partial_and_error_event(chat_db, monk
 def test_cancel_during_actual_stream_fences_late_tokens(chat_db, monkeypatch):
     s = chat_db
     evidence = seed_evidence(s)
-    monkeypatch.setattr(chat, "retrieve", lambda chunks, content: [evidence])
+    monkeypatch.setattr(chat, "retrieve", lambda _scope, _content, _owner, **_kw: [evidence])
 
     async def chunks():
         yield SimpleNamespace(content="Partial ", usage_metadata=None)
@@ -710,7 +741,7 @@ def test_library_detail_uses_owned_index_and_atomic_retrieval_settings(chat_db):
         detail.update_retrieval(s.kb_a, detail.RetrievalUpdate(
             ids=[evidence["id"]], enabled=False), db, user)
         assert listed()["items"][0]["retrieval_enabled"] is False
-        assert not db.execute(chat.chunk_query([evidence["index_version_id"]])).all()
+        assert not db.execute(chat.chunk_query([evidence["index_version_id"]], s.owner)).all()
         details = detail.generate(s.kb_a, evidence["material_id"], db, user)
         assert detail.generate(s.kb_a, evidence["material_id"], db, user)["suggestion_id"] == details["suggestion_id"]
         job = db.get(detail.AiJob, details["suggestion_id"])
@@ -753,8 +784,9 @@ def test_disabled_fragment_is_excluded_from_summary_vector_search_and_history(ch
         update_retrieval(s.kb_a, RetrievalUpdate(ids=[evidence["id"]], enabled=False),
                          db, SimpleNamespace(id=s.owner))
     scope, chunks, history = chat.context(next_run)
-    assert chunks == history == []
-    assert chat.retrieve_vectors(scope, [[0.1]*1024]) == []
+    assert chunks == []
+    assert history == first_history
+    assert chat.retrieve_vectors(scope, [[0.1] * 1024], s.owner) == []
     assert chat.turn(s.owner, conv, first)["messages"][-1]["citations"][0]["quote"] == evidence["text"]
 
     with s.factory() as db:
@@ -762,4 +794,4 @@ def test_disabled_fragment_is_excluded_from_summary_vector_search_and_history(ch
                          db, SimpleNamespace(id=s.owner))
     _, chunks, history = chat.context(next_run)
     assert chunks == first_chunks and history == first_history
-    assert chat.retrieve_vectors(scope, [[0.1]*1024])[0]["id"] == evidence["id"]
+    assert chat.retrieve_vectors(scope, [[0.1] * 1024], s.owner)[0]["id"] == evidence["id"]

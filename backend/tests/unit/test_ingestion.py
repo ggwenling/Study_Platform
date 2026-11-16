@@ -193,3 +193,19 @@ def test_scanned_pdf_renders_page_and_keeps_original(tmp_path, monkeypatch):
     assert observed == [(556, 278)]
     assert (tmp_path / "page-1.png").is_file()
     assert path.read_bytes() == original
+
+
+def test_docx_uncompressed_limit_rejects_oversized_archive(tmp_path, monkeypatch):
+    import zipfile
+
+    path = tmp_path / "source.docx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("word/document.xml", "x" * 1024)
+        archive.writestr("huge.bin", b"x" * (81 * 1024 * 1024))
+    monkeypatch.setattr(
+        ingestion,
+        "get_settings",
+        lambda: SimpleNamespace(max_docx_uncompressed_bytes=80 * 1024 * 1024),
+    )
+    with pytest.raises(ValueError, match="DOCX uncompressed"):
+        ingestion.ensure_docx_uncompressed_limit(path)

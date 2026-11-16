@@ -39,7 +39,7 @@ def resource_client():
         app.include_router(router)
         app.add_exception_handler(ApiError, api_error_handler)
         app.dependency_overrides[get_db] = lambda: db
-        with TestClient(app) as http:
+        with TestClient(app, headers={"Origin": "http://localhost:5173"}) as http:
             yield http, db
         db.close()
         tx.rollback()
