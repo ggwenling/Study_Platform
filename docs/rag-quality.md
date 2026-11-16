@@ -2,6 +2,8 @@
 
 本轮目标是中文事实查找和同义提问。HTTP 请求、SSE 事件及已有引用字段类型不变，不重建现有索引，不更换模型或分块策略。
 
+向量检索还可单独输出 Recall@k、nDCG@k、MRR、Hit@k，详见 [检索评测指标](retrieval-evaluation.md)。
+
 ## 运行策略
 
 `RAG_QUERY_REWRITE_ENABLED` 默认 `false`。本次真实评测没有新增事实组命中，未达到启用门槛，所以日常问答继续使用原问题检索。设置为 `true` 并重启 API 可显式试验候选；关闭并重启后恢复基线。评测命令的 `--strategy` 独立于日常开关。
