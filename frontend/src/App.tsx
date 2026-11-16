@@ -6,9 +6,7 @@ import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent, DialogTrigger } from '@/components/arc/dialog/dialog'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { UserMenu } from '@/components/arc/user-menu/user-menu'
-import { Home } from './components/Home'
 import { ProjectNavigation } from './components/ProjectNavigation'
-import { Account } from './components/Account'
 import type { AccountMode } from './components/Account'
 import { WorkspaceData, useWorkspace } from './WorkspaceData'
 import { api } from './api/client'
@@ -16,10 +14,13 @@ import { ApiError } from './api/stream'
 import type { SearchItem, User, Conversation } from './api/types'
 import { allPages, errorMessage } from './api/ui'
 
+const Home = lazy(() => import('./components/Home').then((m) => ({ default: m.Home })))
+const Account = lazy(() => import('./components/Account').then((m) => ({ default: m.Account })))
 const DemoChat = lazy(() => import('./components/DemoChat'))
 const LiveChat = lazy(() => import('./components/LiveChat'))
 const Library = lazy(() => import('./components/Library'))
 const Learning = lazy(() => import('./components/Learning').then((m) => ({ default: m.Learning })))
+const VisualOrbSmoke = lazy(() => import('./components/VisualOrbSmoke').then((m) => ({ default: m.VisualOrbSmoke })))
 
 const navigation = [
   { label: '新对话', path: '/', icon: MessageCircle },
@@ -75,6 +76,7 @@ export function App() {
 
   function requireLogin(target?: string) {
     if (loginOpen) return
+    void import('./components/Account')
     if (typeof target === 'string') destination.current = target
     trigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setMode('login')
@@ -137,12 +139,16 @@ export function App() {
       <Shell onLogout={() => setUser(null)} onPrivateLink={requireLogin} privatePage={privatePage && !user} sessionState={sessionState}
         retrySession={() => { setSessionState('loading'); setSessionAttempt((value) => value + 1) }} />
     </WorkspaceData>
-    <Account open={loginOpen} onOpenChange={(open) => {
-      setLoginOpen(open)
-      if (!open) { destination.current = ''; setResetToken(''); setAuthError('') }
-    }} onLogin={signedIn} mode={mode} setMode={(nextMode) => { setMode(nextMode); setAuthError('') }}
-      next={destination.current || path} resetToken={resetToken} initialError={authError}
-      returnFocus={() => { if (trigger.current?.isConnected) trigger.current.focus(); else document.querySelector<HTMLElement>('.nav-toggle')?.focus() }} />
+    {loginOpen && (
+      <Suspense fallback={null}>
+        <Account open={loginOpen} onOpenChange={(open) => {
+          setLoginOpen(open)
+          if (!open) { destination.current = ''; setResetToken(''); setAuthError('') }
+        }} onLogin={signedIn} mode={mode} setMode={(nextMode) => { setMode(nextMode); setAuthError('') }}
+          next={destination.current || path} resetToken={resetToken} initialError={authError}
+          returnFocus={() => { if (trigger.current?.isConnected) trigger.current.focus(); else document.querySelector<HTMLElement>('.nav-toggle')?.focus() }} />
+      </Suspense>
+    )}
     <div className="notice-region" role="status" aria-live="polite">
       <AnimatePresence mode="wait">
         {notice && (
@@ -245,14 +251,16 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
         <main className="page">
           {privatePage ? sessionState === 'error'
             ? <div className="placeholder-page"><EmptyState title="无法恢复登录状态" description="请检查连接后重试。" action={<Button onClick={retrySession}>重试</Button>} /></div>
-            : sessionState === 'loading' ? <div className="placeholder-page" role="status">正在检查登录状态…</div> : <Home />
+            : sessionState === 'loading' ? <div className="placeholder-page" role="status">正在检查登录状态…</div>
+              : <Suspense fallback={<div className="placeholder-page" role="status">正在打开首页…</div>}><Home /></Suspense>
           : <Routes>
-            <Route path="/" element={<Home />} />
+            <Route path="/" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开首页…</div>}><Home /></Suspense>} />
             <Route path="/chat/:id" element={<ChatRoute notify={notify} />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/knowledge" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开知识库…</div>}><Library preferredId={libraryId ?? undefined} /></Suspense>} />
             <Route path="/learning" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开学习…</div>}><LearningRoute notify={notify} /></Suspense>} />
             <Route path="/settings" element={<Placeholder title="设置暂未开放" description="个人偏好将在这里管理。" />} />
+            <Route path="/__visual/orb" element={<Suspense fallback={<div className="placeholder-page" role="status">正在加载…</div>}><VisualOrbSmoke /></Suspense>} />
             <Route path="*" element={<Placeholder title="页面不存在" description="请检查访问地址，或返回首页。" />} />
           </Routes>}
         </main>

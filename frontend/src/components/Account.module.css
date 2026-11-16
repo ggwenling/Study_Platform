@@ -1,7 +1,21 @@
-.card { width: min(378px, calc(100vw - 32px)); background: #121212; border-color: #303030; border-radius: 14px; --control-height-md: 34px; }
+.card {
+  width: min(378px, calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
+  background: #121212;
+  border-color: #303030;
+  border-radius: 14px;
+  --control-height-md: 44px;
+}
 .card > div:first-child { justify-content: center; text-align: center; border-bottom: 0; padding: 24px 24px 4px; }
 .card > div:nth-child(2) { padding: 14px 24px 18px; }
-.card > div:first-child > button { position: absolute; top: 12px; right: 12px; border-color: transparent; background: transparent; }
+.card > div:first-child > button {
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top, 0px));
+  right: max(8px, env(safe-area-inset-right, 0px));
+  width: 44px;
+  height: 44px;
+  border-color: transparent;
+  background: transparent;
+}
 .brand { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 13px; }
 .brand svg { color: #77af86; }
 .brand strong { font-size: var(--text-lg); }
