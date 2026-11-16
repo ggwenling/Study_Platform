@@ -52,7 +52,7 @@ it('publishes the fields consumed by the frontend', () => {
     ScopeDTO: ['knowledge_base_id', 'knowledge_base_name', 'answer_mode', 'index_version_ids'],
     UploadResponse: ['material_id', 'version_id', 'job_id', 'status'],
     UserDTO: ['id', 'email', 'display_name'],
-    AuthDTO: ['user', 'access_token'],
+    AuthDTO: ['user', 'access_token', 'csrf_token'],
     KnowledgeBaseDTO: ['id', 'name', 'description', 'created_at', 'updated_at'],
     KnowledgeBasePage: ['items', 'next_cursor'],
     ConversationDTO: ['id', 'title', 'project_knowledge_base_id', 'created_at', 'updated_at'],
