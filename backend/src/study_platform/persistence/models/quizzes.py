@@ -256,6 +256,18 @@ class QuizResponse(Base):
             name="ck_quiz_responses_answer_json",
         ),
         sa.CheckConstraint("score >= 0", name="ck_quiz_responses_score_nonnegative"),
+        sa.CheckConstraint(
+            "verdict IS NULL OR verdict IN ('correct', 'incorrect', 'pending')",
+            name="ck_quiz_responses_verdict_values",
+        ),
+        sa.CheckConstraint(
+            "verdict_source IS NULL OR verdict_source IN ('auto', 'user')",
+            name="ck_quiz_responses_verdict_source_values",
+        ),
+        sa.CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_quiz_responses_confidence_range",
+        ),
         sa.ForeignKeyConstraint(
             ["attempt_id", "quiz_id"],
             ["study.quiz_attempts.id", "study.quiz_attempts.quiz_id"],
@@ -288,6 +300,10 @@ class QuizResponse(Base):
     is_correct = sa.Column("is_correct", sa.Boolean(), nullable=True)
     feedback = sa.Column("feedback", sa.Text(), nullable=True)
     grader_profile = sa.Column("grader_profile", sa.String(128), nullable=True)
+    confidence = sa.Column("confidence", sa.Numeric(5, 4), nullable=True)
+    verdict = sa.Column("verdict", sa.String(16), nullable=True)
+    verdict_source = sa.Column("verdict_source", sa.String(16), nullable=True)
+    reference_answer_effective = sa.Column("reference_answer_effective", sa.Text(), nullable=True)
     graded_at = sa.Column("graded_at", sa.DateTime(timezone=True), nullable=True)
     created_at = sa.Column(
         "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")

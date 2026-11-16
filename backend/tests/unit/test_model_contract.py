@@ -30,7 +30,7 @@ quizzes: id owner_user_id course_id title status difficulty source_scope generat
 quiz_items: id quiz_id knowledge_point_id ordinal item_type stem options answer_key rubric explanation difficulty max_score created_at
 quiz_item_sources: id quiz_item_id chunk_id material_version_id index_version_id locator created_at
 quiz_attempts: id quiz_id owner_user_id status started_at submitted_at graded_at total_score max_score created_at updated_at
-quiz_responses: id attempt_id quiz_id quiz_item_id answer score is_correct feedback grader_profile graded_at created_at updated_at
+quiz_responses: id attempt_id quiz_id quiz_item_id answer score is_correct feedback grader_profile confidence verdict verdict_source reference_answer_effective graded_at created_at updated_at
 wrong_questions: id owner_user_id quiz_item_id last_response_id wrong_count status last_wrong_at next_review_at created_at updated_at
 flashcard_decks: id owner_user_id course_id title source_scope generator_profile created_at updated_at deleted_at
 flashcards: id deck_id knowledge_point_id front back ease_factor interval_days repetition_count due_at status created_at updated_at

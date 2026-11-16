@@ -314,6 +314,27 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 .stack-form > button { justify-self: start; }
 .form-actions, .resource-toolbar { display: flex; flex-wrap: wrap; gap: 13px; align-items: end; }
 .error-text { color: #ffb5b5; overflow-wrap: anywhere; }
+.learning-page { max-width: 720px; margin: 0 auto; padding: 24px clamp(16px, 5vw, 40px) 48px; display: grid; gap: 20px; }
+.learning-header h1 { margin: 0 0 6px; font-size: 1.5rem; }
+.learning-header p { margin: 0; color: var(--muted); font-size: .95rem; }
+.learning-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.learning-tabs button { border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; background: transparent; }
+.learning-tabs button.active { background: var(--accent); color: var(--accent-fg, #fff); border-color: transparent; }
+.learning-panel { display: grid; gap: 16px; }
+.learning-field { display: grid; gap: 6px; max-width: 360px; }
+.learning-card { border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: grid; gap: 12px; }
+.learning-meta { margin: 0; font-size: .85rem; color: var(--muted); }
+.learning-ref { margin: 0; font-size: .9rem; color: var(--muted); }
+.learning-verdict { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.learning-verdict.verdict-correct { color: #15803d; }
+.learning-verdict.verdict-incorrect { color: #b91c1c; }
+.learning-verdict.verdict-pending { color: #a16207; }
+.learning-upload { display: flex; align-items: center; gap: 10px; border: 1px dashed var(--border); border-radius: 10px; padding: 12px; cursor: pointer; }
+.learning-upload input { display: none; }
+.learning-actions, .learning-nav { display: flex; flex-wrap: wrap; gap: 8px; }
+.learning-wrong-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.learning-wrong-list li { border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: grid; gap: 6px; }
+
 .resource-page { max-width: 900px; margin: 0 auto; padding: 24px clamp(16px, 5vw, 65px) 48px; display: grid; gap: 22px; }
 .resource-page > a { justify-self: start; }
 .create-library { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }

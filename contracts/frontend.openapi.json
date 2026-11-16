@@ -2521,6 +2521,334 @@
           }
         }
       }
+    },
+    "/api/v1/learning/knowledge-bases/{kb_id}/quizzes/generate": {
+      "post": {
+        "tags": [
+          "learning"
+        ],
+        "summary": "Generate Quiz",
+        "operationId": "generate_quiz_api_v1_learning_knowledge_bases__kb_id__quizzes_generate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/learning/attempts": {
+      "post": {
+        "tags": [
+          "learning"
+        ],
+        "summary": "Create Attempt",
+        "operationId": "create_attempt_api_v1_learning_attempts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttemptBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/learning/attempts/{attempt_id}": {
+      "get": {
+        "tags": [
+          "learning"
+        ],
+        "summary": "Get Attempt",
+        "operationId": "get_attempt_api_v1_learning_attempts__attempt_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "attempt_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Attempt Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/learning/responses/{response_id}/answer-image": {
+      "post": {
+        "tags": [
+          "learning"
+        ],
+        "summary": "Answer Image",
+        "operationId": "answer_image_api_v1_learning_responses__response_id__answer_image_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "response_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Response Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_answer_image_api_v1_learning_responses__response_id__answer_image_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/learning/responses/{response_id}/verdict": {
+      "patch": {
+        "tags": [
+          "learning"
+        ],
+        "summary": "Patch Verdict",
+        "operationId": "patch_verdict_api_v1_learning_responses__response_id__verdict_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "response_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Response Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerdictBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/learning/wrong-questions": {
+      "get": {
+        "tags": [
+          "learning"
+        ],
+        "summary": "Wrong Questions",
+        "operationId": "wrong_questions_api_v1_learning_wrong_questions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/learning/wrong-questions/{wrong_id}/mastered": {
+      "post": {
+        "tags": [
+          "learning"
+        ],
+        "summary": "Mastered Wrong",
+        "operationId": "mastered_wrong_api_v1_learning_wrong_questions__wrong_id__mastered_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "wrong_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Wrong Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2563,6 +2891,20 @@
         ],
         "title": "ActivityDay"
       },
+      "AttemptBody": {
+        "properties": {
+          "quiz_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Quiz Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "quiz_id"
+        ],
+        "title": "AttemptBody"
+      },
       "AuthDTO": {
         "properties": {
           "user": {
@@ -2602,6 +2944,20 @@
           "password_reset"
         ],
         "title": "AuthOptions"
+      },
+      "Body_answer_image_api_v1_learning_responses__response_id__answer_image_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_answer_image_api_v1_learning_responses__response_id__answer_image_post"
       },
       "Body_upload_api_v1_knowledge_bases__kb_id__materials_post": {
         "properties": {
@@ -3239,6 +3595,19 @@
           "items"
         ],
         "title": "FragmentPage"
+      },
+      "GenerateBody": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "default": 5
+          }
+        },
+        "type": "object",
+        "title": "GenerateBody"
       },
       "HTTPValidationError": {
         "properties": {
@@ -4247,6 +4616,32 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VerdictBody": {
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "pattern": "^(correct|incorrect|pending)$",
+            "title": "Verdict"
+          },
+          "reference_answer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "title": "VerdictBody"
       }
     },
     "securitySchemes": {
