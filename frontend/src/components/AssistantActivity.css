@@ -7,6 +7,19 @@
   color: inherit;
 }
 
+.assistant-activity-pulse {
+  animation: assistant-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes assistant-pulse {
+  0%, 100% { opacity: .55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-activity-pulse { animation: none; opacity: .85; }
+}
+
 .live-chat .ai-message .message-meta { min-height: 64px; }
 .live-chat .ai-message .message-meta > span:nth-child(2) { white-space: nowrap; }
 .live-chat .ai-message .message-meta time { margin-left: auto; }

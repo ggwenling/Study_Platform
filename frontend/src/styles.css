@@ -1,4 +1,5 @@
 :root[data-theme="dark"] {
+  --page-gutter: 16px;
   color-scheme: dark;
   --canvas: #080808;
   --rail: #101010;
@@ -20,7 +21,8 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-body { margin: 0; background: var(--canvas); color: var(--ink); }
+html { overflow-x: clip; }
+body { margin: 0; background: var(--canvas); color: var(--ink); overflow-x: clip; }
 a { color: inherit; text-decoration: none; }
 button, textarea { font: inherit; }
 button { cursor: pointer; }
@@ -296,7 +298,16 @@ h1, h2, h3, p { margin: 0; }
 .source-excerpt { color: #acacac; font-size: var(--text-caption); line-height: 1.65; }
 .source-card small { font-size: var(--text-xs); }
 .source-disclaimer { border-top: 1px solid #2a2a2a; padding-top: 15px; }
-.notice-region { position: fixed; bottom: 22px; right: 22px; z-index: 10; pointer-events: none; max-width: calc(100vw - 44px); }
+.notice-region {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  left: max(16px, env(safe-area-inset-left, 0px));
+  z-index: 10;
+  pointer-events: none;
+  max-width: min(420px, 100%);
+  margin-left: auto;
+}
 .notice { display: flex; align-items: center; gap: 12px; border: 1px solid #484848; border-radius: 12px; padding: 8px 8px 8px 16px; background: #222; box-shadow: 0 10px 32px #0008; pointer-events: auto; font-size: var(--text-caption); }
 .composer-hint { display: block; color: #bcbcbc; font-size: var(--text-xs); padding-block: 4px; }
 a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
@@ -318,7 +329,14 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 .learning-header h1 { margin: 0 0 6px; font-size: 1.5rem; }
 .learning-header p { margin: 0; color: var(--muted); font-size: .95rem; }
 .learning-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
-.learning-tabs button { border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; background: transparent; }
+.learning-tabs button {
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: transparent;
+  touch-action: manipulation;
+}
 .learning-tabs button.active { background: var(--accent); color: var(--accent-fg, #fff); border-color: transparent; }
 .learning-panel { display: grid; gap: 16px; }
 .learning-field { display: grid; gap: 6px; max-width: 360px; }
@@ -357,7 +375,21 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
   .activity-empty { min-height: 100px; }
   .app-shell[data-chat="true"] { --source-width: 238px; }
 }
+@media (min-width: 768px) {
+  :root[data-theme="dark"] { --page-gutter: 24px; }
+}
 @media (max-width: 760px) {
+  .orbit-light { display: none; }
+  .search-button > span, .search-button kbd { display: none; }
+  .search-button:is(button) {
+    width: 44px;
+    min-width: 44px;
+    padding-inline: 0;
+    justify-content: center;
+  }
+  .search-button svg { margin: 0; }
+  .library-breadcrumb { min-width: 0; flex: 1; overflow: hidden; }
+  .library-breadcrumb strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .app-shell, .app-shell[data-chat="true"] { --nav-width: 158px; }
   .sidebar-inner, .app-shell[data-chat="true"] .sidebar-inner { padding-inline: 10px; }
   .brand { gap: 7px; padding-inline: 3px; }
@@ -366,7 +398,8 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
   .chat-main { height: 100dvh; }
   .source-panel-inner { width: 100%; }
   .chat[data-sources="false"] .source-panel { display: none; }
-  .home { padding-inline: 12px; }
+  .home { padding-inline: var(--page-gutter); }
+  .resource-page, .learning-page { padding-inline: var(--page-gutter); }
   .home-hero { padding-block: 35px; }
   .shortcuts { width: 100%; grid-template-columns: 1fr; gap: 8px; }
   .shortcut:is(button) { min-height: 72px; }
@@ -376,9 +409,37 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
   .answer { padding-left: 0; }
   .ai-message > .pill, .citation-list, .copy-button:is(button) { margin-left: 0; }
 }
+@media (pointer: coarse) {
+  .icon-button:is(button), .nav-toggle:is(button), .overview-toggle:is(button) {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+  .navigation a { min-height: 48px; }
+}
 @media (max-width: 480px) {
   .app-shell, .app-shell[data-chat="true"], .app-shell[data-nav="false"] { grid-template-columns: minmax(0, 1fr); }
-  .sidebar { position: fixed; z-index: 4; top: 49px; left: 0; bottom: 0; box-shadow: 8px 0 22px #0007; }
+  .sidebar {
+    position: fixed;
+    z-index: 4;
+    top: 49px;
+    left: 0;
+    bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    box-shadow: 8px 0 22px #0007;
+  }
+  .home-panel {
+    left: var(--page-gutter);
+    right: var(--page-gutter);
+    --home-panel-width: min(320px, calc(100vw - var(--page-gutter) * 2));
+  }
+  .composer-actions button.composer-select {
+    inline-size: auto;
+    max-width: min(44vw, 9.5em);
+    min-width: 0;
+  }
+  .composer-options { min-width: 0; flex: 1 1 auto; justify-content: flex-end; }
+  .welcome p { font-size: var(--text-base); line-height: 1.65; text-wrap: pretty; }
   .sidebar .sidebar-inner { height: 100%; min-height: 100%; }
   .app-shell[data-nav="false"] .sidebar { display: none; }
   .topbar { height: 49px; }
@@ -388,6 +449,7 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .app-shell, .chat, .navigation a, .composer { transition: none; }
+  .orbit-light { display: none; }
 }
 
 /* Sidebar disclosures keep folder labels and conversation titles in the same rail. */
