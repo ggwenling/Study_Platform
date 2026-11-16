@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_api_key: SecretStr = SecretStr("")
     chat_model: str = "deepseek-flash"
+    chat_fallback_model: str = ""
+    chat_fallback_base_url: str = ""
+    chat_fallback_api_key: SecretStr = SecretStr("")
     embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     embedding_api_key: SecretStr = SecretStr("")
     embedding_model: str = "qwen3.7-text-embedding-flash"

@@ -106,7 +106,9 @@ def generate_learning_quiz(
         fragments = map_fragment_hits(hits)
         if not fragments:
             raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
-        generated, insufficient = generate_questions_with_llm(fragments, count)
+        generated, insufficient = generate_questions_with_llm(
+            fragments, count, owner_user_id=owner_user_id
+        )
         if insufficient:
             raise ApiError(409, "insufficient_material", insufficient)
         by_index = index_to_fragment(fragments)
@@ -291,7 +293,7 @@ def submit_image_answer(
     ocr_text, ocr_conf = ocr_answer_bytes(image_bytes)
     reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
     verdict, conf, feedback, grader_profile = grade_text_answer(
-        ocr_text, reference, ocr_conf, stem=item.stem
+        ocr_text, reference, ocr_conf, stem=item.stem, owner_user_id=owner_user_id
     )
     row.answer = {
         "type": "image",
@@ -434,6 +436,13 @@ def mark_wrong_mastered(db: Session, owner_user_id: UUID, wrong_id: UUID) -> Non
     db.flush()
 
 
+def _reference_revealed(response: QuizResponse) -> bool:
+    if response.verdict is not None:
+        return True
+    answer = response.answer if isinstance(response.answer, dict) else {}
+    return answer.get("type") == "image"
+
+
 def attempt_payload(db: Session, attempt_id: UUID, owner_user_id: UUID) -> dict:
     attempt = (
         db.execute(
@@ -459,21 +468,21 @@ def attempt_payload(db: Session, attempt_id: UUID, owner_user_id: UUID) -> dict:
     items = []
     for resp, item in responses:
         ref = resp.reference_answer_effective or _reference_from_answer_key(item.answer_key)
-        items.append(
-            {
-                "response_id": str(resp.id),
-                "quiz_item_id": str(item.id),
-                "ordinal": item.ordinal,
-                "stem": item.stem,
-                "item_type": item.item_type,
-                "reference_answer": ref,
-                "verdict": resp.verdict,
-                "verdict_source": resp.verdict_source,
-                "confidence": float(resp.confidence) if resp.confidence is not None else None,
-                "feedback": resp.feedback,
-                "answer": resp.answer,
-            }
-        )
+        row = {
+            "response_id": str(resp.id),
+            "quiz_item_id": str(item.id),
+            "ordinal": item.ordinal,
+            "stem": item.stem,
+            "item_type": item.item_type,
+            "verdict": resp.verdict,
+            "verdict_source": resp.verdict_source,
+            "confidence": float(resp.confidence) if resp.confidence is not None else None,
+            "feedback": resp.feedback,
+            "answer": resp.answer,
+        }
+        if _reference_revealed(resp):
+            row["reference_answer"] = ref
+        items.append(row)
     return {
         "id": str(attempt.id),
         "quiz_id": str(attempt.quiz_id),

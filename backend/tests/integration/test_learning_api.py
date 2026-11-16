@@ -168,11 +168,14 @@ def test_learning_flow(learning_env):
     attempt = learning.start_attempt(db, owner_user_id=owner, quiz_id=quiz.id)
     payload = learning.attempt_payload(db, attempt.id, owner)
     item = payload["items"][0]
+    assert "reference_answer" not in item
     img = _png_with_text("300000")
     row = learning.submit_image_answer(
         db, owner_user_id=owner, response_id=UUID(item["response_id"]), image_bytes=img
     )
     assert row.verdict in {"correct", "pending", "incorrect"}
+    revealed = learning.attempt_payload(db, attempt.id, owner)["items"][0]
+    assert revealed.get("reference_answer")
     learning.override_verdict(
         db, owner_user_id=owner, response_id=row.id, verdict="incorrect", reference_answer=None
     )

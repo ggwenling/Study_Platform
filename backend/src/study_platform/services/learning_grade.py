@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from io import BytesIO
+from uuid import UUID
 
 from PIL import Image
 
@@ -46,6 +47,7 @@ def grade_text_answer(
     ocr_confidence: float,
     *,
     stem: str = "",
+    owner_user_id: UUID | None = None,
 ) -> tuple[str, float, str, str]:
     """Return verdict, match confidence, feedback, grader_profile."""
     settings = get_settings()
@@ -67,7 +69,9 @@ def grade_text_answer(
         if match_conf >= settings.learning_confidence_threshold:
             return "incorrect", match_conf, feedback, profile
         return "pending", match_conf, feedback, profile
-    graded = grade_with_llm(stem or "（无题干）", ref, ocr_text.strip())
+    graded = grade_with_llm(
+        stem or "（无题干）", ref, ocr_text.strip(), owner_user_id=owner_user_id
+    )
     profile = "learning_llm_v1"
     if graded is None:
         return "pending", 0.35, "自动判题暂不可用，请手动确认。", profile

@@ -105,4 +105,10 @@ for await (const event of streamChat({
 
 开发库执行 `uv run alembic upgrade head`；如需独立的 LangGraph 表再执行 `uv run study-setup-checkpointer`。启动 `uv run study-api` 与独立的 `uv run study-worker`。应用的问答流程通过 LangChain 调用模型、在业务数据库记录轮次，不使用 LangGraph checkpointer 恢复执行。
 
-默认聊天模型为 `deepseek-flash`，向量模型为 `qwen3.7-text-embedding-flash`，向量维度 1024。密钥仅配置在服务端 `DEEPSEEK_API_KEY`、`EMBEDDING_API_KEY`，不要放到前端。模型请求可能产生费用；余额、权限或额度不足时返回错误，不自动换模型，也不会对资料任务反复重试此类错误。`/health/ready` 只检查配置存在，不验证密钥有效性或余额，也不会发起模型调用。
+默认聊天模型为 `deepseek-flash`，向量模型为 `qwen3.7-text-embedding-flash`，向量维度 1024。密钥仅配置在服务端 `DEEPSEEK_API_KEY`、`EMBEDDING_API_KEY`，不要放到前端。
+
+可选聊天备用：设置 `CHAT_FALLBACK_MODEL` 可在同一 OpenAI 兼容端点下切换到另一模型；也可同时配置 `CHAT_FALLBACK_BASE_URL` 与 `CHAT_FALLBACK_API_KEY` 指向其他提供商。未配置时行为与原来一致。非流式调用（学习出题/判题、检索改写、资料分类建议等）在主模型超时、限流（429）、5xx 或连接错误时会自动尝试备用；4xx 参数/客户端错误不切换。流式对话仅在尚未输出任何 token 时切换，已输出部分内容后不再切换。
+
+`GET /me/model-usage?days=30` 返回当前登录用户自己的模型调用汇总（按天/用途/模型聚合），不含提示词、资料或作答正文；用量写入失败不影响主流程。设置页展示最近 30 天摘要。
+
+模型请求可能产生费用；未配置备用时，余额、权限或额度不足仍直接返回错误，资料任务不会对此类错误反复重试。`/health/ready` 只检查配置存在，不验证密钥有效性或余额，也不会发起模型调用。

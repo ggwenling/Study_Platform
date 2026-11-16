@@ -6,6 +6,7 @@ import { api } from '@/api/client'
 import type { KnowledgeBase, LearningAttempt, WrongQuestionItem } from '@/api/types'
 import { ApiError } from '@/api/stream'
 import { errorMessage } from '@/api/ui'
+import { isReferenceRevealed } from '@/learningUi'
 
 type Props = {
   knowledgeBases: KnowledgeBase[]
@@ -91,11 +92,18 @@ export function Learning({ knowledgeBases, notify }: Props) {
     const item = attempt.items[index]
     setBusy(true)
     try {
-      await api.learning.patchVerdict(item.response_id, { verdict })
+      const result = await api.learning.patchVerdict(item.response_id, { verdict })
       setAttempt((prev) => {
         if (!prev) return prev
         const items = prev.items.map((row) =>
-          row.response_id === item.response_id ? { ...row, verdict, verdict_source: 'user' } : row,
+          row.response_id === item.response_id
+            ? {
+                ...row,
+                verdict,
+                verdict_source: 'user',
+                reference_answer: result.reference_answer ?? row.reference_answer,
+              }
+            : row,
         )
         return { ...prev, items }
       })
@@ -139,7 +147,7 @@ export function Learning({ knowledgeBases, notify }: Props) {
             <article className="learning-card">
               <p className="learning-meta">第 {index + 1} / {attempt.items.length} 题</p>
               <h2>{current.stem}</h2>
-              {current.reference_answer ? (
+              {isReferenceRevealed(current) && current.reference_answer ? (
                 <p className="learning-ref">参考：{current.reference_answer}</p>
               ) : null}
               <div className={`learning-verdict verdict-${current.verdict ?? 'none'}`}>

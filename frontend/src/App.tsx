@@ -21,6 +21,7 @@ const LiveChat = lazy(() => import('./components/LiveChat'))
 const Library = lazy(() => import('./components/Library'))
 const Learning = lazy(() => import('./components/Learning').then((m) => ({ default: m.Learning })))
 const VisualOrbSmoke = lazy(() => import('./components/VisualOrbSmoke').then((m) => ({ default: m.VisualOrbSmoke })))
+const SettingsPage = lazy(() => import('./components/Settings').then((m) => ({ default: m.Settings })))
 
 const navigation = [
   { label: '新对话', path: '/', icon: MessageCircle },
@@ -29,6 +30,14 @@ const navigation = [
   { label: '学习', path: '/learning', icon: GraduationCap },
   { label: '设置', path: '/settings', icon: Settings },
 ]
+
+function SettingsRoute({ user, requireLogin }: { user: User | null; requireLogin: () => void }) {
+  return (
+    <Suspense fallback={<div className="placeholder-page" role="status">正在打开设置…</div>}>
+      <SettingsPage user={user} requireLogin={requireLogin} />
+    </Suspense>
+  )
+}
 
 function LearningRoute({ notify }: { notify: (message: string) => void }) {
   const { user, libraries, requireLogin } = useWorkspace()
@@ -259,7 +268,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/knowledge" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开知识库…</div>}><Library preferredId={libraryId ?? undefined} /></Suspense>} />
             <Route path="/learning" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开学习…</div>}><LearningRoute notify={notify} /></Suspense>} />
-            <Route path="/settings" element={<Placeholder title="设置暂未开放" description="个人偏好将在这里管理。" />} />
+            <Route path="/settings" element={<SettingsRoute user={user} requireLogin={requireLogin} />} />
             <Route path="/__visual/orb" element={<Suspense fallback={<div className="placeholder-page" role="status">正在加载…</div>}><VisualOrbSmoke /></Suspense>} />
             <Route path="*" element={<Placeholder title="页面不存在" description="请检查访问地址，或返回首页。" />} />
           </Routes>}

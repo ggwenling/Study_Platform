@@ -1,5 +1,5 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
-import type { LibraryOverview, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, Material, MaterialPreview, Message, Page, SearchItem, Turn, UploadResult, User, WrongQuestionItem } from './types'
+import type { LibraryOverview, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
@@ -101,6 +101,7 @@ const query = (values: Record<string, string | undefined>) => {
 
 export const api = {
   me: () => request<User>('/me'),
+  modelUsage: (days = 30) => request<ModelUsageSummary>('/me/model-usage' + query({ days: String(days) })),
   refresh,
   clearSession,
   authOptions: () => request<{ google: boolean; password_reset: boolean }>('/auth/options', {}, 'public'),

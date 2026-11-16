@@ -33,6 +33,7 @@ from .materials import (
     MaterialVersion,
     SourceQuestion,
 )
+from .model_usage import ModelCallRecord
 from .operations import (
     AiJob,
     AiJobAttempt,
@@ -90,4 +91,5 @@ __all__ = [
     "OutboxEvent",
     "IdempotencyKey",
     "AuditLog",
+    "ModelCallRecord",
 ]

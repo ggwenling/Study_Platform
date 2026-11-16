@@ -13,7 +13,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
-from study_platform.services.models import chat_model, provider_error
+from study_platform.services.model_calls import invoke_chat
+from study_platform.services.model_usage import ModelUsageContext
 
 logger = logging.getLogger(__name__)
 
@@ -160,19 +161,24 @@ def parse_grade_response(raw: str) -> GradeResult | None:
     return GradeResult(verdict, float(confidence), reason.strip())
 
 
-def _default_invoker(system: str, user: str, *, retry_hint: str = "") -> str:
+def _default_invoker(
+    system: str,
+    user: str,
+    *,
+    retry_hint: str = "",
+    owner_user_id: UUID | None = None,
+    purpose: str,
+) -> str:
     settings = get_settings()
     messages = [SystemMessage(content=system + retry_hint), HumanMessage(content=user)]
-    try:
-        response = chat_model(
-            timeout=settings.learning_llm_timeout_seconds,
-            max_tokens=settings.learning_llm_max_output_tokens,
-            temperature=0,
-        ).invoke(messages)
-    except ApiError:
-        raise
-    except Exception as exc:
-        raise provider_error(exc) from None
+    context = ModelUsageContext(owner_user_id, purpose) if owner_user_id else None
+    response = invoke_chat(
+        messages,
+        context=context,
+        timeout=settings.learning_llm_timeout_seconds,
+        max_tokens=settings.learning_llm_max_output_tokens,
+        temperature=0,
+    )
     content = response.content
     return content if isinstance(content, str) else str(content)
 
@@ -193,10 +199,15 @@ def generate_questions_with_llm(
     count: int,
     *,
     invoker: LlmInvoker | None = None,
+    owner_user_id: UUID | None = None,
 ) -> tuple[list[GeneratedQuestion], str | None]:
     if not fragments:
         return [], "没有可用于出题的资料片段"
-    call = invoker or _default_invoker
+    call = invoker or (
+        lambda system, user, *, retry_hint="": _default_invoker(
+            system, user, retry_hint=retry_hint, owner_user_id=owner_user_id, purpose="learning_quiz"
+        )
+    )
     settings = get_settings()
     user = json.dumps(
         {"target_count": count, "fragments": _fragments_prompt(fragments)},
@@ -234,8 +245,13 @@ def grade_with_llm(
     student_answer: str,
     *,
     invoker: LlmInvoker | None = None,
+    owner_user_id: UUID | None = None,
 ) -> GradeResult | None:
-    call = invoker or _default_invoker
+    call = invoker or (
+        lambda system, user, *, retry_hint="": _default_invoker(
+            system, user, retry_hint=retry_hint, owner_user_id=owner_user_id, purpose="learning_grade"
+        )
+    )
     settings = get_settings()
     user = json.dumps(
         {"stem": stem, "reference_answer": reference, "student_answer": student_answer},
