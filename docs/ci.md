@@ -5,7 +5,7 @@
 | Job | 内容 |
 | --- | --- |
 | **backend** | `uv sync --locked`、`ruff check`、`pytest`（`RUN_DB_TESTS=1`），使用带 pgvector 的 PostgreSQL 16 服务容器；通过 `tests/ci_bootstrap_postgres.py` 创建 `study_app` / `study_graph` 角色、迁移与 checkpointer setup |
-| **frontend** | `npm ci`、`npm test`、`npm run build`（`tsc -b` 类型检查含在 build 中） |
+| **frontend** | `npm ci`、`npm test`、`npm run build`（`tsc -b` 类型检查含在 build 中）；前端 job 使用 Node 22 与 `ubuntu-24.04`（Node 20 + jsdom/undici 在 GitHub runner 上会触发 Vitest worker 错误） |
 
 CI 不配置任何真实模型 API Key；学习相关集成测试依赖 `LEARNING_STUB_GRADER=true`。
 
