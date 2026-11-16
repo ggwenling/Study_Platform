@@ -22,6 +22,19 @@
 .library-header p { margin-top: 3px; color: var(--text-secondary); font-size: var(--text-caption); overflow-wrap: anywhere; }
 .library-header-actions { align-self: center; display: flex; gap: 8px; }
 .library-header-actions button { --control-height-sm: 32px; border-radius: 8px; }
+.library-processing-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-size: var(--text-caption);
+  color: var(--text-secondary);
+}
+.library-processing-banner svg { flex: none; color: var(--accent); }
 .library-panel { min-width: 0; border: 1px solid #404040; border-radius: 14px; padding: 12px 19px 15px; background: linear-gradient(135deg, #ffffff0d, #ffffff04 48%, #ffffff08); }
 .library-section-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 13px; margin-bottom: 12px; }
 .library-section-heading h2, .library-aside h2 { font-size: var(--text-lg); line-height: 1.3; }
