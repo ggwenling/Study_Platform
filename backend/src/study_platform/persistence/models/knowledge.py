@@ -34,4 +34,5 @@ class KnowledgeBase(Base):
         server_default=sa.text("now()"),
         onupdate=sa.func.now(),
     )
+    last_synced_at = sa.Column(sa.DateTime(timezone=True), nullable=True)
     deleted_at = sa.Column(sa.DateTime(timezone=True), nullable=True)

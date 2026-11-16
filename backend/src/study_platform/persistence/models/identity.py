@@ -171,6 +171,8 @@ class Course(Base):
 
 
 class Material(Base):
+    topic = sa.Column(sa.String(80), nullable=True)
+    tags = sa.Column(postgresql.JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb"))
     __tablename__ = "materials"
     __table_args__ = (
         sa.UniqueConstraint("id", "owner_user_id", name="uq_materials_id_owner_user_id"),

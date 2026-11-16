@@ -324,7 +324,7 @@ def delete_material(
         select(AiJob)
         .where(
             AiJob.resource_id.in_(versions),
-            AiJob.job_type == "ingest",
+            AiJob.job_type.in_(("ingest", "classification")),
             AiJob.status.in_(["queued", "running"]),
         )
         .with_for_update()

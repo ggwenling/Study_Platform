@@ -673,3 +673,93 @@ def test_cancel_during_actual_stream_fences_late_tokens(chat_db, monkeypatch):
     state = chat.turn(s.owner, conv, run)
     assert state["status"] == "stopped"
     assert state["messages"][-1]["content"] != "Partial late answer [S1]"
+def test_library_detail_uses_owned_index_and_atomic_retrieval_settings(chat_db):
+    from study_platform.api.v1 import library_detail as detail
+    from study_platform.persistence.models import MaterialSection
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    user = SimpleNamespace(id=s.owner)
+    outsider = SimpleNamespace(id=s.outsider)
+    with s.factory.begin() as db:
+        db.add_all([MaterialSection(material_version_id=evidence["material_version_id"],
+                                    ordinal=i, level=1, text="OCR", locator={"page": 1, "ocr": []})
+                    for i in range(2)])
+    with s.factory() as db:
+        summary = detail.get_overview(s.kb_a, db, user)
+        assert summary["fragment_count"] == summary["ready_count"] == 1
+        assert sum(row["count"] for row in summary["activity"]) == 1
+        assert summary["ocr_count"] == 1
+        assert summary["ocr_material_ids"] == [evidence["material_id"]]
+        assert detail.get_overview(s.kb_b, db, user)["fragment_count"] == 0
+        assert detail.sync(s.kb_a, db, user)["last_synced_at"] is not None
+        with pytest.raises(ApiError) as denied:
+            detail.get_overview(s.kb_a, db, outsider)
+        assert denied.value.status_code == 404
+
+        def listed(**filters):
+            return detail.fragments(s.kb_a, "", None, None, filters.get("tag"),
+                                    None, None, None, 1, db, user)
+
+        assert listed()["items"][0]["retrieval_enabled"] is True
+        with pytest.raises(ApiError):
+            detail.update_retrieval(s.kb_a, detail.RetrievalUpdate(
+                ids=[evidence["id"], uuid4()], enabled=False), db, user)
+        db.rollback()
+        assert listed()["items"][0]["retrieval_enabled"] is True
+        detail.update_retrieval(s.kb_a, detail.RetrievalUpdate(
+            ids=[evidence["id"]], enabled=False), db, user)
+        assert listed()["items"][0]["retrieval_enabled"] is False
+        assert not db.execute(chat.chunk_query([evidence["index_version_id"]])).all()
+        details = detail.generate(s.kb_a, evidence["material_id"], db, user)
+        assert detail.generate(s.kb_a, evidence["material_id"], db, user)["suggestion_id"] == details["suggestion_id"]
+        job = db.get(detail.AiJob, details["suggestion_id"])
+        job.status = "failed"
+        db.commit()
+        restarted = detail.generate(s.kb_a, evidence["material_id"], db, user)
+        assert restarted["suggestion_id"] != job.id
+        job = db.get(detail.AiJob, restarted["suggestion_id"])
+        job.status = "succeeded"
+        job.result = {"suggestion": {"topic": "Research", "tags": ["alpha"]}}
+        db.commit()
+        assert listed(tag="alpha")["total"] == 0
+        detail.confirm(s.kb_a, evidence["material_id"], detail.ClassificationDecision(
+            suggestion_id=job.id, topic="Research", tags=["alpha", "alpha"]), db, user)
+        assert listed(tag="alpha")["total"] == 1
+        assert detail.fragments(s.kb_a, "alpha", None, "succeeded", None, None,
+                                None, None, 1, db, user)["total"] == 1
+        assert detail.get_overview(s.kb_a, db, user)["topics"] == ["Research"]
+
+def test_disabled_fragment_is_excluded_from_summary_vector_search_and_history(chat_db):
+    from study_platform.api.v1.library_detail import RetrievalUpdate, update_retrieval
+    from study_platform.persistence.models import ChunkEmbedding
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    profile = f"{chat.get_settings().embedding_model}:1024"
+    with s.factory.begin() as db:
+        db.add(ChunkEmbedding(chunk_id=evidence["id"], model_profile_id=profile, embedding=[0.1]*1024))
+    first, fence, _ = chat.prepare(s.owner, request(s.kb_a, content="Private history"), uuid4().hex)
+    assert chat.checkpoint(first, fence, "Evidence [S2]", "completed", [evidence])
+    conv = conversation_for(s, first)
+    query = request(s.kb_a, conv)
+    query["intent"] = "summary"
+    query["material_ids"] = [str(evidence["material_id"])]
+    next_run, _, _ = chat.prepare(s.owner, query, uuid4().hex)
+    _, first_chunks, first_history = chat.context(next_run)
+    assert first_chunks and first_history
+
+    with s.factory() as db:
+        update_retrieval(s.kb_a, RetrievalUpdate(ids=[evidence["id"]], enabled=False),
+                         db, SimpleNamespace(id=s.owner))
+    scope, chunks, history = chat.context(next_run)
+    assert chunks == history == []
+    assert chat.retrieve_vectors(scope, [[0.1]*1024]) == []
+    assert chat.turn(s.owner, conv, first)["messages"][-1]["citations"][0]["quote"] == evidence["text"]
+
+    with s.factory() as db:
+        update_retrieval(s.kb_a, RetrievalUpdate(ids=[evidence["id"]], enabled=True),
+                         db, SimpleNamespace(id=s.owner))
+    _, chunks, history = chat.context(next_run)
+    assert chunks == first_chunks and history == first_history
+    assert chat.retrieve_vectors(scope, [[0.1]*1024])[0]["id"] == evidence["id"]

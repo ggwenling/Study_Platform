@@ -23,6 +23,7 @@ from study_platform.persistence.models.materials import (
     MaterialVersion,
 )
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
+from study_platform.services import classification
 from study_platform.services.storage import source_path, version_dir
 
 _ocr = None
@@ -182,7 +183,7 @@ def claim(db):
     job = db.scalar(
         select(AiJob)
         .where(
-            AiJob.job_type == "ingest",
+            AiJob.job_type.in_(("ingest", "classification")),
             AiJob.cancel_requested_at.is_(None),
             sa.or_(
                 sa.and_(AiJob.status == "queued", AiJob.next_run_at <= current),
@@ -285,9 +286,9 @@ def locked_job(db, job_id, fence):
     return job
 
 
-def update_phase(db, job_id, fence, phase):
+def update_phase(db, job_id, fence, phase, **details):
     job = locked_job(db, job_id, fence)
-    job.result = {"phase": phase}
+    job.result = {**job.result, "phase": phase, **details}
     job.progress = {"parsing": 10, "ocr": 30, "indexing": 60}[phase]
     job.lease_expires_at = now() + timedelta(seconds=get_settings().job_lease_seconds)
     db.commit()
@@ -302,7 +303,27 @@ def run_once():
         job_id, version_id, fence, attempt_no = claim_result
         staging = version_dir(version_id) / f"attempt-{job_id}-{fence}"
         index_id = None
+        is_ingestion = db.get(AiJob, job_id).job_type == "ingest"
         try:
+            if not is_ingestion:
+                job = locked_job(db, job_id, fence)
+                payload = classification.suggestion_input(db, job)
+                db.commit()
+                result = classification.suggest(payload)
+                job = locked_job(db, job_id, fence)
+                active = classification.active_index(db, db.get(MaterialVersion, version_id).material_id)
+                if active is None or str(active.id) != job.payload["index_id"]:
+                    raise ApiError(409, "index_changed", "资料索引已更新。")
+                job.result = {"suggestion": result}
+                job.status = "succeeded"
+                job.progress = 100
+                job.finished_at = now()
+                attempt = db.scalar(select(AiJobAttempt).where(
+                    AiJobAttempt.job_id == job_id, AiJobAttempt.attempt_no == attempt_no))
+                attempt.outcome = "success"
+                attempt.finished_at = now()
+                db.commit()
+                return True
             staging.mkdir(exist_ok=True)
             locked_job(db, job_id, fence)
             version = db.get(MaterialVersion, version_id)
@@ -315,7 +336,8 @@ def run_once():
             page_count = version.page_count
             if not extracted:
                 raise ApiError(422, "no_text_extracted", "未提取到可用文字")
-            update_phase(db, job_id, fence, "indexing")
+            update_phase(db, job_id, fence, "indexing", parsed=True,
+                         ocr_count=sum(bool(locator.get("ocr")) for _, locator in extracted))
             profile = f"{get_settings().embedding_model}:{get_settings().embedding_dimensions}"
             locked_job(db, job_id, fence)
             generation = (
@@ -349,7 +371,8 @@ def run_once():
 
             vectors = []
             for offset in range(0, len(chunk_rows), 20):
-                update_phase(db, job_id, fence, "indexing")
+                update_phase(db, job_id, fence, "indexing",
+                             chunk_count=len(chunk_rows), embedded_count=len(vectors))
                 batch = chunk_rows[offset : offset + 20]
                 result = embed_texts([row[0] for row in batch])
                 if len(result) != len(batch) or any(len(v) != 1024 for v in result):
@@ -406,7 +429,8 @@ def run_once():
             version.failure_code = None
             job.status = "succeeded"
             job.progress = 100
-            job.result = {"phase": "ready"}
+            job.result = {**job.result, "phase": "ready", "embedded_count": len(vectors)}
+            classification.enqueue(db, job.owner_user_id, index)
             job.finished_at = now()
             attempt = db.scalar(
                 select(AiJobAttempt).where(
@@ -435,13 +459,13 @@ def run_once():
                 elif isinstance(exc, OSError):
                     code = "storage_unavailable"
                 else:
-                    code = "ingestion_failed"
+                    code = "ingestion_failed" if is_ingestion else "classification_failed"
                 job.failure_code = str(code)[:64]
                 job.status = "queued" if retryable and attempt_no < job.max_attempts else "failed"
                 job.next_run_at = now() + timedelta(seconds=5)
                 job.finished_at = now() if job.status == "failed" else None
                 version = db.get(MaterialVersion, version_id)
-                if version.parse_status != "ready":
+                if is_ingestion and version.parse_status != "ready":
                     version.parse_status = "failed" if job.status == "failed" else "pending"
                     version.failure_code = job.failure_code
                 if index_id:
@@ -460,5 +484,6 @@ def run_once():
             except LostLease:
                 db.rollback()
         finally:
-            shutil.rmtree(staging, ignore_errors=True)
+            if is_ingestion:
+                shutil.rmtree(staging, ignore_errors=True)
     return True

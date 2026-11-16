@@ -55,7 +55,8 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
         table, fields = line.strip().split(": ")
         expected[f"study.{table}"] = set(fields.split())
     assert len(expected) == 37  # Frozen 0001 dictionary.
-    expected["study.materials"].add("knowledge_base_id")
+    expected["study.materials"].update({"knowledge_base_id", "topic", "tags"})
+    expected["study.material_chunks"].add("retrieval_enabled")
     expected["study.ai_workflow_runs"].update(
         {"knowledge_base_id", "answer_mode", "lease_expires_at", "fencing"}
     )
@@ -64,6 +65,7 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
         "owner_user_id",
         "name",
         "description",
+        "last_synced_at",
         "created_at",
         "updated_at",
         "deleted_at",

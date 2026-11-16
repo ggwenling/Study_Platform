@@ -1738,6 +1738,565 @@
         }
       }
     },
+    "/api/v1/knowledge-bases/{kb_id}/overview": {
+      "get": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Get Overview",
+        "operationId": "get_overview_api_v1_knowledge_bases__kb_id__overview_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryOverview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/sync": {
+      "post": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Sync",
+        "operationId": "sync_api_v1_knowledge_bases__kb_id__sync_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryOverview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/documents/{material_id}/locations": {
+      "get": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Locations",
+        "operationId": "locations_api_v1_knowledge_bases__kb_id__documents__material_id__locations_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentLocation"
+                  },
+                  "title": "Response Locations Api V1 Knowledge Bases  Kb Id  Documents  Material Id  Locations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/fragments": {
+      "get": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Fragments",
+        "operationId": "fragments_api_v1_knowledge_bases__kb_id__fragments_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "file_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "File Type"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tag"
+            }
+          },
+          {
+            "name": "day",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Day"
+            }
+          },
+          {
+            "name": "material_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Material Id"
+            }
+          },
+          {
+            "name": "section_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Section Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FragmentPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/fragments/retrieval": {
+      "patch": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Update Retrieval",
+        "operationId": "update_retrieval_api_v1_knowledge_bases__kb_id__fragments_retrieval_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetrievalUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/documents/{material_id}/classification": {
+      "get": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Get Classification",
+        "operationId": "get_classification_api_v1_knowledge_bases__kb_id__documents__material_id__classification_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Generate",
+        "operationId": "generate_api_v1_knowledge_bases__kb_id__documents__material_id__classification_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Confirm",
+        "operationId": "confirm_api_v1_knowledge_bases__kb_id__documents__material_id__classification_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/chat/stream": {
       "post": {
         "tags": [
@@ -1984,6 +2543,25 @@
           "count"
         ],
         "title": "ActivityDTO"
+      },
+      "ActivityDay": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "count"
+        ],
+        "title": "ActivityDay"
       },
       "AuthDTO": {
         "properties": {
@@ -2245,6 +2823,133 @@
         ],
         "title": "CitationDTO"
       },
+      "Classification": {
+        "properties": {
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Tags"
+          }
+        },
+        "type": "object",
+        "title": "Classification"
+      },
+      "ClassificationDecision": {
+        "properties": {
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Tags"
+          },
+          "suggestion_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Suggestion Id"
+          },
+          "ignore": {
+            "type": "boolean",
+            "title": "Ignore",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "suggestion_id"
+        ],
+        "title": "ClassificationDecision"
+      },
+      "ClassificationState": {
+        "properties": {
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Tags"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "suggestion_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Classification"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready",
+          "suggestion_id",
+          "status",
+          "suggestion"
+        ],
+        "title": "ClassificationState"
+      },
       "ConversationBody": {
         "properties": {
           "title": {
@@ -2398,6 +3103,137 @@
           "activity"
         ],
         "title": "DashboardDTO"
+      },
+      "DocumentLocation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "heading": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heading"
+          },
+          "locator": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Locator"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "heading",
+          "locator",
+          "count"
+        ],
+        "title": "DocumentLocation"
+      },
+      "Fragment": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "material_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Material Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Version Id"
+          },
+          "locator": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Locator"
+          },
+          "estimated_tokens": {
+            "type": "integer",
+            "title": "Estimated Tokens"
+          },
+          "retrieval_enabled": {
+            "type": "boolean",
+            "title": "Retrieval Enabled"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "ready_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Ready At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "text",
+          "material_id",
+          "title",
+          "mime_type",
+          "version_id",
+          "locator",
+          "estimated_tokens",
+          "retrieval_enabled",
+          "status",
+          "ready_at"
+        ],
+        "title": "Fragment"
+      },
+      "FragmentPage": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Fragment"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "page_size",
+          "items"
+        ],
+        "title": "FragmentPage"
       },
       "HTTPValidationError": {
         "properties": {
@@ -2555,6 +3391,110 @@
           "next_cursor"
         ],
         "title": "KnowledgeBasePage"
+      },
+      "LibraryOverview": {
+        "properties": {
+          "file_count": {
+            "type": "integer",
+            "title": "File Count"
+          },
+          "ready_count": {
+            "type": "integer",
+            "title": "Ready Count"
+          },
+          "parsed_count": {
+            "type": "integer",
+            "title": "Parsed Count"
+          },
+          "fragment_count": {
+            "type": "integer",
+            "title": "Fragment Count"
+          },
+          "cut_count": {
+            "type": "integer",
+            "title": "Cut Count"
+          },
+          "embedded_count": {
+            "type": "integer",
+            "title": "Embedded Count"
+          },
+          "ocr_count": {
+            "type": "integer",
+            "title": "Ocr Count"
+          },
+          "ocr_queue": {
+            "type": "integer",
+            "title": "Ocr Queue"
+          },
+          "ocr_material_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Ocr Material Ids"
+          },
+          "processing_count": {
+            "type": "integer",
+            "title": "Processing Count"
+          },
+          "failed_count": {
+            "type": "integer",
+            "title": "Failed Count"
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At"
+          },
+          "topics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Topics"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "activity": {
+            "items": {
+              "$ref": "#/components/schemas/ActivityDay"
+            },
+            "type": "array",
+            "title": "Activity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_count",
+          "ready_count",
+          "parsed_count",
+          "fragment_count",
+          "cut_count",
+          "embedded_count",
+          "ocr_count",
+          "ocr_queue",
+          "ocr_material_ids",
+          "processing_count",
+          "failed_count",
+          "last_synced_at",
+          "topics",
+          "tags",
+          "activity"
+        ],
+        "title": "LibraryOverview"
       },
       "LoginBody": {
         "properties": {
@@ -3017,6 +3957,30 @@
           "email"
         ],
         "title": "ResetRequest"
+      },
+      "RetrievalUpdate": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids",
+          "enabled"
+        ],
+        "title": "RetrievalUpdate"
       },
       "ScopeDTO": {
         "properties": {

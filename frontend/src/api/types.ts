@@ -26,3 +26,32 @@ export interface Turn { turn_id: string; conversation_id: string; status: string
 export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null }
 export interface Job { id: string; status: string; phase: string | null; progress: number; error_code: string | null; attempt_count: number }
 export interface MaterialPreview { version_id: string; mime_type: string; page_count: number | null; sections: { text: string; locator: Record<string, unknown> }[] }
+export interface LibraryOverview {
+  file_count: number
+  ready_count: number
+  parsed_count: number
+  fragment_count: number
+  cut_count: number
+  embedded_count: number
+  ocr_count: number
+  ocr_queue: number
+  ocr_material_ids: string[]
+  processing_count: number
+  failed_count: number
+  last_synced_at: string | null
+  topics: string[]
+  tags: string[]
+  activity: Dashboard['activity']
+}
+export interface DocumentLocation { id: string; heading: string | null; locator: Record<string, unknown>; count: number }
+export type Fragment = {
+  id: string; text: string; material_id: string; title: string; mime_type: string;
+  version_id: string; locator: Record<string, unknown>; estimated_tokens: number;
+  retrieval_enabled: boolean; status: string; ready_at: string
+}
+export interface FragmentPage { total: number; page_size: number; items: Fragment[] }
+export interface Classification { topic: string | null; tags: string[] }
+export interface ClassificationState extends Classification {
+  ready: boolean; suggestion_id: string | null; status: string; suggestion: Classification | null
+}
+export interface ClassificationDecision extends Classification { suggestion_id: string; ignore?: boolean }

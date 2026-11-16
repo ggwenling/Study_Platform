@@ -285,6 +285,7 @@ class MaterialChunk(Base):
     text = sa.Column("text", sa.Text(), nullable=False)
     text_sha256 = sa.Column("text_sha256", sa.CHAR(64), nullable=False)
     locator = sa.Column("locator", postgresql.JSONB(), nullable=False)
+    retrieval_enabled = sa.Column(sa.Boolean(), nullable=False, server_default=sa.true())
     lexical = sa.Column("lexical", postgresql.TSVECTOR(), nullable=True)
     created_at = sa.Column(
         "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")

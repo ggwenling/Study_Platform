@@ -241,7 +241,7 @@ def delete_knowledge_base(
         sa.select(AiJob)
         .where(
             AiJob.owner_user_id == user.id,
-            AiJob.job_type == "ingest",
+            AiJob.job_type.in_(("ingest", "classification")),
             AiJob.resource_id.in_(versions),
             AiJob.status.in_(["queued", "running"]),
         )

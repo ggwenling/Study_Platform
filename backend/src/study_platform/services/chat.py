@@ -306,6 +306,11 @@ def context(run_id):
             AiWorkflowRun.id != run.id, AiWorkflowRun.status == "completed",
             AiWorkflowRun.knowledge_base_id == run.knowledge_base_id,
             AiWorkflowRun.answer_mode == run.answer_mode,
+            ~sa.exists(sa.select(MessageCitation.id)
+                       .join(Message, Message.id == MessageCitation.message_id)
+                       .join(MaterialChunk, MaterialChunk.id == MessageCitation.chunk_id)
+                       .where(Message.workflow_run_id == AiWorkflowRun.id,
+                              MaterialChunk.retrieval_enabled.is_(False))),
         ).order_by(AiWorkflowRun.created_at.desc()).limit(4)).all()
         for prior in reversed(previous):
             if prior.source_scope.get("index_version_ids") != scope["index_version_ids"]:
@@ -325,6 +330,7 @@ def chunk_query(index_ids):
         MaterialChunk.index_version_id == sa.any_(sa.bindparam(
             "indices", index_ids, type_=sa.ARRAY(sa.Uuid))),
         Material.deleted_at.is_(None), Material.status == "active",
+        MaterialChunk.retrieval_enabled.is_(True),
     )
 
 

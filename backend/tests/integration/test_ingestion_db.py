@@ -320,3 +320,21 @@ def test_legacy_material_without_job_or_version_can_be_listed(state):
         assert (saved["status"], saved["version_id"], saved["error_code"]) == (
             "failed", None, "source_unavailable",
         )
+
+def test_classification_runs_after_ingestion_without_applying_suggestions(state, monkeypatch):
+    factory, _, version_id, material_id, _ = state
+    assert ingestion.run_once()
+    calls = []
+    def suggestion(payload):
+        calls.append(payload)
+        return {"topic": "Test topic", "tags": ["Test tag"]}
+    monkeypatch.setattr(ingestion.classification, "suggest", suggestion)
+    assert ingestion.run_once()
+    assert len(calls) == 1 and calls[0]["excerpts"] == ["hello"]
+    with factory() as db:
+        job = db.scalar(sa.select(AiJob).where(
+            AiJob.resource_id == version_id, AiJob.job_type == "classification"))
+        assert job.status == "succeeded"
+        assert job.result["suggestion"]["topic"] == "Test topic"
+        material = db.get(Material, material_id)
+        assert material.topic is None and material.tags == []

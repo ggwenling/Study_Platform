@@ -152,12 +152,15 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
   sessionState: 'loading' | 'ready' | 'error'
   retrySession: () => void
 }) {
-  const { user, notify, report, requireLogin } = useWorkspace()
+  const { user, libraries, notify, report, requireLogin } = useWorkspace()
   const [navOpen, setNavOpen] = useState(() => !window.matchMedia('(max-width: 480px)').matches)
   const [searchOpen, setSearchOpen] = useState(false)
   const navigate = useNavigate()
   const { pathname, search } = useLocation()
   const isChat = pathname.startsWith('/chat/')
+  const isLibrary = pathname === '/knowledge'
+  const libraryId = new URLSearchParams(search).get('id')
+  const activeLibrary = libraryId ? libraries.find((library) => library.id === libraryId) : libraries[0]
   const accountMenu = user ? (
     <UserMenu
       user={{ name: user.display_name, email: user.email, avatarSrc: user.avatar_url ?? undefined }}
@@ -192,7 +195,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
 
   return (
     <Dialog open={searchOpen} onOpenChange={(open) => { if (open && !user) requireLogin(); else setSearchOpen(open) }}>
-    <div className="app-shell" data-nav={navOpen} data-chat={isChat} onClickCapture={(event) => {
+    <div className="app-shell" data-nav={navOpen} data-chat={isChat} data-library={isLibrary || undefined} onClickCapture={(event) => {
       if (user || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || !(event.target instanceof Element)) return
       const link = event.target.closest<HTMLAnchorElement>('a[href^="/"]')
       if (!link || ['/', '/chat/demo'].includes(link.pathname)) return
@@ -219,6 +222,10 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             <Button variant="ghost" className="icon-button nav-toggle" size="sm" aria-label={navOpen ? '收起导航' : '展开导航'} aria-expanded={navOpen} aria-controls="sidebar" onClick={() => setNavOpen(!navOpen)}>
               <PanelLeft size={19} />
             </Button>
+            {isLibrary && <div className="library-breadcrumb" aria-label="当前位置">
+              <Link to="/knowledge">知识库</Link>
+              {activeLibrary && <><ChevronRight size={14} /><strong>{activeLibrary.name}</strong></>}
+            </div>}
             {!isChat && (
               <DialogTrigger asChild>
                 <Button variant="secondary" className="search-button"><Search size={17} /><span>搜索知识库、资料或对话…</span><kbd>Ctrl K</kbd></Button>
@@ -233,7 +240,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             <Route path="/" element={<Home />} />
             <Route path="/chat/:id" element={<ChatRoute notify={notify} />} />
             <Route path="/history" element={<HistoryPage />} />
-            <Route path="/knowledge" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开知识库…</div>}><Library key={search} preferredId={new URLSearchParams(search).get('id') ?? undefined} /></Suspense>} />
+            <Route path="/knowledge" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开知识库…</div>}><Library preferredId={libraryId ?? undefined} /></Suspense>} />
             <Route path="/settings" element={<Placeholder title="设置暂未开放" description="个人偏好将在这里管理。" />} />
             <Route path="*" element={<Placeholder title="页面不存在" description="请检查访问地址，或返回首页。" />} />
           </Routes>}

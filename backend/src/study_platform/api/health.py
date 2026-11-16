@@ -28,7 +28,7 @@ async def ready(request: Request) -> JSONResponse:
                 text("SELECT version_num FROM study.alembic_version")
             )
             await connection.execute(text("SELECT 1 FROM study.knowledge_bases LIMIT 0"))
-        if revision != "0004_project_conversations":
+        if revision != "0005_library_detail":
             return JSONResponse({"status": "not_ready"}, status_code=503)
         settings.storage_dir.mkdir(parents=True, exist_ok=True)
         with TemporaryFile(dir=settings.storage_dir) as probe:

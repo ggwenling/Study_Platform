@@ -1,145 +1,359 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
-import { Folder, Upload } from 'lucide-react'
-import { Link } from 'react-router'
+import type { FormEvent, ReactNode } from 'react'
+import { ChevronRight, CircleDashed, Ellipsis, FileText, Folder, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, TriangleAlert, Upload } from 'lucide-react'
+import { useNavigate } from 'react-router'
 import { api, uploadMaterial } from '@/api/client'
-import type { Material, MaterialPreview } from '@/api/types'
+import type { DocumentLocation, Fragment, KnowledgeBase, LibraryOverview, Material, MaterialPreview } from '@/api/types'
 import { allPages, errorMessage } from '@/api/ui'
+import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
+import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
-import { UserMenu } from '@/components/arc/user-menu/user-menu'
+import { Input } from '@/components/arc/input/input'
+import { Stepper } from '@/components/arc/stepper/stepper'
+import { Textarea } from '@/components/arc/textarea/textarea'
+import { TreeView } from '@/components/arc/tree-view/tree-view'
+import type { TreeNode } from '@/components/arc/tree-view/tree-view'
 import { useWorkspace } from '../WorkspaceData'
-import { DownloadMaterial } from './ProtectedMaterial'
+import { LibraryClassification } from './LibraryClassification'
+import { LibraryFragments, locatorLabel, number } from './LibraryFragments'
+import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
+import './Library.css'
 
 const phases: Record<string, string> = {
   queued: '等待处理', parsing: '解析中', ocr: '识别文字中', indexing: '建立索引中',
-  ready: '可问答', failed: '处理失败', cancelled: '已取消',
+  ready: '已完成', failed: '处理失败', cancelled: '已取消',
+}
+
+type Panel = 'create' | 'edit' | 'topics' | 'tags' | 'files' | 'ocr' | 'ocrQueue' | 'failed' | 'activity' | 'preview'
+type DocumentScope = { material_id?: string; section_id?: string; label?: string }
+type Preview = { title: string; version: string; text?: string; source?: MaterialPreview; locator?: string; imagePage?: number }
+
+function heading(icon: ReactNode, title: string, note: string) {
+  return <header className="library-section-heading">{icon}<h2>{title}</h2><p>{note}</p></header>
 }
 
 export default function Library({ preferredId }: { preferredId?: string }) {
-  const { user, libraries, revision, capabilities, refresh, notify, report, requireLogin } = useWorkspace()
-  const [selected, setSelected] = useState(preferredId ?? '')
+  const { user, libraries, loading, refresh, notify, report, requireLogin } = useWorkspace()
+  const navigate = useNavigate()
+  const [created, setCreated] = useState<KnowledgeBase>()
+  const [creating, setCreating] = useState(false)
+  const [createBusy, setCreateBusy] = useState(false)
+  const options = created && !libraries.some((item) => item.id === created.id) ? [created, ...libraries] : libraries
+  const library = preferredId ? options.find((item) => item.id === preferredId) : options[0]
+  const select = (id: string) => void navigate(`/knowledge?id=${encodeURIComponent(id)}`)
+
+  async function create(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (createBusy) return
+    const form = new FormData(event.currentTarget)
+    const name = String(form.get('name')).trim()
+    if (!name) return
+    setCreateBusy(true)
+    try {
+      const item = await api.createKnowledgeBase({ name, description: String(form.get('description')).trim() || null })
+      setCreated(item)
+      setCreating(false)
+      refresh()
+      notify('知识库已创建。')
+      select(item.id)
+    } catch (error) { report(error) } finally { setCreateBusy(false) }
+  }
+
+  if (!user) return <div className="placeholder-page"><EmptyState title="登录后管理知识库" description="在个人空间创建知识库并导入资料。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
+  return <>
+    {library ? <LibraryDetail key={library.id} library={library} libraries={options} select={select} create={() => setCreating(true)} />
+      : <div className="placeholder-page">
+        {loading ? <p role="status">正在读取知识库…</p> : <EmptyState title={preferredId ? '知识库不可用' : '暂无知识库'}
+          description={preferredId ? '请切换到可访问的知识库。' : '创建第一个知识库，开始整理个人资料。'}
+          action={options.length ? <Button onClick={() => select(options[0]!.id)}>切换知识库</Button> : <Button onClick={() => setCreating(true)}>创建知识库</Button>} />}
+      </div>}
+    <Dialog open={creating} onOpenChange={setCreating}>
+      <DialogContent title="创建知识库" closeLabel="关闭">
+        <LibraryForm onSubmit={create} busy={createBusy} submit="创建知识库" />
+      </DialogContent>
+    </Dialog>
+  </>
+}
+
+function LibraryForm({ library, onSubmit, busy, submit }: {
+  library?: KnowledgeBase; onSubmit: (event: FormEvent<HTMLFormElement>) => void; busy: boolean; submit: string;
+}) {
+  return <form className="library-dialog-stack" onSubmit={onSubmit}>
+    <Input label="名称" name="name" defaultValue={library?.name} maxLength={200} required />
+    <Textarea label="描述" name="description" defaultValue={library?.description ?? ''} maxLength={2000} />
+    <Button type="submit" loading={busy} disabled={busy}>{submit}</Button>
+  </form>
+}
+
+function LibraryDetail({ library, libraries, select, create }: {
+  library: KnowledgeBase; libraries: KnowledgeBase[]; select: (id: string) => void; create: () => void;
+}) {
+  const { revision, capabilities, refresh, notify, report } = useWorkspace()
+  const id = library.id
+  const [overview, setOverview] = useState<LibraryOverview>()
   const [materials, setMaterials] = useState<Material[]>([])
-  const [loadedId, setLoadedId] = useState<string | null>(null)
-  const [loadFailure, setLoadFailure] = useState<{ id: string; message: string } | null>(null)
-  const [busy, setBusy] = useState<'create' | 'upload' | 'retry' | null>(null)
+  const [failure, setFailure] = useState('')
+  const [reload, setReload] = useState(0)
+  const [fragmentRevision, setFragmentRevision] = useState(0)
+  const [busy, setBusy] = useState<string>()
+  const [panel, setPanel] = useState<Panel>()
+  const [scope, setScope] = useState<DocumentScope>({})
+  const [day, setDay] = useState<string>()
+  const [preview, setPreview] = useState<Preview>()
   const fileInput = useRef<HTMLInputElement>(null)
-  const [preview, setPreview] = useState<MaterialPreview | null>(null)
-  const [previewName, setPreviewName] = useState('')
-  const library = libraries.find((item) => item.id === selected) ?? libraries[0]
-  const libraryId = library?.id
-  const listed = libraryId === loadedId ? materials : []
+  const fragmentPanel = useRef<HTMLElement>(null)
+  const [expanded, setExpanded] = useState([id])
+  const [locations, setLocations] = useState<Record<string, { key: string; rows: DocumentLocation[] | 'failed' }>>({})
+  const inFlightLocations = useRef(new Set<string>())
 
   useEffect(() => {
-    if (!libraryId) return
     let active = true
     let timer: number
     async function load() {
       try {
-        const rows = await allPages((cursor) => api.materials(libraryId!, cursor))
+        const [summary, rows] = await Promise.all([api.libraryOverview(id), allPages((cursor) => api.materials(id, cursor))])
         if (!active) return
+        setOverview(summary)
         setMaterials(rows)
-        setLoadedId(libraryId!)
-        setLoadFailure(null)
-        if (rows.some((row) => !['ready', 'failed', 'cancelled'].includes(row.status))) {
-          timer = window.setTimeout(load, 2200)
-        }
-      } catch (error) {
-        if (active) {
-          setLoadFailure({ id: libraryId!, message: errorMessage(error) })
-          report(error)
-        }
-      }
+        setFragmentRevision((value) => value + 1)
+        setFailure('')
+        if (summary.processing_count) timer = window.setTimeout(load, 2200)
+      } catch (error) { if (active) setFailure(errorMessage(error)) }
     }
     void load()
     return () => { active = false; window.clearTimeout(timer) }
-  }, [libraryId, revision])
+  }, [id, revision, reload])
 
-  async function create(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (busy) return
-    const form = event.currentTarget
-    const name = String(new FormData(form).get('name')).trim()
-    if (!name) return
-    setBusy('create')
+  useEffect(() => {
+    for (const material of materials) {
+      if (!expanded.includes(material.id) || material.status !== 'ready') continue
+      const key = `${material.id}:${material.version_id}`
+      if (locations[material.id]?.key === key || inFlightLocations.current.has(key)) continue
+      inFlightLocations.current.add(key)
+      void api.documentLocations(id, material.id).then(
+        (rows) => setLocations((current) => ({ ...current, [material.id]: { key, rows } })),
+        () => setLocations((current) => ({ ...current, [material.id]: { key, rows: 'failed' } })),
+      ).finally(() => inFlightLocations.current.delete(key))
+    }
+  }, [expanded, id, locations, materials])
+
+  const reloadData = () => setReload((value) => value + 1)
+  const selectDay = (value: string | null) => { setDay(value ?? undefined); setPanel(undefined) }
+  const scrollToFragments = () => fragmentPanel.current?.scrollIntoView({ block: 'nearest' })
+
+  async function sync() {
+    setBusy('sync')
     try {
-      const created = await api.createKnowledgeBase({ name })
-      setSelected(created.id)
-      form.reset()
+      setOverview(await api.syncLibrary(id))
+      setLocations({})
+      reloadData()
+      notify('索引状态已刷新。')
+    } catch (error) { report(error) } finally { setBusy(undefined) }
+  }
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const name = String(form.get('name')).trim()
+    if (!name || busy) return
+    setBusy('edit')
+    try {
+      await api.updateKnowledgeBase(id, { name, description: String(form.get('description')).trim() || null })
+      setPanel(undefined)
       refresh()
-      notify('知识库已创建。')
-    } catch (error) { report(error) } finally { setBusy(null) }
+      notify('知识库已更新。')
+    } catch (error) { report(error) } finally { setBusy(undefined) }
   }
 
   async function upload(file: File) {
-    if (!libraryId || busy) return
+    if (busy) return
     if (capabilities && file.size > capabilities.max_upload_bytes) return notify('文件超过服务器允许的大小。')
     setBusy('upload')
     try {
-      await uploadMaterial(libraryId, file)
+      await uploadMaterial(id, file)
       refresh()
       notify('资料已提交处理。')
-    } catch (error) { report(error) } finally { setBusy(null) }
+    } catch (error) { report(error) } finally { setBusy(undefined) }
   }
 
-  if (!user) return <div className="placeholder-page"><EmptyState title="登录后管理知识库" description="在个人空间创建知识库并导入资料。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
+  async function retry(material: Material) {
+    if (busy) return
+    setBusy(material.id)
+    try { await api.retryMaterial(material.id); reloadData(); notify('已重新提交处理。') }
+    catch (error) { report(error) } finally { setBusy(undefined) }
+  }
 
-  return (
-    <section className="resource-page">
-      <h1>知识库</h1>
-      <form className="stack-form create-library" onSubmit={create}>
-        <label>新知识库名称<input name="name" required maxLength={200} placeholder="例如：产品资料" /></label>
-        <Button type="submit" loading={busy === 'create'} disabled={busy !== null && busy !== 'create'}>创建知识库</Button>
-      </form>
-      {library ? <>
-        <div className="resource-toolbar">
-          <div className="resource-library">
-            <span>当前知识库</span>
-            <UserMenu
-              align="start"
-              choice={{ label: '当前知识库', value: library.name, icon: <Folder size={16} /> }}
-              items={libraries.map(({ id, name }) => ({ id, label: name, checked: id === libraryId, onSelect: () => setSelected(id) }))}
-            />
-          </div>
-          <Button type="button" variant="secondary" loading={busy === 'upload'} disabled={busy !== null && busy !== 'upload'} onClick={() => fileInput.current?.click()}>
-            <Upload size={16} aria-hidden="true" />导入资料
-          </Button>
-          <input ref={fileInput} type="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" disabled={busy !== null} hidden onChange={(event) => {
-            const file = event.target.files?.[0]
-            event.target.value = ''
-            if (file) void upload(file)
-          }} />
+  async function openSource(version: string, title: string, locator?: Record<string, unknown>) {
+    try {
+      const source = await api.preview(version)
+      const page = locator?.page ?? locator?.image
+      const imagePage = typeof page === 'number' && source.sections.some((part) => (part.locator.page ?? part.locator.image) === page && Array.isArray(part.locator.ocr)) ? page : undefined
+      setPreview({ title, version, source, locator: locator ? locatorLabel(locator) : undefined, imagePage })
+      setPanel('preview')
+    } catch (error) { report(error) }
+  }
+
+  function showFragment(fragment: Fragment) {
+    setPreview({ title: fragment.title, version: fragment.version_id, text: fragment.text, locator: locatorLabel(fragment.locator) })
+    setPanel('preview')
+  }
+
+  const roots: TreeNode[] = [{ id, label: library.name, icon: <Folder size={15} />, children: materials.map((material) => {
+    const entries = locations[material.id]?.rows
+    const children = entries === 'failed' ? [{ id: `retry:${material.id}`, label: '位置读取失败，点击重试' }]
+      : entries ? entries.map((row) => ({ id: `${material.id}:${row.id}`, label: `${row.heading ?? locatorLabel(row.locator)}（${row.count}）` }))
+      : [{ id: `loading:${material.id}`, label: '正在读取位置…' }]
+    return { id: material.id, label: material.title, children: material.status === 'ready' ? children : undefined }
+  }) }]
+
+  function chooseNode(node: TreeNode) {
+    if (node.id === id) return setScope({})
+    const [materialId, sectionId] = node.id.split(':')
+    if (materialId === 'retry' && sectionId) {
+      setLocations((current) => { const next = { ...current }; delete next[sectionId]; return next })
+      return
+    }
+    if (materialId === 'loading') return
+    setScope({ material_id: materialId, section_id: sectionId, label: node.label })
+  }
+
+  const cards: { label: string; icon: ReactNode; count?: number; note: string; action: () => void }[] = [
+    { label: '主题', icon: <Layers size={21} />, count: overview?.topics.length, note: '资料的主要分类', action: () => setPanel('topics') },
+    { label: '标签', icon: <Tag size={21} />, count: overview?.tags.length, note: '用于检索与进一步筛选', action: () => setPanel('tags') },
+    { label: '片段', icon: <FileText size={21} />, count: overview?.fragment_count, note: '已切分并建立索引的文本', action: scrollToFragments },
+    { label: 'OCR 图片', icon: <ImageIcon size={21} />, count: overview?.ocr_count, note: '已识别并提取文字的图片和扫描页', action: () => setPanel('ocr') },
+  ]
+  const failed = materials.filter((row) => ['failed', 'cancelled'].includes(row.status))
+  const panelMaterials = panel === 'failed' ? failed : panel === 'ocr' ? materials.filter((row) => overview?.ocr_material_ids?.includes(row.id))
+    : panel === 'ocrQueue' ? materials.filter((row) => row.status === 'ocr') : materials
+  const heatmap = (selectable = true) => overview ? <ActivityHeatmap className="library-heatmap" days={overview.activity} label="资料活动" period="最近 12 周" weekStartsOn={1} locale="zh-CN"
+    unit={{ one: '次索引', other: '次索引' }} selectedDate={day} onSelectDate={selectable ? (value) => { selectDay(value); scrollToFragments() } : undefined} /> : <p className="muted">暂无活动记录</p>
+
+  return <section className="library-detail" aria-label="知识库详情">
+    <div className="orbit-light library-orbit" aria-hidden="true" />
+    <div className="library-main">
+      <header className="library-header">
+        <Layers size={32} />
+        <div><h1>{library.name}</h1>{library.description && <p>{library.description}</p>}</div>
+        <div className="library-header-actions">
+          <Button size="sm" variant="secondary" onClick={() => setPanel('edit')}><Pencil size={16} />编辑</Button>
+          <Button size="sm" variant="secondary" loading={busy === 'sync'} disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步</Button>
+          <DropdownMenu label="知识库操作" icon={<Ellipsis size={17} />} iconOnly disabled={Boolean(busy)} items={[
+            { label: '导入资料', icon: <Upload size={16} />, onSelect: () => fileInput.current?.click() },
+            { label: '新建知识库', icon: <Plus size={16} />, onSelect: create },
+            ...libraries.filter((item) => item.id !== id).map((item, index) => ({ label: item.name, icon: <Folder size={16} />, separatorBefore: index === 0, onSelect: () => select(item.id) })),
+          ]} />
         </div>
-        {loadFailure?.id === libraryId ? <EmptyState title="暂时无法读取资料" description={loadFailure.message} action={<Button onClick={refresh}>重试</Button>} />
-          : loadedId !== libraryId ? <p role="status" className="muted">正在读取资料…</p> : listed.length ? (
-          <ul className="resource-list">
-            {listed.map((material) => <li key={material.id}>
-              <div><strong>{material.title}</strong><p className="muted">{phases[material.status] ?? material.status}</p>{material.error_message && <p className="error-text">{material.error_message}</p>}</div>
-              {material.status === 'ready' && material.version_id && <Button variant="secondary" size="sm" onClick={async () => {
-                try {
-                  const result = await api.preview(material.version_id!)
-                  setPreviewName(material.title)
-                  setPreview(result)
-                } catch (error) { report(error) }
-              }}>查看文字</Button>}
-              {['failed', 'cancelled'].includes(material.status) && <Button variant="secondary" size="sm" disabled={busy !== null} onClick={async () => {
-                setBusy('retry')
-                try { await api.retryMaterial(material.id); refresh() } catch (error) { report(error) } finally { setBusy(null) }
-              }}>重试处理</Button>}
-            </li>)}
-          </ul>
-        ) : <EmptyState title="这个知识库还没有资料" description="导入一份资料，处理完成后即可在对话中提问。" />}
-      </> : <EmptyState title="暂无知识库" description="创建第一个知识库，开始整理个人资料。" />}
-      <Link className="return-link" to="/">返回对话首页</Link>
-      <Dialog open={Boolean(preview)} onOpenChange={(open) => { if (!open) setPreview(null) }}>
-        <DialogContent title={previewName || '资料预览'} description="查看从原件提取的文字。">
-          {preview && <div className="source-detail">
-            <DownloadMaterial version={preview.version_id} title={previewName} />
-            {preview.sections.map((section, index) => <p key={index}>{section.text}</p>)}
-          </div>}
-        </DialogContent>
-      </Dialog>
-    </section>
-  )
+        <input ref={fileInput} type="file" hidden accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" disabled={Boolean(busy)} onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file) void upload(file)
+        }} />
+      </header>
+      {busy === 'upload' && <p role="status" className="muted">正在导入资料…</p>}
+      {failure && <p className="library-empty" role="alert">{failure} <Button size="sm" onClick={reloadData}>重试</Button></p>}
+      <section className="library-panel">
+        {heading(<Layers size={22} />, '知识结构', '从文档、主题、标签到片段的结构化视图')}
+        <div className="library-structure">
+          <div className="library-documents">
+            <h3><Folder size={18} />文档层级</h3>
+            {materials.length ? <TreeView density="compact" nodes={roots} expandedIds={expanded} onExpandedChange={setExpanded} onSelect={chooseNode} aria-label="文档层级" />
+              : <p className="muted library-empty">{overview ? '暂无资料。可从页头菜单导入。' : '正在读取资料…'}</p>}
+          </div>
+          <div className="library-metrics">
+            {cards.map((card) => <Button key={card.label} variant="secondary" className="library-metric" onClick={card.action}>
+              <span className="library-metric-content">
+                <span>{card.icon}{card.label}<ChevronRight size={16} /></span>
+                <strong className="numeric">{card.count === undefined ? '—' : number.format(card.count)}</strong>
+                <small>{card.note}</small>
+              </span>
+            </Button>)}
+          </div>
+        </div>
+      </section>
+      <section className="library-panel">
+        {heading(<Layers size={22} />, '索引流程', '知识库的索引构建与处理状态')}
+        <LibraryProgress overview={overview} />
+      </section>
+      <section className="library-panel library-fragment-panel" ref={fragmentPanel}>
+        {heading(<FileText size={22} />, '片段浏览', '检索与管理已生成的内容片段')}
+        <LibraryFragments id={id} tags={overview?.tags ?? []} day={day} setDay={setDay} scope={scope}
+          clearScope={() => setScope({})} revision={fragmentRevision} onPreview={showFragment}
+          onOpenSource={(row) => void openSource(row.version_id, row.title, row.locator)} />
+      </section>
+    </div>
+    <aside className="library-panel library-aside" aria-label="资料库活动与索引概况">
+      <h2><button className="library-aside-heading" type="button" onClick={() => setPanel('activity')}>资料库活动<ChevronRight size={16} /></button></h2>
+      <p className="library-aside-note">近 12 周的资料索引活动</p>
+      {heatmap()}
+      <div className="library-aside-summary">
+        <h2><Layers size={21} />索引概况</h2>
+        {[
+          { label: '文件总数', icon: <Folder size={19} />, value: overview?.file_count, action: () => setPanel('files') },
+          { label: '就绪片段', icon: <FileText size={19} />, value: overview?.fragment_count, action: scrollToFragments },
+          { label: 'OCR 队列', icon: <CircleDashed size={19} />, value: overview?.ocr_queue, action: () => setPanel('ocrQueue') },
+          { label: '处理失败', icon: <TriangleAlert size={19} />, value: overview?.failed_count, action: () => setPanel('failed') },
+        ].map((item) => <button key={item.label} type="button" className="library-aside-row" onClick={item.action}>
+          {item.icon}<span>{item.label}</span><span className="numeric">{item.value === undefined ? '—' : number.format(item.value)}</span><ChevronRight size={15} />
+        </button>)}
+        <div className="library-aside-row"><RefreshCw size={18} /><span>最后同步</span>
+          <span className="numeric">{overview?.last_synced_at ? new Intl.DateTimeFormat('zh-CN', {
+            year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+          }).format(new Date(overview.last_synced_at)) : '—'}</span>
+        </div>
+      </div>
+    </aside>
+    <Dialog open={Boolean(panel)} onOpenChange={(open) => { if (!open) setPanel(undefined) }}>
+      {panel === 'edit' && <DialogContent title="编辑知识库" closeLabel="关闭">
+        <LibraryForm library={library} onSubmit={save} busy={busy === 'edit'} submit="保存" />
+      </DialogContent>}
+      {(panel === 'topics' || panel === 'tags') && <DialogContent title={panel === 'topics' ? '主题管理' : '标签管理'} closeLabel="关闭">
+        <LibraryClassification id={id} materials={materials} labels={overview?.[panel] ?? []} onChange={reloadData} />
+      </DialogContent>}
+      {panel === 'activity' && <DialogContent title="近 12 周索引活动" closeLabel="关闭">{heatmap()}</DialogContent>}
+      {panel === 'preview' && preview && <DialogContent title={preview.title} description={preview.locator ?? '查看原件中提取的文字。'} closeLabel="关闭">
+        <div className="source-detail">
+          <DownloadMaterial version={preview.version} title={preview.title} />
+          {preview.imagePage && <MaterialPage version={preview.version} page={preview.imagePage} title={preview.title} />}
+          {preview.text && <p>{preview.text}</p>}
+          {preview.source?.sections.map((section, index) => <p key={index}>
+            <small>{locatorLabel(section.locator)}</small><br />{section.text}
+          </p>)}
+        </div>
+      </DialogContent>}
+      {(panel === 'files' || panel === 'failed' || panel === 'ocr' || panel === 'ocrQueue') && <DialogContent
+        title={panel === 'files' ? '资料列表' : panel === 'failed' ? '处理失败的资料' : panel === 'ocrQueue' ? 'OCR 队列' : '已识别的资料'} closeLabel="关闭">
+        <ul className="resource-list library-file-list">
+          {panelMaterials.map((item) => <li key={item.id}>
+            <div><strong>{item.title}</strong><p className="muted">{phases[item.status] ?? item.status}</p>
+              {item.error_message && <p className="error-text">{item.error_message}</p>}</div>
+            {item.status === 'ready' && item.version_id && <Button size="sm" variant="secondary" onClick={() => void openSource(item.version_id!, item.title)}>查看文字</Button>}
+            {['failed', 'cancelled'].includes(item.status) && <Button size="sm" variant="secondary" loading={busy === item.id} disabled={Boolean(busy)} onClick={() => void retry(item)}>重试处理</Button>}
+          </li>)}
+        </ul>
+        {panelMaterials.length === 0 && <p className="muted">暂无符合条件的资料。</p>}
+      </DialogContent>}
+    </Dialog>
+  </section>
+}
+
+function LibraryProgress({ overview }: { overview?: LibraryOverview }) {
+  const total = overview?.file_count ?? 0
+  const ready = overview?.ready_count ?? 0
+  const cut = overview?.cut_count ?? 0
+  const done = total > 0 && ready === total
+  const active = !total ? 0 : done ? 6 : overview?.ocr_queue ? 1
+    : overview?.parsed_count !== total ? 2 : cut === 0 ? 3 : overview?.embedded_count !== cut ? 4 : 5
+  const steps = [
+    { id: 'upload', label: '上传完成', description: overview ? `${number.format(total)} 个文件` : '无记录' },
+    { id: 'ocr', label: 'OCR 识别', description: overview?.ocr_queue ? `${overview.ocr_queue} 个任务处理中` : overview?.ocr_count ? `${number.format(overview.ocr_count)} 张图片` : done ? '不适用' : '无记录' },
+    { id: 'parse', label: '内容解析', description: overview ? `${number.format(overview.parsed_count)} / ${number.format(total)} 个文件` : '无记录' },
+    { id: 'cut', label: '内容切分', description: overview ? `${number.format(cut)} 个片段` : '无记录' },
+    { id: 'embed', label: '向量化', description: overview ? `${number.format(overview.embedded_count)} / ${number.format(cut)}` : '无记录' },
+    { id: 'ready', label: '索引就绪', description: done ? '已完成' : overview ? `${number.format(ready)} / ${number.format(total)} 个文件` : '无记录',
+      error: overview?.failed_count ? `${number.format(overview.failed_count)} 个文件处理失败` : undefined },
+  ]
+  return <Stepper label="索引流程" className="library-stepper" steps={steps} current={active} completeLabel="索引已完成" />
 }

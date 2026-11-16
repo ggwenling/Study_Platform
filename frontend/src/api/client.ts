@@ -1,5 +1,5 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
-import type { Capabilities, ChatRequest, Citation, Conversation, Dashboard, Job, KnowledgeBase, KnowledgeBaseInput, Material, MaterialPreview, Message, Page, SearchItem, Turn, UploadResult, User } from './types'
+import type { LibraryOverview, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, Job, KnowledgeBase, KnowledgeBaseInput, Material, MaterialPreview, Message, Page, SearchItem, Turn, UploadResult, User } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
@@ -114,6 +114,19 @@ export const api = {
   createKnowledgeBase: (body: KnowledgeBaseInput) => request<KnowledgeBase>('/knowledge-bases', json('POST', body)),
   updateKnowledgeBase: (id: string, body: KnowledgeBaseInput) => request<KnowledgeBase>(`/knowledge-bases/${pathId(id)}`, json('PATCH', body)),
   deleteKnowledgeBase: (id: string) => request<void>(`/knowledge-bases/${pathId(id)}`, json('DELETE')),
+  libraryOverview: (id: string) => request<LibraryOverview>(`/knowledge-bases/${pathId(id)}/overview`),
+  syncLibrary: (id: string) => request<LibraryOverview>(`/knowledge-bases/${pathId(id)}/sync`, json('POST')),
+  documentLocations: (id: string, material: string) => request<DocumentLocation[]>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/locations`),
+  fragments: (id: string, filters: Record<string, string | undefined>, signal?: AbortSignal) =>
+    request<FragmentPage>(`/knowledge-bases/${pathId(id)}/fragments` + query(filters), { signal }),
+  setFragmentRetrieval: (id: string, ids: string[], enabled: boolean) =>
+    request<void>(`/knowledge-bases/${pathId(id)}/fragments/retrieval`, json('PATCH', { ids, enabled })),
+  classification: (id: string, material: string) =>
+    request<ClassificationState>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/classification`),
+  generateClassification: (id: string, material: string) =>
+    request<ClassificationState>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/classification`, json('POST')),
+  confirmClassification: (id: string, material: string, body: ClassificationDecision) =>
+    request<ClassificationState>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/classification`, json('PATCH', body)),
   materials: (id: string, cursor?: string, signal?: AbortSignal) => request<Page<Material>>(`/knowledge-bases/${pathId(id)}/materials` + query({ cursor }), { signal }),
   material: (id: string) => request<Material>(`/materials/${pathId(id)}`),
   deleteMaterial: (id: string) => request<void>(`/materials/${pathId(id)}`, json('DELETE')),
