@@ -98,8 +98,8 @@ jobs:
         run: npm ci
 
       - name: Unit tests (Vitest)
-        # Ubuntu 26 runners: default fork pool can fail loading undici in parallel workers.
-        run: npm test -- --maxWorkers=1
+        # Ubuntu 26: fork pool + jsdom/undici breaks; use thread pool.
+        run: npm test -- --pool=threads --maxWorkers=1
 
       - name: Build (tsc + Vite bundle)
         run: npm run build

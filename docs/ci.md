@@ -27,7 +27,7 @@ uv run pytest -q
 
 cd ../frontend
 npm ci
-npm test
+npm test -- --pool=threads --maxWorkers=1
 npm run build
 ```
 
