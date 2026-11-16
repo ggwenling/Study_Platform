@@ -107,7 +107,7 @@ async def evaluate_case(
 ):
     """Strategies share the same original query vector and index snapshot."""
     rewritten = None
-    if strategy in ("rewrite", "compare", "hybrid", "hybrid_compare") and scope["index_version_ids"]:
+    if strategy in ("rewrite", "compare") and scope["index_version_ids"]:
         rewritten = await rewrite_query(case["question"])
     queries = [case["question"]]
     if strategy in ("rewrite", "compare") and rewritten and rewritten.query:

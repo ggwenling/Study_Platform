@@ -428,7 +428,7 @@ def test_cancel_during_rewrite_does_not_embed_or_generate(chat_db, monkeypatch):
     assert asyncio.run(consume())[-1]["type"] == "stopped"
 
 
-def test_retrieval_keeps_scope_and_only_caps_six_for_fusion(chat_db, monkeypatch):
+def test_retrieval_keeps_scope_and_returns_top_k_after_fusion(chat_db, monkeypatch):
     from study_platform.persistence.models import ChunkEmbedding, Material, MaterialChunk
 
     s = chat_db
@@ -451,11 +451,12 @@ def test_retrieval_keeps_scope_and_only_caps_six_for_fusion(chat_db, monkeypatch
     scope = {"index_version_ids": [str(evidence["index_version_id"])]}
     settings = chat.get_settings().model_copy(update={"retrieval_top_k": 12})
     monkeypatch.setattr(chat, "get_settings", lambda: settings)
-    monkeypatch.setattr(chat, "embed_texts", lambda queries: [vector for _ in queries])
+    monkeypatch.setattr(chat, "embed_texts", lambda queries, **_: [vector for _ in queries])
     baseline = chat.retrieve(scope, "Original question", s.owner)
-    assert len(baseline) == 12
+    # One document only: document diversification backfills with its other chunks.
+    assert len(baseline) == 12 and len({row["id"] for row in baseline}) == 12
     hits = chat.retrieve(scope, "Original question", s.owner, rewritten_query="Equivalent question")
-    assert len(hits) == 6 and len({row["id"] for row in hits}) == 6
+    assert len(hits) == 12 and len({row["id"] for row in hits}) == 12
     assert {row["material_version_id"] for row in hits} == {evidence["material_version_id"]}
     assert {row["material_version_id"] for row in baseline} == {evidence["material_version_id"]}
     with s.factory.begin() as db:
@@ -822,6 +823,7 @@ def test_lexical_hybrid_boosts_chinese_keyword_match(chat_db, monkeypatch):
             **lexical_column_values("无关段落仅讨论降雨概率。"),
         )
         db.add(unrelated)
+        db.flush()
         vector = [0.0] * 1024
         profile = f"{chat.get_settings().embedding_model}:1024"
         db.add(ChunkEmbedding(chunk_id=unrelated.id, embedding=vector, model_profile_id=profile))

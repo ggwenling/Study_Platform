@@ -13,8 +13,8 @@
 1. 使用现有聊天模型，根据当前问题生成一个等义问题；不传历史或资料正文。只接受一个 JSON `query` 字符串，保留显式数字、编号和引号内实体。最多 256 输出 token，8 秒超时，SDK 不重试。
 2. 空结果、相同问题、无效格式、控制字符、编号变化、超时或模型错误回退原问题；用户取消不会被当作普通失败吞掉。
 3. 原问题始终保留，与有效改写在同一批请求中生成向量。两路仅检索本轮已固定的索引，沿用默认相似度阈值 0.35。
-4. 默认启用混合检索：`RETRIEVAL_HYBRID_ENABLED=true` 时，在向量分数之外再以 jieba 分词写入的 `material_chunks.lexical`（PostgreSQL `simple` tsvector）做关键词分支，并按 `RETRIEVAL_LEXICAL_WEIGHT`（默认 `1.0`）参与同样的 `Σweight/(60+排名)` RRF；关闭混合时行为与仅向量一致。关键词分支与向量一样经过 owner / 索引 / `retrieval_enabled` 过滤。
-5. 按 chunk ID 去重，用上述 RRF 融合排序，同分优先原问题排名，再按 ID 排序。双路融合最多保留 6 个片段，单路检索使用 `RETRIEVAL_TOP_K`。最终回答仍以原问题为准。RRF 公式见 [Cormack 等的原论文](https://cormack.uwaterloo.ca/cormack/cormacksigir09-rrf.pdf)。
+4. 默认启用混合检索：`RETRIEVAL_HYBRID_ENABLED=true` 时，在向量分数之外再以 jieba 分词写入的 `material_chunks.lexical`（PostgreSQL `simple` tsvector）做关键词分支，并按 `RETRIEVAL_LEXICAL_WEIGHT` 参与同样的 `Σweight/(60+排名)` RRF；关闭混合时行为与仅向量一致。关键词分支与向量一样经过 owner / 索引 / `retrieval_enabled` 过滤。关键词查询会先去掉单字虚词和疑问词，再把信息词用 OR 组合（以前 `plainto_tsquery` 对所有词做 AND，自然语言问题几乎匹配不到任何片段，混合检索实际等于纯向量）；命中片段按查询词的 IDF 之和排序（`RETRIEVAL_LEXICAL_SCORING=idf`，可改回 `ts_rank`），避免年份、国名这类常见词压过真正的专名。`RETRIEVAL_LEXICAL_WEIGHT` 默认 `0`（关键词分支不参与，结果等于向量 + 资料多样化）：在两套难题集、两次独立向量结果上，权重 0.4 让自建题集 MRR 提高约 0.004~0.008，但改编 RGB 题集有一次下降约 0.015，整体还不能稳定获益；需要关键词召回（编号、专名）时可设为 `0.4`。
+5. 每一路先取 `RETRIEVAL_CANDIDATE_K`（默认 20）个候选，按 chunk ID 去重后用上述 RRF 融合排序，同分时参考各路中最好的排名，再按原问题排名和 ID 排序。随后按资料版本做多样化：前排每份资料只保留一个片段，避免同一份资料的近似片段挤掉其他资料；不足 `RETRIEVAL_TOP_K`（默认 10）时再用被跳过的片段按原顺序补齐。最终回答仍以原问题为准。RRF 公式见 [Cormack 等的原论文](https://cormack.uwaterloo.ca/cormack/cormacksigir09-rrf.pdf)。
 
 改写前后重新检查轮次、租约和资料可用性。摘要、空库和已结束轮次重放不增加改写调用，阶段仍归入现有 `searching`。每轮最多增加一次改写调用，没有额外重排或模型裁判。两句向量化虽是一批请求，输入量仍增加；原本直接拒答的问题若找到了证据，也可能产生正常回答费用。SSE 原有 usage 仍是回答用量；分阶段评测用量见本地报告。
 
