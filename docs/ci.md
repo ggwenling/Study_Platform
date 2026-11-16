@@ -27,7 +27,7 @@ uv run pytest -q
 
 cd ../frontend
 npm ci
-npm test -- --pool=threads --no-file-parallelism --no-isolate
+npm test
 npm run build
 ```
 

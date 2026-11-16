@@ -80,7 +80,8 @@ jobs:
 
   frontend:
     name: Frontend (Node 20 · Vitest · build)
-    runs-on: ubuntu-latest
+  # ubuntu-latest is Ubuntu 26; jsdom/undici + vitest workers fail there — stay on 24.04 for now.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend
@@ -98,8 +99,7 @@ jobs:
         run: npm ci
 
       - name: Unit tests (Vitest)
-        # Ubuntu 26: jsdom pulls undici; worker isolation breaks on hosted runners.
-        run: npm test -- --pool=threads --no-file-parallelism --no-isolate
+        run: npm test
 
       - name: Build (tsc + Vite bundle)
         run: npm run build
