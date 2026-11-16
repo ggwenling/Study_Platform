@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main, codex, "cursor/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Python 3.12 · PostgreSQL 16 · pgvector)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      RUN_DB_TESTS: "1"
+      AUTH_JWT_SECRET: ci-jwt-secret-key-at-least-32-characters-long
+      CI_STUDY_APP_PASSWORD: ci-study-app-secret
+      CI_STUDY_GRAPH_PASSWORD: ci-study-graph-secret
+      DEEPSEEK_API_KEY: ""
+      EMBEDDING_API_KEY: ""
+      LEARNING_STUB_GRADER: "true"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install backend dependencies
+        run: uv sync --locked
+
+      - name: Bootstrap PostgreSQL (roles, migrate, checkpointer)
+        run: uv run python tests/ci_bootstrap_postgres.py
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Pytest
+        run: uv run pytest -q --tb=no 2>&1 | tee pytest.log
+
+      - name: Summarize pytest counts
+        if: always()
+        run: |
+          tail -1 pytest.log
+
+  frontend:
+    name: Frontend (Node 20 · Vitest · build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests (Vitest)
+        run: npm test
+
+      - name: Build (tsc + Vite bundle)
+        run: npm run build

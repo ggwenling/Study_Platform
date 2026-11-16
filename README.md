@@ -40,6 +40,10 @@ API 默认监听 `127.0.0.1:8000`，Swagger 在 `/docs`。`/health/live` 检查�
 
 首页和会话输入区支持页内创建首个知识库。上传后自动展开“当前库资料”，展示阶段、可问答数量及失败重试；切换知识库不会改变已开始上传的归属。列表读取失败保留上次结果并提供重新读取入口。只有已就绪资料参与问答。
 
+## 持续集成
+
+Push 与 Pull Request 会在 GitHub Actions 中运行后端（uv、ruff、带 PostgreSQL/pgvector 的 pytest）与前端（Vitest、build）检查。流水线说明与本地复现步骤见 [CI 说明](docs/ci.md)。
+
 ## 验证
 
 ```powershell
