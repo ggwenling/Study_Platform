@@ -27,6 +27,11 @@ from study_platform.persistence.models import (
 from study_platform.services.chat import chunk_dto, chunk_query, retrieve, visible_indices
 from study_platform.services.learning_anchor import ensure_course_anchor
 from study_platform.services.learning_grade import grade_text_answer, ocr_answer_bytes
+from study_platform.services.learning_llm import (
+    generate_questions_with_llm,
+    index_to_fragment,
+    map_fragment_hits,
+)
 
 _QUESTION_LINE = re.compile(r"^\s*(?:\d+[\.\)、．]|第\s*\d+\s*题)", re.M)
 
@@ -84,6 +89,7 @@ def generate_learning_quiz(
         hits = retrieve(scope, "重要概念、定义、公式与例题", owner_user_id)
     if not hits:
         raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
+    use_llm = not settings.learning_stub_grader and bool(settings.deepseek_api_key.get_secret_value())
     quiz = Quiz(
         owner_user_id=owner_user_id,
         course_id=knowledge_base_id,
@@ -91,52 +97,96 @@ def generate_learning_quiz(
         status="ready",
         difficulty=3,
         source_scope={"knowledge_base_id": str(knowledge_base_id)},
-        generator_profile="learning_v1",
+        generator_profile="learning_llm_v1" if use_llm else "learning_stub_v1",
     )
     db.add(quiz)
     db.flush()
     ordinal = 0
-    used_chunks: set[UUID] = set()
-    for hit in hits:
-        if ordinal >= count:
-            break
-        chunk_id = UUID(str(hit["id"]))
-        if chunk_id in used_chunks:
-            continue
-        used_chunks.add(chunk_id)
-        chunk = db.get(MaterialChunk, chunk_id)
-        if chunk is None or not chunk.text.strip():
-            continue
-        excerpt = chunk.text.strip()
-        stem, ref = _stem_from_chunk(excerpt)
-        if not ref:
-            continue
-        item = QuizItem(
-            quiz_id=quiz.id,
-            ordinal=ordinal,
-            item_type="short_answer",
-            stem=stem,
-            options=[],
-            answer_key={"text": ref},
-            rubric={},
-            explanation=None,
-            difficulty=3,
-            max_score=Decimal("1"),
-        )
-        db.add(item)
-        db.flush()
-        db.add(
-            QuizItemSource(
-                quiz_item_id=item.id,
-                chunk_id=chunk.id,
-                material_version_id=chunk.material_version_id,
-                index_version_id=chunk.index_version_id,
-                locator=chunk.locator if isinstance(chunk.locator, dict) else {},
+    if use_llm:
+        fragments = map_fragment_hits(hits)
+        if not fragments:
+            raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
+        generated, insufficient = generate_questions_with_llm(fragments, count)
+        if insufficient:
+            raise ApiError(409, "insufficient_material", insufficient)
+        by_index = index_to_fragment(fragments)
+        for question in generated:
+            if ordinal >= count:
+                break
+            source_refs = [by_index[idx] for idx in question.source_indices if idx in by_index]
+            if not source_refs:
+                continue
+            item = QuizItem(
+                quiz_id=quiz.id,
+                ordinal=ordinal,
+                item_type="short_answer",
+                stem=question.stem,
+                options=[],
+                answer_key={"text": question.reference_answer},
+                rubric={},
+                explanation=None,
+                difficulty=3,
+                max_score=Decimal("1"),
             )
-        )
-        ordinal += 1
+            db.add(item)
+            db.flush()
+            for ref in source_refs:
+                db.add(
+                    QuizItemSource(
+                        quiz_item_id=item.id,
+                        chunk_id=ref.chunk_id,
+                        material_version_id=ref.material_version_id,
+                        index_version_id=ref.index_version_id,
+                        locator=ref.locator,
+                    )
+                )
+            ordinal += 1
+    else:
+        used_chunks: set[UUID] = set()
+        for hit in hits:
+            if ordinal >= count:
+                break
+            chunk_id = UUID(str(hit["id"]))
+            if chunk_id in used_chunks:
+                continue
+            used_chunks.add(chunk_id)
+            chunk = db.get(MaterialChunk, chunk_id)
+            if chunk is None or not chunk.text.strip():
+                continue
+            excerpt = chunk.text.strip()
+            stem, ref = _stem_from_chunk(excerpt)
+            if not ref:
+                continue
+            item = QuizItem(
+                quiz_id=quiz.id,
+                ordinal=ordinal,
+                item_type="short_answer",
+                stem=stem,
+                options=[],
+                answer_key={"text": ref},
+                rubric={},
+                explanation=None,
+                difficulty=3,
+                max_score=Decimal("1"),
+            )
+            db.add(item)
+            db.flush()
+            db.add(
+                QuizItemSource(
+                    quiz_item_id=item.id,
+                    chunk_id=chunk.id,
+                    material_version_id=chunk.material_version_id,
+                    index_version_id=chunk.index_version_id,
+                    locator=chunk.locator if isinstance(chunk.locator, dict) else {},
+                )
+            )
+            ordinal += 1
     if ordinal == 0:
-        raise ApiError(409, "no_questions", "无法从资料生成题目")
+        raise ApiError(
+            409,
+            "no_questions",
+            "无法从资料生成题目，请补充资料后重试。",
+        )
     db.flush()
     db.refresh(quiz)
     return quiz
@@ -240,7 +290,9 @@ def submit_image_answer(
     path.write_bytes(image_bytes)
     ocr_text, ocr_conf = ocr_answer_bytes(image_bytes)
     reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
-    verdict, conf, feedback = grade_text_answer(ocr_text, reference, ocr_conf)
+    verdict, conf, feedback, grader_profile = grade_text_answer(
+        ocr_text, reference, ocr_conf, stem=item.stem
+    )
     row.answer = {
         "type": "image",
         "storage_key": str(path.relative_to(Path(get_settings().storage_dir).resolve())),
@@ -253,7 +305,7 @@ def submit_image_answer(
     row.verdict_source = "auto"
     row.is_correct = True if verdict == "correct" else False if verdict == "incorrect" else None
     row.feedback = feedback
-    row.grader_profile = "learning_stub_v1"
+    row.grader_profile = grader_profile
     row.graded_at = datetime.now(UTC)
     db.flush()
     _sync_wrong_book(db, owner_user_id, item.id, row)

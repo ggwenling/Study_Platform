@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     rag_query_rewrite_enabled: bool = False
     learning_confidence_threshold: float = 0.85
     learning_stub_grader: bool = False
+    learning_llm_timeout_seconds: float = 45
+    learning_llm_max_output_tokens: int = 2048
+    learning_llm_max_retries: int = 2
 
 
 @lru_cache
