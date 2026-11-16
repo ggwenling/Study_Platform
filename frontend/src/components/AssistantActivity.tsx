@@ -1,7 +1,8 @@
 import { memo } from 'react'
 import { BookOpen } from 'lucide-react'
-import { ThinkingOrb } from 'thinking-orbs'
 import type { ChatPhase } from '@/api/types'
+import { ThinkingOrbLazy } from './ThinkingOrbLazy'
+import { useCoarsePointer } from '../useCoarsePointer'
 import './AssistantActivity.css'
 
 export const activityLabels: Record<ChatPhase, string> = {
@@ -13,9 +14,12 @@ export const activityLabels: Record<ChatPhase, string> = {
 
 // Keep the avatar footprint identical for live and completed messages.
 export const AssistantActivity = memo(function AssistantActivity({ phase }: { phase: ChatPhase | null }) {
+  const coarse = useCoarsePointer()
   return (
     <span className="assistant-activity" aria-hidden="true">
-      {phase ? <ThinkingOrb state={phase} size={64} theme="auto" aria-hidden="true" /> : <BookOpen size={20} />}
+      {phase && !coarse
+        ? <ThinkingOrbLazy state={phase} size={64} theme="auto" aria-hidden="true" />
+        : <BookOpen size={20} className={phase ? 'assistant-activity-pulse' : undefined} />}
     </span>
   )
 })

@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { Ref } from 'react'
 import { ArrowUp, Globe, Image, Paperclip, Plus, Square } from 'lucide-react'
-import { BEND, MetalFx, useMetalBend } from 'metal-fx'
 import { useReducedMotion } from 'motion/react'
+import { useCoarsePointer } from '../useCoarsePointer'
+
+const ComposerMetalSend = lazy(() =>
+  import('./ComposerMetalSend').then((m) => ({ default: m.ComposerMetalSend })),
+)
 import { api, uploadMaterial } from '@/api/client'
 import { allPages, errorMessage } from '@/api/ui'
 import type { Material } from '@/api/types'
@@ -18,7 +22,6 @@ import { Input } from '@/components/arc/input/input'
 
 const demoLibrary = [{ value: 'product', label: '产品资料库' }]
 const emptyLibrary = [{ value: 'empty', label: '暂无可用知识库', disabled: true }]
-const staticBend = { ...BEND, enabled: false }
 
 function shortLibraryName(name: string) {
   return Array.from(name.replace(/^【演示】\s*/, '') || name).slice(0, 4).join('')
@@ -49,11 +52,10 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   const form = useRef<HTMLFormElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const imageInput = useRef<HTMLInputElement>(null)
-  const metalRef = useRef<HTMLDivElement>(null)
   const libraryControl = useRef<HTMLButtonElement>(null)
-  const reflections = useMemo(() => [{ ref: libraryControl, strength: 0.35 }], [])
   const reducedMotion = useReducedMotion() ?? false
-  useMetalBend(metalRef, useCallback(() => reducedMotion ? staticBend : BEND, [reducedMotion]))
+  const coarsePointer = useCoarsePointer()
+  const enableMetal = !coarsePointer && !reducedMotion
   const requestedLibrary = selected || preferredLibrary
   const libraryId = requestedLibrary ? libraries.find((library) => library.id === requestedLibrary)?.id : libraries[0]?.id
   const active = chat.active?.conversationId === conversationId ? chat.active : null
@@ -194,23 +196,21 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
             placeholder="选知识库"
           />
         </div>
-        <MetalFx
-          ref={metalRef}
-          className="composer-send"
-          variant="circle"
-          preset="chromatic"
-          theme="dark"
-          innerShadow
-          ringCssPx={2.5}
-          glowGain={0.55}
-          reflectionTargets={reducedMotion ? undefined : reflections}
-          paused={reducedMotion}
-          normalizeHostStyles={false}
-        >
-          {active ? <Button type="button" variant="secondary" className="send-button" aria-label="停止生成" onClick={() => void chat.stop(active.conversationId, active.turnId)}><Square size={16} /></Button> : <Button type="submit" variant="secondary" className="send-button" aria-label="发送" disabled={!draft.trim() || (!demo && chat.busy)}>
-            <ArrowUp size={21} />
-          </Button>}
-        </MetalFx>
+        {enableMetal ? (
+          <Suspense fallback={
+            <div className="composer-send">
+              {active ? <Button type="button" variant="secondary" className="send-button" aria-label="停止生成" onClick={() => void chat.stop(active.conversationId, active.turnId)}><Square size={16} /></Button> : <Button type="submit" variant="secondary" className="send-button" aria-label="发送" disabled={!draft.trim() || (!demo && chat.busy)}><ArrowUp size={21} /></Button>}
+            </div>
+          }>
+            <ComposerMetalSend reflectionTarget={libraryControl}>
+              {active ? <Button type="button" variant="secondary" className="send-button" aria-label="停止生成" onClick={() => void chat.stop(active.conversationId, active.turnId)}><Square size={16} /></Button> : <Button type="submit" variant="secondary" className="send-button" aria-label="发送" disabled={!draft.trim() || (!demo && chat.busy)}><ArrowUp size={21} /></Button>}
+            </ComposerMetalSend>
+          </Suspense>
+        ) : (
+          <div className="composer-send">
+            {active ? <Button type="button" variant="secondary" className="send-button" aria-label="停止生成" onClick={() => void chat.stop(active.conversationId, active.turnId)}><Square size={16} /></Button> : <Button type="submit" variant="secondary" className="send-button" aria-label="发送" disabled={!draft.trim() || (!demo && chat.busy)}><ArrowUp size={21} /></Button>}
+          </div>
+        )}
       </div>
       {uploadNote && <span className="composer-hint" role="status">{uploadNote}</span>}
       {pending && <Button type="button" variant="secondary" size="sm" onClick={async () => { if (await chat.resend()) setDraft('') }}>重发上次请求</Button>}

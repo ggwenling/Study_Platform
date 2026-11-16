@@ -15,7 +15,12 @@ vi.mock('./components/Composer', () => ({ Composer: () => null }))
 vi.mock('./components/MarkdownContent', () => ({ MarkdownContent: ({ children }: { children: React.ReactNode }) => <span>{children}</span> }))
 vi.mock('./components/ProtectedMaterial', () => ({ DownloadMaterial: () => null, MaterialPage: () => null }))
 // Exercise the chat lifecycle independently of Canvas rendering (checked in a browser).
-vi.mock('thinking-orbs', () => ({ ThinkingOrb: ({ state, size, theme }: { state: string; size: number; theme: string }) => <canvas data-phase={state} data-size={size} data-theme={theme} /> }))
+vi.mock('./useCoarsePointer', () => ({ useCoarsePointer: () => false }))
+vi.mock('./components/ThinkingOrbLazy', () => ({
+  ThinkingOrbLazy: ({ state, size, theme }: { state: string; size: number; theme: string }) => (
+    <canvas data-phase={state} data-size={size} data-theme={theme} />
+  ),
+}))
 
 const scope: Scope = { knowledge_base_id: 'k', knowledge_base_name: '知识库', answer_mode: 'knowledge_only', index_version_ids: [] }
 const message = (status: Message['status'], content = '保存的回答'): Message => ({ id: 'a', conversation_id: 'c', turn_id: 't', role: 'assistant', sequence_no: 2, status, content, citations: [], scope, created_at: '2026-01-01T00:00:00Z' })
