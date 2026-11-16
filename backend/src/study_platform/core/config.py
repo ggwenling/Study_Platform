@@ -60,10 +60,15 @@ class Settings(BaseSettings):
     chat_lease_seconds: int = 90
     model_timeout_seconds: float = 60
     model_max_output_tokens: int = 2048
-    retrieval_top_k: int = 6
+    retrieval_top_k: int = 10
+    retrieval_candidate_k: int = 20
     retrieval_min_similarity: float = 0.35
     retrieval_hybrid_enabled: bool = True
-    retrieval_lexical_weight: float = 1.0
+    # Keyword branch weight in RRF. The branch works (OR + IDF), but on the hard
+    # retrieval sets it was not a net win across embedding draws, so it is opt-in;
+    # 0.4 is the best-tested value when enabling it.
+    retrieval_lexical_weight: float = 0.0
+    retrieval_lexical_scoring: str = "idf"
     rag_query_rewrite_enabled: bool = False
     learning_confidence_threshold: float = 0.85
     learning_stub_grader: bool = False
