@@ -36,6 +36,7 @@
 | 评分字段 | DB 保留 `score`/`max_score`；API **不返回、不计分**；attempt `max_score=len(items)`，`total_score=0` | 不删列，降迁移风险 |
 | 迁移 0006 | 仅 `quiz_responses` 增 `confidence`/`verdict`/`verdict_source`/`reference_answer_effective` | 最小 DDL |
 | LLM 出题 | 首版 **桩生成**（检索命中分块 + 启发式题干）；有密钥时可后续接 chat 模型 | 测试无密钥可跑通 |
+| 桩检索 | `learning_stub_grader=true` 时 **跳过向量检索**，按作用域顺序取分块 | 无嵌入 API 可跑通出题 |
 | 原题抽取 | 启发式（题号正则）嵌入 generate 路径；**不写** `source_questions` 表 | 表与 worker 后续再接 |
 | PR 依赖 | 基于 **PR #2** 安全分支，降低与鉴权/upload 修复冲突 | 用户指定 |
 
