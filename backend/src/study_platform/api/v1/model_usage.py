@@ -16,6 +16,7 @@ router = APIRouter()
 
 class UsageBucketDTO(BaseModel):
     key: str
+    label: str | None = None
     calls: int
     successes: int
     failures: int
@@ -40,6 +41,7 @@ class ModelUsageSummaryDTO(BaseModel):
     by_day: list[UsageBucketDTO]
     by_purpose: list[UsageBucketDTO]
     by_model: list[UsageBucketDTO]
+    by_connection: list[UsageBucketDTO]
 
 
 @router.get("/me/model-usage", response_model=ModelUsageSummaryDTO)

@@ -111,7 +111,7 @@ def test_readiness_failure_does_not_expose_connection_details(monkeypatch, tmp_p
     assert response.json() == {"status": "not_ready"}
 
 
-def test_readiness_requires_keys_revision_and_writable_storage(monkeypatch, tmp_path):
+def test_readiness_requires_infrastructure_not_model_keys(monkeypatch, tmp_path):
     settings = configured(tmp_path)
     connection = AsyncMock()
     connection.scalar.return_value = "0001_initial_schema"
@@ -128,7 +128,8 @@ def test_readiness_requires_keys_revision_and_writable_storage(monkeypatch, tmp_
         assert client.get("/health/ready").status_code == 503
         connection.scalar.return_value = migration_head()
         settings.embedding_api_key = SecretStr("")
-        assert client.get("/health/ready").status_code == 503
+        settings.deepseek_api_key = SecretStr("")
+        assert client.get("/health/ready").status_code == 200
         settings.embedding_api_key = SecretStr("test")
         settings.auth_jwt_secret = SecretStr("too-short")
         assert client.get("/health/ready").status_code == 503

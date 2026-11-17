@@ -66,6 +66,8 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
         "name",
         "description",
         "last_synced_at",
+        "embedding_connection_id",
+        "embedding_binding",
         "created_at",
         "updated_at",
         "deleted_at",
@@ -76,6 +78,7 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
         "id",
         "owner_user_id",
         "purpose",
+        "connection_source",
         "model_name",
         "used_fallback",
         "usage",
@@ -83,7 +86,9 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
         "success",
         "created_at",
     }
-    assert len(expected) == 41
+    expected["study.model_connections"] = set("id owner_user_id kind name revision versions is_default status tested_at error_code created_at updated_at deleted_at".split())
+    expected["study.model_connection_leases"] = {"id", "connection_id", "expires_at"}
+    assert len(expected) == 43
     assert set(Base.metadata.tables) == set(expected)
     for name, fields in expected.items():
         assert set(Base.metadata.tables[name].columns.keys()) == fields, name

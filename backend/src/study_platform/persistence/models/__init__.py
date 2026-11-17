@@ -33,6 +33,7 @@ from .materials import (
     MaterialVersion,
     SourceQuestion,
 )
+from .model_connections import ModelConnection, ModelConnectionLease
 from .model_usage import ModelCallRecord
 from .operations import (
     AiJob,
@@ -53,6 +54,7 @@ from .quizzes import (
 )
 
 __all__ = [
+    "ModelConnection", "ModelConnectionLease",
     "KnowledgeBase",
     "User",
     "UserSession",

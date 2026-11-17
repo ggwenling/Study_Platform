@@ -10,7 +10,9 @@ from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from study_platform.core.errors import ApiError
 from study_platform.services.model_calls import ainvoke_chat
+from study_platform.services.model_connections import selection
 from study_platform.services.model_usage import ModelUsageContext
 
 REWRITE_TIMEOUT = 8
@@ -76,9 +78,17 @@ async def rewrite_query(question: str, *, owner_user_id: UUID | None = None) -> 
         query = validated_query(question, reply.content) if isinstance(reply.content, str) else None
         reason = "rewritten" if query else "invalid_or_unchanged"
     except (TimeoutError, asyncio.TimeoutError):
+        current = selection.get()
+        if current and current.get("llm", {}).get("id"):
+            raise ApiError(504, "model_timeout", "个人模型检索改写超时，请重试或切换连接。", retryable=True) from None
         query, reason = None, "timeout"
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as error:
+        current = selection.get()
+        if current and current.get("llm", {}).get("id"):
+            if isinstance(error, ApiError):
+                raise
+            raise ApiError(502, "model_rewrite_failed", "个人模型检索改写失败，请重试或在设置中切换连接。") from None
         query, reason = None, "unavailable"
     return RewriteResult(query, reason, (time.monotonic() - started) * 1000, usage)

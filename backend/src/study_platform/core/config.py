@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     graph_database_url: str = Field(
         default="postgresql://study_graph@127.0.0.1:5432/study_platform", repr=False
     )
+    model_connections_key: SecretStr = SecretStr("")
+    model_allowed_origins: list[str] = []
     database_pool_size: int = 5
     storage_dir: Path = Path(__file__).resolve().parents[4] / ".local" / "storage"
     session_ttl_seconds: int = 604800

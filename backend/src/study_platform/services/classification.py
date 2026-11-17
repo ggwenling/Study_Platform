@@ -11,6 +11,7 @@ from study_platform.core.errors import ApiError
 from study_platform.persistence.models.identity import Material
 from study_platform.persistence.models.materials import IndexVersion, MaterialChunk, MaterialVersion
 from study_platform.persistence.models.operations import AiJob
+from study_platform.services import model_connections
 from study_platform.services.model_calls import invoke_chat
 from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.models import provider_error
@@ -48,9 +49,17 @@ def latest_suggestion(db, index):
 
 
 def enqueue(db, owner_id, index):
+    try:
+        llm = model_connections.default_snapshot(db, owner_id, "llm")
+        failure = None
+    except ApiError as error:
+        # A classification failure must not roll back a ready vector index.
+        llm, failure = {"id": None, "kind": "llm"}, error.code
     job = AiJob(id=uuid4(), owner_user_id=owner_id, job_type="classification",
                 resource_type="material_version", resource_id=index.material_version_id,
-                status="queued", progress=0, payload={"index_id": str(index.id)},
+                status="failed" if failure else "queued", progress=0,
+                failure_code=failure, finished_at=datetime.now(timezone.utc) if failure else None,
+                payload={"index_id": str(index.id), "llm_connection": llm},
                 attempt_count=0, fencing=0, max_attempts=3, next_run_at=datetime.now(timezone.utc))
     db.add(job)
     return job

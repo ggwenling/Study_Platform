@@ -169,6 +169,10 @@ def dto(db, material):
         "model_quota_unavailable": "模型额度、余额或速率受限，请处理后显式重试。",
         "model_timeout": "模型连接超时，请检查连接后重试。",
         "embedding_invalid": "向量模型结果不可用，请检查模型配置后重试。",
+        "embedding_dimension_invalid": "向量连接必须输出 1024 维，请在设置中检查并测试知识库绑定的连接后重试。",
+        "model_test_required": "知识库绑定的向量连接尚未测试通过，请在设置中测试连接后重试。",
+        "model_address_blocked": "模型地址未获允许，请使用公网 HTTPS 或联系管理员放行指定内网地址。",
+        "model_decryption_failed": "模型凭据无法解密，请检查部署加密密钥或在设置中替换 API Key。",
         "lease_expired": "后台处理多次中断，请重新启动后台处理后重试。",
     }.get(error, "资料处理失败，请检查原件后重试。") if error else None
     if error and state == "queued":
@@ -189,6 +193,9 @@ def dto(db, material):
 
 
 def create_job(db, user, version):
+    from study_platform.services.model_connections import library_snapshot
+    material = db.get(Material, version.material_id)
+    embedding = library_snapshot(db, user.id, material.knowledge_base_id)
     job = AiJob(
         id=uuid4(),
         owner_user_id=user.id,
@@ -197,7 +204,7 @@ def create_job(db, user, version):
         resource_id=version.id,
         status="queued",
         progress=0,
-        payload={},
+        payload={"embedding_connection": embedding},
         attempt_count=0,
         max_attempts=3,
         fencing=0,

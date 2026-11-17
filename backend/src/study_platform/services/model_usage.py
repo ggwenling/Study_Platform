@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from study_platform.persistence.database import session_factory
+from study_platform.persistence.models.model_connections import ModelConnection
 from study_platform.persistence.models.model_usage import ModelCallRecord
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ PURPOSES = frozenset(
         "query_rewrite",
         "embedding",
         "classification",
+        "connection_test",
     }
 )
 
@@ -33,6 +35,7 @@ PURPOSES = frozenset(
 class ModelUsageContext:
     owner_user_id: UUID
     purpose: str
+    connection_source: str = "platform"
 
     def __post_init__(self) -> None:
         if self.purpose not in PURPOSES:
@@ -67,6 +70,7 @@ def record_model_call(
                 ModelCallRecord(
                     owner_user_id=context.owner_user_id,
                     purpose=context.purpose,
+                    connection_source=context.connection_source,
                     model_name=model_name[:120],
                     used_fallback=used_fallback,
                     usage=_normalize_usage(usage),
@@ -109,6 +113,7 @@ def summarize_usage(db: Session, owner_user_id: UUID, *, days: int) -> dict[str,
     by_day: dict[str, dict[str, int]] = {}
     by_purpose: dict[str, dict[str, int]] = {}
     by_model: dict[str, dict[str, int]] = {}
+    by_connection: dict[str, dict[str, int]] = {}
 
     def bucket(store: dict[str, dict[str, int]], key: str, row: ModelCallRecord) -> None:
         item = store.setdefault(
@@ -142,6 +147,7 @@ def summarize_usage(db: Session, owner_user_id: UUID, *, days: int) -> dict[str,
         bucket(by_day, day, row)
         bucket(by_purpose, row.purpose, row)
         bucket(by_model, row.model_name, row)
+        bucket(by_connection, f"{row.connection_source}|{row.model_name}", row)
 
     def sort_keys(store: dict[str, dict[str, int]]) -> list[dict[str, Any]]:
         return [
@@ -149,6 +155,14 @@ def summarize_usage(db: Session, owner_user_id: UUID, *, days: int) -> dict[str,
             for key in sorted(store.keys(), reverse=True)
         ]
 
+    names = dict(db.execute(sa.select(ModelConnection.id, ModelConnection.name).where(
+        ModelConnection.owner_user_id == owner_user_id)).all())
+    connections = sort_keys(by_connection)
+    for item in connections:
+        source, model = item["key"].split("|", 1)
+        parts = source.split(":")
+        label = "平台默认" if source == "platform" else f"个人 · {names.get(UUID(parts[1]), '已删除连接')} · v{parts[2]}"
+        item["label"] = f"{label} · {model}"
     return {
         "days": days,
         "since": since.isoformat(),
@@ -156,4 +170,5 @@ def summarize_usage(db: Session, owner_user_id: UUID, *, days: int) -> dict[str,
         "by_day": sort_keys(by_day),
         "by_purpose": sort_keys(by_purpose),
         "by_model": sort_keys(by_model),
+        "by_connection": connections,
     }

@@ -25,6 +25,7 @@ from study_platform.persistence.models.materials import (
     MaterialVersion,
 )
 from study_platform.persistence.models.operations import AiWorkflowRun, IdempotencyKey
+from study_platform.services import model_connections
 from study_platform.services.lexical import lexical_query_terms, plain_tsquery
 from study_platform.services.model_calls import astream_chat
 from study_platform.services.model_usage import ModelUsageContext
@@ -83,7 +84,7 @@ def visible_indices(db, owner, kb_id, material_ids=None, *, index_ids=None):
     rows = db.execute(query).all()
     if material_ids is not None and {r[1] for r in rows} != set(material_ids):
         raise ApiError(409, "scope_unavailable", "所选资料不存在或尚未完成索引")
-    profile = f"{get_settings().embedding_model}:1024"
+    profile = model_connections.embedding_profile(owner, kb_id, db)
     if any(row[0].embedding_profile != profile for row in rows):
         raise ApiError(409, "embedding_profile_mismatch", "资料向量配置已变更，请重新索引")
     return sorted(str(row[0].id) for row in rows)
@@ -148,13 +149,18 @@ def prepare(owner: UUID, data: dict, key: str):
             raise ApiError(422, "materials_required", "摘要需要明确选择资料；资料范围不能为空")
         indices = visible_indices(db, owner, kb.id,
                                   [UUID(x) for x in selected] if selected else None)
+        llm_connection = model_connections.default_snapshot(db, owner, "llm")
+        model_name = (model_connections.owned(db, owner, UUID(llm_connection["id"])).versions[str(llm_connection["revision"])]["model"]
+                      if llm_connection["id"] else get_settings().chat_model)
         run = AiWorkflowRun(
             id=uuid4(), owner_user_id=owner, conversation_id=conv.id,
             knowledge_base_id=kb.id, answer_mode=data["answer_mode"],
             status="running", fencing=1, lease_expires_at=now() + timedelta(
                 seconds=get_settings().chat_lease_seconds), started_at=now(),
-            model_profile=get_settings().chat_model, prompt_version="rag-v1",
-            source_scope={**data, "knowledge_base_name": kb.name, "index_version_ids": indices},
+            model_profile=model_name, prompt_version="rag-v1",
+            source_scope={**data, "knowledge_base_name": kb.name, "index_version_ids": indices,
+                          "llm_connection": llm_connection,
+                          "embedding_connection": model_connections.library_snapshot(db, owner, kb.id)},
         )
         db.add(run)
         db.flush()
@@ -443,7 +449,7 @@ def retrieve_vectors(scope, vectors, owner: UUID):
     indices = [UUID(x) for x in scope["index_version_ids"]]
     if not indices:
         return []
-    profile = f"{get_settings().embedding_model}:1024"
+    profile = model_connections.embedding_profile(owner)
     candidate_k = _candidate_limit()
     with session_factory()() as db:
         query = chunk_query(indices, owner)
@@ -466,7 +472,7 @@ def retrieve_hybrid(scope, queries, vectors, owner: UUID):
         return []
     settings = get_settings()
     candidate_k = _candidate_limit()
-    profile = f"{settings.embedding_model}:1024"
+    profile = model_connections.embedding_profile(owner)
     lexical_weight = settings.retrieval_lexical_weight if settings.retrieval_hybrid_enabled else 0.0
     with session_factory()() as db:
         query = chunk_query(indices, owner)
@@ -539,6 +545,20 @@ async def ended_event(owner, conv_id, run_id):
 
 
 async def stream(owner, run_id, fence, replay=False):
+    with session_factory()() as db:
+        run = db.get(AiWorkflowRun, run_id)
+        llm = run.source_scope.get("llm_connection", {"id": None, "kind": "llm"})
+        embedding = run.source_scope.get("embedding_connection", {"id": None, "kind": "embedding"})
+    try:
+        with model_connections.task(owner, llm=llm, embedding=embedding):
+            async for item in _stream(owner, run_id, fence, replay):
+                yield item
+    except ApiError as error:
+        await run_in_threadpool(checkpoint, run_id, fence, "", "failed", [], error.code)
+        yield event("error", turn_id=run_id, **error.payload())
+
+
+async def _stream(owner, run_id, fence, replay=False):
     with session_factory()() as db:
         run = db.get(AiWorkflowRun, run_id)
         conv_id = run.conversation_id

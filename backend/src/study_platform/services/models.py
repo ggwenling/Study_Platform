@@ -2,6 +2,7 @@
 
 import math
 import time
+from dataclasses import replace
 from typing import Any
 
 from langchain_openai import ChatOpenAI
@@ -9,10 +10,18 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 from study_platform.core.config import Settings, get_settings
 from study_platform.core.errors import ApiError
+from study_platform.services.model_connections import resolved
+from study_platform.services.model_network import async_client, sync_client
 from study_platform.services.model_usage import ModelUsageContext, record_model_call
 
 
 def provider_error(exc: Exception) -> ApiError:
+    # SDK connection errors wrap transport policy failures; preserve the safe reason.
+    cause = exc
+    while cause is not None:
+        if isinstance(cause, ApiError):
+            return cause
+        cause = cause.__cause__
     if isinstance(exc, APIStatusError):
         status = exc.status_code
         if status in (401, 403):
@@ -43,9 +52,13 @@ def build_chat_model(
     max_tokens: int | None = None,
     temperature: float | None = None,
     settings: Settings | None = None,
+    connection: dict | None = None,
 ) -> ChatOpenAI:
     settings = settings or get_settings()
-    base_url, api_key, model = chat_profile(use_fallback=use_fallback, settings=settings)
+    if connection and connection.get("id"):
+        base_url, api_key, model = connection["base_url"], connection["api_key"], connection["model"]
+    else:
+        base_url, api_key, model = chat_profile(use_fallback=use_fallback, settings=settings)
     if not api_key:
         raise ApiError(503, "model_not_configured", "尚未配置聊天模型")
     return ChatOpenAI(
@@ -56,7 +69,9 @@ def build_chat_model(
         max_retries=0,
         max_tokens=settings.model_max_output_tokens if max_tokens is None else max_tokens,
         **({"temperature": temperature} if temperature is not None else {}),
-        extra_body={"thinking": {"type": "disabled"}},
+        **({"http_client": sync_client(base_url, settings.model_timeout_seconds),
+            "http_async_client": async_client(base_url, settings.model_timeout_seconds)}
+           if connection and connection.get("id") else {"extra_body": {"thinking": {"type": "disabled"}}}),
         stream_usage=True,
     )
 
@@ -78,7 +93,14 @@ def embed_texts(
     context: ModelUsageContext | None = None,
 ) -> list[list[float]]:
     settings = get_settings()
-    if not settings.embedding_api_key.get_secret_value():
+    connection = resolved(context.owner_user_id, "embedding") if context else {"source": "platform"}
+    binding = connection.get("binding") or {}
+    model = connection.get("model") or binding.get("model") or settings.embedding_model
+    base_url = connection.get("base_url") or binding.get("base_url") or settings.embedding_base_url
+    api_key = connection.get("api_key") or settings.embedding_api_key.get_secret_value()
+    if context:
+        context = replace(context, connection_source=connection["source"])
+    if not api_key:
         raise ApiError(503, "model_not_configured", "尚未配置向量模型")
     if not texts or len(texts) > 20:
         raise ValueError("Embedding batch must contain 1 to 20 texts")
@@ -89,22 +111,27 @@ def embed_texts(
     success = False
     try:
         with OpenAI(
-            api_key=settings.embedding_api_key.get_secret_value(),
-            base_url=settings.embedding_base_url,
+            api_key=api_key,
+            base_url=base_url,
+            **({"http_client": sync_client(base_url, settings.model_timeout_seconds)} if connection.get("id") else {}),
             timeout=settings.model_timeout_seconds,
             max_retries=0,
         ) as client:
             response = client.embeddings.create(
-                model=settings.embedding_model, input=texts,
+                model=model, input=texts,
                 dimensions=settings.embedding_dimensions, encoding_format="float",
             )
         rows = sorted(response.data, key=lambda row: row.index)
         usage = _embedding_usage(response)
         if diagnostics is not None:
             diagnostics["usage"] = usage
+        if [row.index for row in rows] != list(range(len(texts))):
+            raise ApiError(502, "embedding_invalid", "向量响应数量或序号不正确。")
         vectors = [row.embedding for row in rows]
+        if any(len(v) != 1024 for v in vectors):
+            raise ApiError(502, "embedding_dimension_invalid", "向量连接必须输出 1024 维，请检查模型和 dimensions 参数。")
         if len(vectors) != len(texts) or any(
-            len(v) != 1024 or not all(math.isfinite(x) for x in v) or not any(v)
+            not all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v) or not any(v)
             for v in vectors
         ):
             raise ApiError(502, "embedding_invalid", "向量模型返回维度或内容不正确")
@@ -119,7 +146,7 @@ def embed_texts(
             diagnostics["elapsed_ms"] = (time.monotonic() - started) * 1000
         record_model_call(
             context,
-            model_name=settings.embedding_model,
+            model_name=model,
             used_fallback=False,
             elapsed_ms=(time.monotonic() - started) * 1000,
             success=success,

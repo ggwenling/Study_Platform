@@ -25,11 +25,7 @@ async def live() -> dict[str, str]:
 @router.get("/ready")
 async def ready(request: Request) -> JSONResponse:
     settings = request.app.state.settings
-    if (
-        len(settings.auth_jwt_secret.get_secret_value().encode()) < 32
-        or not settings.deepseek_api_key.get_secret_value()
-        or not settings.embedding_api_key.get_secret_value()
-    ):
+    if len(settings.auth_jwt_secret.get_secret_value().encode()) < 32:
         return JSONResponse({"status": "not_ready"}, status_code=503)
     try:
         async with request.app.state.engine.connect() as connection:

@@ -7,6 +7,7 @@ from study_platform.api.v1 import (
     learning,
     library_detail,
     materials,
+    model_connections,
     model_usage,
     resources,
 )
@@ -20,3 +21,4 @@ router.include_router(library_detail.router, tags=["knowledge base detail"])
 router.include_router(chat.router, tags=["chat"])
 router.include_router(learning.router)
 router.include_router(model_usage.router, tags=["account"])
+router.include_router(model_connections.router)

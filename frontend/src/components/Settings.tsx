@@ -1,3 +1,4 @@
+import { ModelConnectionsPanel } from './ModelConnections'
 import { useEffect, useState } from 'react'
 import { BarChart3 } from 'lucide-react'
 import { Button } from '@/components/arc/button/button'
@@ -6,6 +7,7 @@ import { api } from '@/api/client'
 import type { ModelUsageSummary, User } from '@/api/types'
 import { ApiError } from '@/api/stream'
 import { errorMessage } from '@/api/ui'
+import { useWorkspace } from '../WorkspaceData'
 
 const purposeLabel: Record<string, string> = {
   chat: '对话',
@@ -14,9 +16,11 @@ const purposeLabel: Record<string, string> = {
   query_rewrite: '检索改写',
   embedding: '向量嵌入',
   classification: '资料分类',
+  connection_test: '连接测试',
 }
 
 export function Settings({ user, requireLogin }: { user: User | null; requireLogin: () => void }) {
+  const { revision } = useWorkspace()
   const [summary, setSummary] = useState<ModelUsageSummary | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -38,7 +42,7 @@ export function Settings({ user, requireLogin }: { user: User | null; requireLog
       },
     ).finally(() => { if (active) setBusy(false) })
     return () => { active = false }
-  }, [user])
+  }, [user, revision])
 
   if (!user) {
     return (
@@ -54,6 +58,7 @@ export function Settings({ user, requireLogin }: { user: User | null; requireLog
         <h1>设置</h1>
         <p>最近 {summary?.days ?? 30} 天的模型调用统计（仅含你的数据）。</p>
       </header>
+      <ModelConnectionsPanel key={user.id} />
       {busy && !summary && <p role="status">正在加载用量…</p>}
       {error && <p className="error-text" role="alert">{error}</p>}
       {summary && (
@@ -78,6 +83,13 @@ export function Settings({ user, requireLogin }: { user: User | null; requireLog
                 </li>
               ))}
               {!summary.by_purpose.length && <li>暂无记录</li>}
+            </ul>
+          </section>
+          <section className="settings-card" aria-labelledby="usage-source">
+            <h2 id="usage-source">连接来源与实际模型</h2>
+            <ul className="settings-list">
+              {(summary.by_connection ?? []).map((row) => <li key={row.key}><span>{row.label ?? row.key}</span><span>{row.calls} 次 · {row.total_tokens} tokens</span></li>)}
+              {!summary.by_connection?.length && <li>暂无记录</li>}
             </ul>
           </section>
           <section className="settings-card" aria-labelledby="usage-model">

@@ -68,6 +68,7 @@ def learning_env(tmp_path, monkeypatch):
         db = Session(connection, join_transaction_mode="create_savepoint")
         factory = sessionmaker(bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint")
         monkeypatch.setattr(chat, "session_factory", lambda: factory)
+        monkeypatch.setattr("study_platform.services.model_connections.session_factory", lambda: factory)
         db.add(
             User(
                 id=owner,

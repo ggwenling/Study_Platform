@@ -32,6 +32,8 @@ from study_platform.services.learning_llm import (
     index_to_fragment,
     map_fragment_hits,
 )
+from study_platform.services.model_connections import llm_available
+from study_platform.services.model_task import learning_task
 
 _QUESTION_LINE = re.compile(r"^\s*(?:\d+[\.\)、．]|第\s*\d+\s*题)", re.M)
 
@@ -53,6 +55,7 @@ def _answer_storage_path(response_id: UUID) -> Path:
     return base / f"{uuid4().hex}.image"
 
 
+@learning_task
 def generate_learning_quiz(
     db: Session,
     *,
@@ -89,7 +92,7 @@ def generate_learning_quiz(
         hits = retrieve(scope, "重要概念、定义、公式与例题", owner_user_id)
     if not hits:
         raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
-    use_llm = not settings.learning_stub_grader and bool(settings.deepseek_api_key.get_secret_value())
+    use_llm = not settings.learning_stub_grader and llm_available(owner_user_id)
     quiz = Quiz(
         owner_user_id=owner_user_id,
         course_id=knowledge_base_id,
@@ -264,6 +267,7 @@ def start_attempt(db: Session, *, owner_user_id: UUID, quiz_id: UUID) -> QuizAtt
     return attempt
 
 
+@learning_task
 def submit_image_answer(
     db: Session,
     *,

@@ -236,7 +236,8 @@ function LibraryDetail({ library, libraries, select, create }: {
     <div className="library-main">
       <header className="library-header">
         <Layers size={32} />
-        <div><h1>{library.name}</h1>{library.description && <p>{library.description}</p>}</div>
+        <div><h1>{library.name}</h1>
+          {library.embedding_binding && <p>向量模型 · {library.embedding_binding.model} · {library.embedding_connection_id ? '个人连接' : '平台连接'} · 1024 维</p>}{library.description && <p>{library.description}</p>}</div>
         <div className="library-header-actions">
           <Button size="sm" variant="secondary" onClick={() => setPanel('edit')}><Pencil size={16} />编辑</Button>
           <Button size="sm" variant="secondary" loading={busy === 'sync'} disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步</Button>

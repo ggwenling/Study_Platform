@@ -13,6 +13,7 @@ from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
 from study_platform.services.ingestion import ocr_image
 from study_platform.services.learning_llm import grade_with_llm
+from study_platform.services.model_connections import llm_available
 
 
 def normalize_answer(text: str) -> str:
@@ -69,7 +70,7 @@ def grade_text_answer(
         match_conf = max(0.0, min(1.0, ocr_confidence))
         verdict, confidence, feedback = _apply_threshold("correct", match_conf, "")
         return verdict, confidence, feedback or "与参考答案一致。", "learning_stub_v1"
-    stub = settings.learning_stub_grader or not settings.deepseek_api_key.get_secret_value()
+    stub = settings.learning_stub_grader or not llm_available(owner_user_id)
     if stub:
         match_conf = 0.4
         feedback = "自动比对未通过，请确认或手动判题。"

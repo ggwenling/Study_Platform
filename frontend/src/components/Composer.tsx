@@ -55,6 +55,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   const enableMetal = !reducedMotion
   const requestedLibrary = selected || preferredLibrary
   const libraryId = requestedLibrary ? libraries.find((library) => library.id === requestedLibrary)?.id : libraries[0]?.id
+  const modelReady = libraryId ? capabilities?.library_rag?.[libraryId] ?? capabilities?.rag : capabilities?.rag
   const active = chat.active?.conversationId === conversationId ? chat.active : null
   const pending = !demo && chat.pending && (chat.pending.body.conversation_id ?? undefined) === conversationId
 
@@ -82,7 +83,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
     if (demo) return notify('这是示例会话。请从首页发起真实问答。')
     if (!user) return requireLogin()
     if (!libraryId) return notify('请先创建或选择知识库。')
-    if (capabilities?.rag === false) return notify('服务器尚未配置问答模型。')
+    if (modelReady === false) return notify('当前模型不可用，请在设置的「模型连接」中配置或测试连接。')
     if (summary && !ready.some((material) => material.id === materialId && material.knowledge_base_id === libraryId)) return notify('请先选择一份已就绪的资料。')
     if (pending) return notify('请先重发上次请求，确认发送结果。')
     if (await chat.send({
@@ -143,7 +144,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
     >
       {!demo && user && libraries.length === 0 && <Button type="button" variant="ghost" size="sm" onClick={() => { setCreateError(''); setCreating(true) }}>创建知识库并导入资料</Button>}
       {!demo && requestedLibrary && !libraryId && libraries.length > 0 && <p className="composer-hint">原知识库不可用，请重新选择。</p>}
-      {!demo && capabilities?.rag === false && <p className="composer-hint">服务器尚未配置问答模型。</p>}
+      {!demo && modelReady === false && <p className="composer-hint">当前模型不可用，请在设置的「模型连接」中配置或测试连接。</p>}
       {summary && <Select label="摘要资料" value={materialId} onValueChange={setMaterialId} options={ready.map(({ id, title }) => ({ value: id, label: title }))} placeholder="选择已就绪资料" />}
       <div className="composer-field">
         <FadingTextarea

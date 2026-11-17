@@ -64,7 +64,7 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
             expected = {
                 table.name for table in Base.metadata.tables.values() if table.schema == "study"
             }
-            assert len(expected) == 41
+            assert len(expected) == 43
 
             def check(upgraded: bool) -> None:
                 with engine.connect() as connection:
@@ -100,12 +100,33 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
                     for kb in libraries:
                         connection.execute(sa.text("""INSERT INTO study.ai_workflow_runs(owner_user_id, conversation_id, knowledge_base_id, status)
                             VALUES (:owner, :conversation, :kb, 'completed')"""), {"owner": owner, "conversation": conversation, "kb": kb})
+            command.upgrade(config, "0009_model_call_records")
+            with engine.begin() as connection:
+                material = connection.execute(sa.insert(models.Material).values(
+                    owner_user_id=owner, knowledge_base_id=kb_ids[0], title="Legacy", kind="other", status="active"
+                ).returning(models.Material.id)).scalar_one()
+                version = connection.execute(sa.insert(models.MaterialVersion).values(
+                    material_id=material, version_no=1, is_current=True, source_mime="text/plain",
+                    source_sha256="a" * 64, byte_size=1, object_key="legacy", parse_status="ready"
+                ).returning(models.MaterialVersion.id)).scalar_one()
+                old_index = connection.execute(sa.insert(models.IndexVersion).values(
+                    material_version_id=version, generation=1, pipeline_profile="legacy",
+                    embedding_profile="legacy-embedding:1024", status="ready", is_active=True, ready_at=sa.func.now()
+                ).returning(models.IndexVersion.id)).scalar_one()
             command.upgrade(config, "head")
             with engine.connect() as connection:
+                bindings = connection.execute(sa.text("SELECT id, embedding_connection_id, embedding_binding FROM study.knowledge_bases")).all()
+                assert all(row[1] is None and row[2]["dimensions"] == 1024 for row in bindings)
+                assert next(row[2] for row in bindings if row[0] == kb_ids[0])["profile"] == "legacy-embedding:1024"
+                assert next(row[2] for row in bindings if row[0] == kb_ids[0])["model"] == "legacy-embedding"
+                assert connection.scalar(sa.text("SELECT is_active FROM study.index_versions WHERE id=:id"), {"id": old_index})
                 for conversation, expected_project in zip(conversations, [kb_ids[0], None, None, None], strict=True):
                     assert connection.scalar(sa.text("SELECT project_knowledge_base_id FROM study.conversations WHERE id=:id"), {"id": conversation}) == expected_project
             check(True)
             with engine.begin() as connection:
+                connection.execute(sa.delete(models.IndexVersion).where(models.IndexVersion.id == old_index))
+                connection.execute(sa.delete(models.MaterialVersion).where(models.MaterialVersion.id == version))
+                connection.execute(sa.delete(models.Material).where(models.Material.id == material))
                 for table in ("ai_workflow_runs", "conversations", "knowledge_bases"):
                     connection.execute(sa.text(f"DELETE FROM study.{table} WHERE owner_user_id=:owner"), {"owner": owner})
                 connection.execute(sa.text("DELETE FROM study.users WHERE id=:owner"), {"owner": owner})

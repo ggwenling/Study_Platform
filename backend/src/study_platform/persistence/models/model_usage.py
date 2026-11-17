@@ -11,7 +11,7 @@ class ModelCallRecord(Base):
     __table_args__ = (
         sa.CheckConstraint(
             "purpose IN ('chat', 'learning_quiz', 'learning_grade', 'query_rewrite', "
-            "'embedding', 'classification')",
+            "'embedding', 'classification', 'connection_test')",
             name="ck_model_call_records_purpose_values",
         ),
         sa.CheckConstraint("elapsed_ms IS NULL OR elapsed_ms >= 0", name="ck_model_call_records_elapsed"),
@@ -39,6 +39,7 @@ class ModelCallRecord(Base):
         server_default=sa.text("gen_random_uuid()"),
     )
     owner_user_id = sa.Column("owner_user_id", postgresql.UUID(as_uuid=True), nullable=False)
+    connection_source = sa.Column(sa.String(200), nullable=False, server_default="platform")
     purpose = sa.Column("purpose", sa.String(32), nullable=False)
     model_name = sa.Column("model_name", sa.String(120), nullable=False)
     used_fallback = sa.Column("used_fallback", sa.Boolean(), nullable=False, server_default=sa.text("false"))

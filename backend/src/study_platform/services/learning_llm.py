@@ -263,6 +263,10 @@ def grade_with_llm(
         try:
             last_raw = call(GRADE_SYSTEM, user, retry_hint=retry)
         except ApiError:
+            from study_platform.services.model_connections import selection
+            current = selection.get()
+            if current and current.get("llm", {}).get("id"):
+                raise
             logger.warning("learning grade LLM unavailable")
             return None
         except Exception:

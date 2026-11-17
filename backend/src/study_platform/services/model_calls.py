@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 
 from langchain_core.messages import BaseMessage
@@ -12,6 +13,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError
 
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
+from study_platform.services.model_connections import resolved
 from study_platform.services.model_usage import ModelUsageContext, record_model_call
 from study_platform.services.models import build_chat_model, provider_error
 
@@ -60,6 +62,12 @@ def invoke_chat(
     temperature: float | None = None,
 ) -> Any:
     settings = get_settings()
+    connection = resolved(context.owner_user_id, "llm") if context else {"source": "platform"}
+    personal = bool(connection.get("id"))
+    if context:
+        context = replace(context, connection_source=connection["source"])
+    if personal:
+        settings = settings.model_copy(update={"chat_model": connection["model"], "chat_fallback_model": ""})
     started = time.monotonic()
     model_name = settings.chat_model
     used_fallback = False
@@ -74,17 +82,17 @@ def invoke_chat(
             usage=usage,
         )
 
+    client = None
     try:
-        response = build_chat_model(timeout=timeout, max_tokens=max_tokens, temperature=temperature).invoke(
-            messages
-        )
+        client = build_chat_model(**({"connection": connection} if personal else {}), timeout=timeout, max_tokens=max_tokens, temperature=temperature)
+        response = client.invoke(messages)
         finalize(True, _usage_from_response(response))
         return response
     except ApiError:
         finalize(False, None)
         raise
     except Exception as primary_exc:
-        if not fallback_configured(settings) or not should_use_fallback(primary_exc):
+        if personal or not fallback_configured(settings) or not should_use_fallback(primary_exc):
             finalize(False, None)
             raise provider_error(primary_exc) from None
         used_fallback = True
@@ -103,6 +111,10 @@ def invoke_chat(
             finalize(False, None)
             raise provider_error(fallback_exc) from None
 
+    finally:
+        if personal and client is not None:
+            client.root_client.close()
+
 
 async def ainvoke_chat(
     messages: list[BaseMessage],
@@ -113,6 +125,12 @@ async def ainvoke_chat(
     temperature: float | None = None,
 ) -> Any:
     settings = get_settings()
+    connection = resolved(context.owner_user_id, "llm") if context else {"source": "platform"}
+    personal = bool(connection.get("id"))
+    if context:
+        context = replace(context, connection_source=connection["source"])
+    if personal:
+        settings = settings.model_copy(update={"chat_model": connection["model"], "chat_fallback_model": ""})
     started = time.monotonic()
     model_name = settings.chat_model
     used_fallback = False
@@ -127,17 +145,20 @@ async def ainvoke_chat(
             usage=usage,
         )
 
+    client = None
     try:
-        response = await build_chat_model(
+        client = build_chat_model(
+            **({"connection": connection} if personal else {}),
             timeout=timeout, max_tokens=max_tokens, temperature=temperature
-        ).ainvoke(messages)
+        )
+        response = await client.ainvoke(messages)
         finalize(True, _usage_from_response(response))
         return response
     except ApiError:
         finalize(False, None)
         raise
     except Exception as primary_exc:
-        if not fallback_configured(settings) or not should_use_fallback(primary_exc):
+        if personal or not fallback_configured(settings) or not should_use_fallback(primary_exc):
             finalize(False, None)
             raise provider_error(primary_exc) from None
         used_fallback = True
@@ -155,6 +176,11 @@ async def ainvoke_chat(
         except Exception as fallback_exc:
             finalize(False, None)
             raise provider_error(fallback_exc) from None
+
+    finally:
+        if personal and client is not None:
+            client.root_client.close()
+            await client.root_async_client.close()
 
 
 def chat_model(
@@ -178,6 +204,12 @@ async def astream_chat(
 ) -> AsyncIterator[Any]:
     """Stream chat output; switch to fallback only if no chunk was yielded yet."""
     settings = get_settings()
+    connection = resolved(context.owner_user_id, "llm") if context else {"source": "platform"}
+    personal = bool(connection.get("id"))
+    if context:
+        context = replace(context, connection_source=connection["source"])
+    if personal:
+        settings = settings.model_copy(update={"chat_model": connection["model"], "chat_fallback_model": ""})
     started = time.monotonic()
     model_name = settings.chat_model
     used_fallback = False
@@ -197,10 +229,13 @@ async def astream_chat(
     async def pump(use_fb: bool) -> AsyncIterator[Any]:
         nonlocal usage, success
         emitted = False
+        client = None
         try:
-            async for chunk in build_chat_model(
+            client = build_chat_model(
+                **({"connection": connection} if personal else {}),
                 use_fallback=use_fb, timeout=timeout, max_tokens=max_tokens, temperature=temperature
-            ).astream(messages):
+            )
+            async for chunk in client.astream(messages):
                 emitted = True
                 chunk_usage = _usage_from_chunk(chunk)
                 if chunk_usage:
@@ -212,6 +247,10 @@ async def astream_chat(
                 success = False
                 raise
             raise
+        finally:
+            if personal and client is not None:
+                client.root_client.close()
+                await client.root_async_client.close()
 
     emitted_any = False
     try:
@@ -225,7 +264,7 @@ async def astream_chat(
             if emitted_any:
                 success = False
                 raise provider_error(primary_exc) from None
-            if not fallback_configured(settings) or not should_use_fallback(primary_exc):
+            if personal or not fallback_configured(settings) or not should_use_fallback(primary_exc):
                 raise provider_error(primary_exc) from None
             used_fallback = True
             model_name = settings.chat_fallback_model

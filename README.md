@@ -328,6 +328,7 @@ Study_Platform/
 | 文档 | 说明 |
 | --- | --- |
 | [API 接入说明](docs/api-integration.md) | 认证、资料流、SSE 聊天、学习相关 HTTP |
+| [用户模型连接](docs/model-connections.md) | 加密密钥、网络放行、默认模型与知识库绑定 |
 | [本地运行说明](docs/local-runtime.md) | Windows 启停、worker 恢复、DOCX 定位修复 |
 | [产品定位与路线图](docs/product/product-positioning-and-roadmap.md) | 产品边界与阶段验收 |
 | [首页需求](docs/product/homepage-requirements.md) | 聊天与资料 UI 行为 |

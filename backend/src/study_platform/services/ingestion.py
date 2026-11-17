@@ -4,6 +4,7 @@ import hashlib
 import shutil
 import socket
 import zipfile
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -24,7 +25,7 @@ from study_platform.persistence.models.materials import (
     MaterialVersion,
 )
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
-from study_platform.services import classification
+from study_platform.services import classification, model_connections
 from study_platform.services.lexical import lexical_column_values
 from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.models import embed_texts
@@ -316,192 +317,201 @@ def run_once():
         if not claim_result:
             return False
         job_id, version_id, fence, attempt_no = claim_result
-        staging = version_dir(version_id) / f"attempt-{job_id}-{fence}"
-        index_id = None
-        is_ingestion = db.get(AiJob, job_id).job_type == "ingest"
-        try:
-            if not is_ingestion:
-                job = locked_job(db, job_id, fence)
-                payload = classification.suggestion_input(db, job)
-                owner_id = job.owner_user_id
+        job = db.get(AiJob, job_id)
+        version = db.get(MaterialVersion, version_id)
+        material = db.get(Material, version.material_id)
+        owner = job.owner_user_id
+        with ExitStack() as task_scope:
+            staging = version_dir(version_id) / f"attempt-{job_id}-{fence}"
+            index_id = None
+            is_ingestion = db.get(AiJob, job_id).job_type == "ingest"
+            try:
+                embedding = (job.payload.get("embedding_connection") or model_connections.library_snapshot(db, owner, material.knowledge_base_id)) if is_ingestion else None
+                llm = job.payload.get("llm_connection", {"id": None, "kind": "llm"})
                 db.commit()
-                result = classification.suggest(payload, owner_user_id=owner_id)
+                task_scope.enter_context(model_connections.task(owner, llm=llm, embedding=embedding))
+                if not is_ingestion:
+                    job = locked_job(db, job_id, fence)
+                    payload = classification.suggestion_input(db, job)
+                    owner_id = job.owner_user_id
+                    db.commit()
+                    result = classification.suggest(payload, owner_user_id=owner_id)
+                    job = locked_job(db, job_id, fence)
+                    active = classification.active_index(db, db.get(MaterialVersion, version_id).material_id)
+                    if active is None or str(active.id) != job.payload["index_id"]:
+                        raise ApiError(409, "index_changed", "资料索引已更新。")
+                    job.result = {"suggestion": result}
+                    job.status = "succeeded"
+                    job.progress = 100
+                    job.finished_at = now()
+                    attempt = db.scalar(select(AiJobAttempt).where(
+                        AiJobAttempt.job_id == job_id, AiJobAttempt.attempt_no == attempt_no))
+                    attempt.outcome = "success"
+                    attempt.finished_at = now()
+                    db.commit()
+                    return True
+                staging.mkdir(exist_ok=True)
+                locked_job(db, job_id, fence)
+                version = db.get(MaterialVersion, version_id)
+                if version.parse_status != "ready":
+                    version.parse_status = "processing"
+                db.commit()
+                extracted = list(
+                    extract(version, staging, lambda phase: update_phase(db, job_id, fence, phase))
+                )
+                page_count = version.page_count
+                if not extracted:
+                    raise ApiError(422, "no_text_extracted", "未提取到可用文字")
+                update_phase(db, job_id, fence, "indexing", parsed=True,
+                             ocr_count=sum(bool(locator.get("ocr")) for _, locator in extracted))
+                profile = model_connections.embedding_profile(owner)
+                locked_job(db, job_id, fence)
+                generation = (
+                    db.scalar(
+                        select(sa.func.max(IndexVersion.generation)).where(
+                            IndexVersion.material_version_id == version_id
+                        )
+                    )
+                    or 0
+                ) + 1
+                index = IndexVersion(
+                    id=uuid4(),
+                    material_version_id=version_id,
+                    generation=generation,
+                    pipeline_profile="document-v1",
+                    embedding_profile=profile,
+                    embedding_dim=1024,
+                    status="building",
+                    is_active=False,
+                    chunk_count=0,
+                )
+                db.add(index)
+                db.commit()
+                index_id = index.id
+                chunk_rows = [
+                    (part, locator, ordinal)
+                    for ordinal, (text, locator) in enumerate(extracted)
+                    for part in chunks(text)
+                ]
+                vectors = []
+                for offset in range(0, len(chunk_rows), 20):
+                    owner_id = update_phase(db, job_id, fence, "indexing",
+                                            chunk_count=len(chunk_rows), embedded_count=len(vectors))
+                    batch = chunk_rows[offset : offset + 20]
+                    result = embed_texts(
+                        [row[0] for row in batch],
+                        context=ModelUsageContext(owner_id, "embedding"),
+                    )
+                    if len(result) != len(batch) or any(len(v) != 1024 for v in result):
+                        raise ApiError(502, "embedding_invalid", "向量模型返回维度或内容不正确")
+                    vectors.extend(result)
                 job = locked_job(db, job_id, fence)
-                active = classification.active_index(db, db.get(MaterialVersion, version_id).material_id)
-                if active is None or str(active.id) != job.payload["index_id"]:
-                    raise ApiError(409, "index_changed", "资料索引已更新。")
-                job.result = {"suggestion": result}
+                version = db.get(MaterialVersion, version_id)
+                index = db.get(IndexVersion, index_id)
+                sections = []
+                for ordinal, (text, locator) in enumerate(extracted):
+                    section = MaterialSection(
+                        id=uuid4(),
+                        material_version_id=version_id,
+                        ordinal=ordinal,
+                        level=1,
+                        text=text,
+                        locator=locator,
+                    )
+                    db.add(section)
+                    sections.append(section)
+                db.flush()
+                for ordinal, ((text, locator, section_no), vector) in enumerate(
+                    zip(chunk_rows, vectors, strict=True)
+                ):
+                    chunk = MaterialChunk(
+                        id=uuid4(),
+                        index_version_id=index.id,
+                        material_version_id=version_id,
+                        section_id=sections[section_no].id,
+                        ordinal=ordinal,
+                        text=text,
+                        text_sha256=hashlib.sha256(text.encode()).hexdigest(),
+                        locator=locator,
+                        **lexical_column_values(text),
+                    )
+                    db.add(chunk)
+                    db.flush()
+                    db.add(
+                        ChunkEmbedding(chunk_id=chunk.id, model_profile_id=profile, embedding=vector)
+                    )
+                db.execute(
+                    sa.update(IndexVersion)
+                    .where(
+                        IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True)
+                    )
+                    .values(is_active=False, status="retired")
+                )
+                index.status = "ready"
+                index.is_active = True
+                index.ready_at = now()
+                index.chunk_count = len(chunk_rows)
+                version.page_count = page_count
+                version.parse_status = "ready"
+                version.parser_profile = "document-v1"
+                version.failure_code = None
                 job.status = "succeeded"
                 job.progress = 100
+                job.result = {**job.result, "phase": "ready", "embedded_count": len(vectors)}
+                classification.enqueue(db, job.owner_user_id, index)
                 job.finished_at = now()
-                attempt = db.scalar(select(AiJobAttempt).where(
-                    AiJobAttempt.job_id == job_id, AiJobAttempt.attempt_no == attempt_no))
-                attempt.outcome = "success"
-                attempt.finished_at = now()
-                db.commit()
-                return True
-            staging.mkdir(exist_ok=True)
-            locked_job(db, job_id, fence)
-            version = db.get(MaterialVersion, version_id)
-            if version.parse_status != "ready":
-                version.parse_status = "processing"
-            db.commit()
-            extracted = list(
-                extract(version, staging, lambda phase: update_phase(db, job_id, fence, phase))
-            )
-            page_count = version.page_count
-            if not extracted:
-                raise ApiError(422, "no_text_extracted", "未提取到可用文字")
-            update_phase(db, job_id, fence, "indexing", parsed=True,
-                         ocr_count=sum(bool(locator.get("ocr")) for _, locator in extracted))
-            profile = f"{get_settings().embedding_model}:{get_settings().embedding_dimensions}"
-            locked_job(db, job_id, fence)
-            generation = (
-                db.scalar(
-                    select(sa.func.max(IndexVersion.generation)).where(
-                        IndexVersion.material_version_id == version_id
-                    )
-                )
-                or 0
-            ) + 1
-            index = IndexVersion(
-                id=uuid4(),
-                material_version_id=version_id,
-                generation=generation,
-                pipeline_profile="document-v1",
-                embedding_profile=profile,
-                embedding_dim=1024,
-                status="building",
-                is_active=False,
-                chunk_count=0,
-            )
-            db.add(index)
-            db.commit()
-            index_id = index.id
-            chunk_rows = [
-                (part, locator, ordinal)
-                for ordinal, (text, locator) in enumerate(extracted)
-                for part in chunks(text)
-            ]
-            vectors = []
-            for offset in range(0, len(chunk_rows), 20):
-                owner_id = update_phase(db, job_id, fence, "indexing",
-                                        chunk_count=len(chunk_rows), embedded_count=len(vectors))
-                batch = chunk_rows[offset : offset + 20]
-                result = embed_texts(
-                    [row[0] for row in batch],
-                    context=ModelUsageContext(owner_id, "embedding"),
-                )
-                if len(result) != len(batch) or any(len(v) != 1024 for v in result):
-                    raise ApiError(502, "embedding_invalid", "向量模型返回维度或内容不正确")
-                vectors.extend(result)
-            job = locked_job(db, job_id, fence)
-            version = db.get(MaterialVersion, version_id)
-            index = db.get(IndexVersion, index_id)
-            sections = []
-            for ordinal, (text, locator) in enumerate(extracted):
-                section = MaterialSection(
-                    id=uuid4(),
-                    material_version_id=version_id,
-                    ordinal=ordinal,
-                    level=1,
-                    text=text,
-                    locator=locator,
-                )
-                db.add(section)
-                sections.append(section)
-            db.flush()
-            for ordinal, ((text, locator, section_no), vector) in enumerate(
-                zip(chunk_rows, vectors, strict=True)
-            ):
-                chunk = MaterialChunk(
-                    id=uuid4(),
-                    index_version_id=index.id,
-                    material_version_id=version_id,
-                    section_id=sections[section_no].id,
-                    ordinal=ordinal,
-                    text=text,
-                    text_sha256=hashlib.sha256(text.encode()).hexdigest(),
-                    locator=locator,
-                    **lexical_column_values(text),
-                )
-                db.add(chunk)
-                db.flush()
-                db.add(
-                    ChunkEmbedding(chunk_id=chunk.id, model_profile_id=profile, embedding=vector)
-                )
-            db.execute(
-                sa.update(IndexVersion)
-                .where(
-                    IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True)
-                )
-                .values(is_active=False, status="retired")
-            )
-            index.status = "ready"
-            index.is_active = True
-            index.ready_at = now()
-            index.chunk_count = len(chunk_rows)
-            version.page_count = page_count
-            version.parse_status = "ready"
-            version.parser_profile = "document-v1"
-            version.failure_code = None
-            job.status = "succeeded"
-            job.progress = 100
-            job.result = {**job.result, "phase": "ready", "embedded_count": len(vectors)}
-            classification.enqueue(db, job.owner_user_id, index)
-            job.finished_at = now()
-            attempt = db.scalar(
-                select(AiJobAttempt).where(
-                    AiJobAttempt.job_id == job_id, AiJobAttempt.attempt_no == attempt_no
-                )
-            )
-            attempt.outcome = "success"
-            attempt.finished_at = now()
-            # Copy page previews before publication while the job row is locked.
-            for image in staging.glob("page-*.png"):
-                shutil.copyfile(image, version_dir(version_id) / image.name)
-            db.commit()
-        except LostLease:
-            db.rollback()
-        except Exception as exc:
-            db.rollback()
-            try:
-                job = locked_job(db, job_id, fence)
-                retryable = (isinstance(exc, ApiError) and exc.retryable) or (
-                    isinstance(exc, DBAPIError) and connection_failure(exc)
-                )
-                if isinstance(exc, ApiError):
-                    code = exc.code
-                elif isinstance(exc, DBAPIError):
-                    code = "database_unavailable" if retryable else "database_error"
-                elif isinstance(exc, OSError):
-                    code = "storage_unavailable"
-                else:
-                    code = "ingestion_failed" if is_ingestion else "classification_failed"
-                job.failure_code = str(code)[:64]
-                job.status = "queued" if retryable and attempt_no < job.max_attempts else "failed"
-                job.next_run_at = now() + timedelta(seconds=5)
-                job.finished_at = now() if job.status == "failed" else None
-                version = db.get(MaterialVersion, version_id)
-                if is_ingestion and version.parse_status != "ready":
-                    version.parse_status = "failed" if job.status == "failed" else "pending"
-                    version.failure_code = job.failure_code
-                if index_id:
-                    index = db.get(IndexVersion, index_id)
-                    index.status = "failed"
-                    index.failure_code = job.failure_code
                 attempt = db.scalar(
                     select(AiJobAttempt).where(
                         AiJobAttempt.job_id == job_id, AiJobAttempt.attempt_no == attempt_no
                     )
                 )
-                attempt.outcome = "retry" if job.status == "queued" else "failed"
-                attempt.failure_code = job.failure_code
+                attempt.outcome = "success"
                 attempt.finished_at = now()
+                # Copy page previews before publication while the job row is locked.
+                for image in staging.glob("page-*.png"):
+                    shutil.copyfile(image, version_dir(version_id) / image.name)
                 db.commit()
             except LostLease:
                 db.rollback()
-        finally:
-            if is_ingestion:
-                shutil.rmtree(staging, ignore_errors=True)
+            except Exception as exc:
+                db.rollback()
+                try:
+                    job = locked_job(db, job_id, fence)
+                    retryable = (isinstance(exc, ApiError) and exc.retryable) or (
+                        isinstance(exc, DBAPIError) and connection_failure(exc)
+                    )
+                    if isinstance(exc, ApiError):
+                        code = exc.code
+                    elif isinstance(exc, DBAPIError):
+                        code = "database_unavailable" if retryable else "database_error"
+                    elif isinstance(exc, OSError):
+                        code = "storage_unavailable"
+                    else:
+                        code = "ingestion_failed" if is_ingestion else "classification_failed"
+                    job.failure_code = str(code)[:64]
+                    job.status = "queued" if retryable and attempt_no < job.max_attempts else "failed"
+                    job.next_run_at = now() + timedelta(seconds=5)
+                    job.finished_at = now() if job.status == "failed" else None
+                    version = db.get(MaterialVersion, version_id)
+                    if is_ingestion and version.parse_status != "ready":
+                        version.parse_status = "failed" if job.status == "failed" else "pending"
+                        version.failure_code = job.failure_code
+                    if index_id:
+                        index = db.get(IndexVersion, index_id)
+                        index.status = "failed"
+                        index.failure_code = job.failure_code
+                    attempt = db.scalar(
+                        select(AiJobAttempt).where(
+                            AiJobAttempt.job_id == job_id, AiJobAttempt.attempt_no == attempt_no
+                        )
+                    )
+                    attempt.outcome = "retry" if job.status == "queued" else "failed"
+                    attempt.failure_code = job.failure_code
+                    attempt.finished_at = now()
+                    db.commit()
+                except LostLease:
+                    db.rollback()
+            finally:
+                if is_ingestion:
+                    shutil.rmtree(staging, ignore_errors=True)
     return True

@@ -50,6 +50,8 @@ class KnowledgeBaseDTO(BaseModel):
     description: str | None
     created_at: datetime
     updated_at: datetime
+    embedding_connection_id: UUID | None = None
+    embedding_binding: dict | None = None
 
 
 class KnowledgeBasePage(BaseModel):
@@ -124,7 +126,8 @@ class MessagePage(BaseModel):
 
 
 def kb_dto(kb):
-    return {k: getattr(kb, k) for k in ("id", "name", "description", "created_at", "updated_at")}
+    return {k: getattr(kb, k) for k in ("id", "name", "description", "created_at", "updated_at",
+                                      "embedding_connection_id", "embedding_binding")}
 
 
 def conversation_dto(row):
@@ -187,7 +190,10 @@ def list_knowledge_bases(
 def create_knowledge_base(
     body: NameBody, db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
-    row = KnowledgeBase(owner_user_id=user.id, name=body.name, description=body.description)
+    from study_platform.services.model_connections import bind_library
+    connection_id, binding = bind_library(db, user.id)
+    row = KnowledgeBase(owner_user_id=user.id, name=body.name, description=body.description,
+                        embedding_connection_id=connection_id, embedding_binding=binding)
     db.add(row)
     db.commit()
     return kb_dto(row)
@@ -453,6 +459,7 @@ def search(
 
 class CapabilitiesDTO(BaseModel):
     rag: bool
+    library_rag: dict[str, bool] = Field(default_factory=dict)
     ocr: bool
     answer_modes: list[str]
     upload_mime_types: list[str]
@@ -460,15 +467,26 @@ class CapabilitiesDTO(BaseModel):
 
 
 @router.get("/capabilities", response_model=CapabilitiesDTO)
-def capabilities(user=Depends(get_current_user)):
+def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
     from study_platform.api.v1.materials import MIMES
-
+    from study_platform.persistence.models import ModelConnection
+    from study_platform.services.model_connections import default_snapshot
     settings = get_settings()
+    available = {}
+    for kind, platform_key in (("llm", settings.deepseek_api_key), ("embedding", settings.embedding_api_key)):
+        try:
+            personal = default_snapshot(db, user.id, kind)
+            available[kind] = bool(personal.get("id") or platform_key.get_secret_value())
+        except ApiError:
+            available[kind] = False
+    libraries = db.execute(sa.select(KnowledgeBase.id, KnowledgeBase.embedding_connection_id, ModelConnection.status)
+        .outerjoin(ModelConnection, ModelConnection.id == KnowledgeBase.embedding_connection_id)
+        .where(KnowledgeBase.owner_user_id == user.id, KnowledgeBase.deleted_at.is_(None))).all()
+    library_rag = {str(kb): available["llm"] and (status == "ready" if connection else bool(settings.embedding_api_key.get_secret_value()))
+                   for kb, connection, status in libraries}
     return {
-        "rag": bool(
-            settings.deepseek_api_key.get_secret_value()
-            and settings.embedding_api_key.get_secret_value()
-        ),
+        "rag": available["llm"] and (available["embedding"] or any(library_rag.values())),
+        "library_rag": library_rag,
         "ocr": True,
         "answer_modes": ["knowledge_only", "with_general"],
         "upload_mime_types": sorted(set(MIMES.values())),

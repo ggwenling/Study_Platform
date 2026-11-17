@@ -15,15 +15,15 @@ export type ChatEvent =
   | ({ type: 'error' } & ApiErrorBody)
   | { type: 'stopped'; turn_id: string; message?: Message }
 export interface UploadResult { material_id: string; version_id: string; job_id: string; status: string }
-export interface KnowledgeBase { id: string; name: string; description: string | null; created_at: string; updated_at: string }
+export interface KnowledgeBase { id: string; name: string; description: string | null; created_at: string; updated_at: string; embedding_connection_id?: string | null; embedding_binding?: { model: string; base_url: string; dimensions: number } | null }
 export interface KnowledgeBaseInput { name: string; description?: string | null }
 export interface Conversation { id: string; project_knowledge_base_id: string | null; title: string | null; created_at: string; updated_at: string }
 export interface SearchItem { id: string; type: 'knowledge_base' | 'material' | 'conversation'; title: string; knowledge_base_id: string | null }
 export interface Dashboard { knowledge_base_count: number; material_count: number; conversation_count: number; completed_qa_count: number; activity: { date: string; count: number }[] }
-export interface Capabilities { rag: boolean; ocr: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
-export interface ModelUsageBucket { key: string; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }
+export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
+export interface ModelUsageBucket { key: string; label?: string | null; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }
 export interface ModelUsageTotals { calls: number; successes: number; failures: number; fallback_calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }
-export interface ModelUsageSummary { days: number; since: string; totals: ModelUsageTotals; by_day: ModelUsageBucket[]; by_purpose: ModelUsageBucket[]; by_model: ModelUsageBucket[] }
+export interface ModelUsageSummary { days: number; since: string; totals: ModelUsageTotals; by_day: ModelUsageBucket[]; by_purpose: ModelUsageBucket[]; by_model: ModelUsageBucket[]; by_connection: ModelUsageBucket[] }
 export interface Turn { turn_id: string; conversation_id: string; status: string; scope: Scope; messages: Message[]; error_code: string | null }
 
 export interface LearningItem {
@@ -89,3 +89,16 @@ export interface ClassificationState extends Classification {
   ready: boolean; suggestion_id: string | null; status: string; suggestion: Classification | null
 }
 export interface ClassificationDecision extends Classification { suggestion_id: string; ignore?: boolean }
+export interface ModelConnection {
+  id: string; name: string; kind: 'llm' | 'embedding'; base_url: string; model: string;
+  dimensions: number | null; key_configured: boolean; key_suffix: string; revision: number;
+  status: 'draft' | 'testing' | 'ready' | 'failed'; is_default: boolean;
+  tested_at: string | null; error_code: string | null; libraries: { id: string; name: string }[]
+}
+export interface ModelConnections {
+  items: ModelConnection[]; encryption_available: boolean;
+  platform_llm: string | null; platform_embedding: string | null
+}
+export interface ModelConnectionInput {
+  name: string; kind: 'llm' | 'embedding'; base_url: string; model: string; api_key?: string
+}

@@ -34,5 +34,7 @@ class KnowledgeBase(Base):
         server_default=sa.text("now()"),
         onupdate=sa.func.now(),
     )
+    embedding_connection_id = sa.Column(postgresql.UUID(as_uuid=True), sa.ForeignKey("study.model_connections.id", ondelete="RESTRICT"), nullable=True)
+    embedding_binding = sa.Column(postgresql.JSONB(), nullable=True)
     last_synced_at = sa.Column(sa.DateTime(timezone=True), nullable=True)
     deleted_at = sa.Column(sa.DateTime(timezone=True), nullable=True)
