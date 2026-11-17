@@ -65,10 +65,36 @@ function clearSession() {
   refreshing = null
 }
 
+async function currentCsrf() {
+  const result = await request<{ csrf_token: string }>('/auth/csrf', json('POST'), 'cookie')
+  csrfMemory = result.csrf_token
+}
+
+async function refreshWithCsrf() {
+  if (!csrfToken()) await currentCsrf()
+  try {
+    return await request<AuthResponse>('/auth/refresh', json('POST'), 'cookie')
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 401 && error.status !== 403) throw error
+    await currentCsrf()
+    return request<AuthResponse>('/auth/refresh', json('POST'), 'cookie')
+  }
+}
+
+async function serializeCookieOperation<T>(action: () => Promise<T>): Promise<T> {
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    return navigator.locks.request('knowloop-session', async () => {
+      await currentCsrf()
+      return action()
+    })
+  }
+  return action()
+}
+
 function refresh() {
   const version = sessionVersion
   if (!refreshing) {
-    refreshing = request<AuthResponse>('/auth/refresh', json('POST'), 'cookie').then((result) => {
+    refreshing = serializeCookieOperation(refreshWithCsrf).then((result) => {
       if (version !== sessionVersion || (session && session.user.id !== result.user.id)) {
         throw new ApiError({ code: 'unauthenticated', message: '请重新登录', retryable: false }, 401)
       }
@@ -113,7 +139,25 @@ export const api = {
     await request<void>('/auth/password/reset', json('POST', { token, password }), 'public')
     clearSession()
   },
-  logout: async () => { await request<void>('/auth/logout', json('POST'), 'cookie'); clearSession() },
+  logout: async () => {
+    try {
+      await serializeCookieOperation(() => request<void>('/auth/logout', json('POST'), 'cookie'))
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error
+      if (error.status === 401) {
+        clearSession()
+        return
+      }
+      if (error.status !== 403 || error.code !== 'csrf_invalid') throw error
+      try {
+        await currentCsrf()
+        await request<void>('/auth/logout', json('POST'), 'cookie')
+      } catch (retryError) {
+        if (!(retryError instanceof ApiError) || retryError.status !== 401) throw retryError
+      }
+    }
+    clearSession()
+  },
   knowledgeBases: (cursor?: string) => request<Page<KnowledgeBase>>('/knowledge-bases' + query({ cursor })),
   knowledgeBase: (id: string) => request<KnowledgeBase>(`/knowledge-bases/${pathId(id)}`),
   createKnowledgeBase: (body: KnowledgeBaseInput) => request<KnowledgeBase>('/knowledge-bases', json('POST', body)),

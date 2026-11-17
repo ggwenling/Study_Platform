@@ -7,7 +7,7 @@ import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -50,7 +50,7 @@ def _reference_from_answer_key(answer_key) -> str:
 def _answer_storage_path(response_id: UUID) -> Path:
     base = Path(get_settings().storage_dir).resolve() / "learning-answers" / str(response_id)
     base.mkdir(parents=True, exist_ok=True)
-    return base / "answer.png"
+    return base / f"{uuid4().hex}.image"
 
 
 def generate_learning_quiz(
@@ -278,41 +278,49 @@ def submit_image_answer(
             .where(
                 QuizResponse.id == response_id,
                 QuizAttempt.owner_user_id == owner_user_id,
-            )
+            ).with_for_update(of=QuizResponse)
         )
         .scalars()
         .first()
     )
     if row is None:
         raise ApiError(404, "response_not_found", "作答记录不存在")
+    previous = row.answer.get("storage_key") if isinstance(row.answer, dict) else None
+    previous_dir = (Path(get_settings().storage_dir).resolve() / "learning-answers" / str(row.id)).resolve()
+    previous_path = (Path(get_settings().storage_dir).resolve() / previous).resolve() if isinstance(previous, str) else None
+    row._previous_image_path = previous_path if previous_path and previous_path.parent == previous_dir else None
     item = db.get(QuizItem, row.quiz_item_id)
     if item is None:
         raise ApiError(404, "item_not_found", "题目不存在")
-    path = _answer_storage_path(row.id)
-    path.write_bytes(image_bytes)
     ocr_text, ocr_conf = ocr_answer_bytes(image_bytes)
     reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
     verdict, conf, feedback, grader_profile = grade_text_answer(
         ocr_text, reference, ocr_conf, stem=item.stem, owner_user_id=owner_user_id
     )
-    row.answer = {
-        "type": "image",
-        "storage_key": str(path.relative_to(Path(get_settings().storage_dir).resolve())),
-        "ocr_text": ocr_text,
-        "ocr_confidence": ocr_conf,
-    }
-    row.reference_answer_effective = reference
-    row.confidence = Decimal(str(round(conf, 4)))
-    row.verdict = verdict
-    row.verdict_source = "auto"
-    row.is_correct = True if verdict == "correct" else False if verdict == "incorrect" else None
-    row.feedback = feedback
-    row.grader_profile = grader_profile
-    row.graded_at = datetime.now(UTC)
-    db.flush()
-    _sync_wrong_book(db, owner_user_id, item.id, row)
-    db.flush()
-    db.refresh(row)
+    path = _answer_storage_path(row.id)
+    try:
+        path.write_bytes(image_bytes)
+        row.answer = {
+            "type": "image",
+            "storage_key": str(path.relative_to(Path(get_settings().storage_dir).resolve())),
+            "ocr_text": ocr_text,
+            "ocr_confidence": ocr_conf,
+        }
+        row.reference_answer_effective = reference
+        row.confidence = Decimal(str(round(conf, 4)))
+        row.verdict = verdict
+        row.verdict_source = "auto"
+        row.is_correct = True if verdict == "correct" else False if verdict == "incorrect" else None
+        row.feedback = feedback
+        row.grader_profile = grader_profile
+        row.graded_at = datetime.now(UTC)
+        db.flush()
+        _sync_wrong_book(db, owner_user_id, item.id, row)
+        db.flush()
+        db.refresh(row)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
     return row
 
 

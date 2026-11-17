@@ -1,5 +1,6 @@
 """Learning entry: generate quiz, image answers, verdict overrides, wrong book."""
 
+from pathlib import Path
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -77,7 +78,7 @@ def get_attempt(
 
 
 @router.post("/responses/{response_id}/answer-image")
-async def answer_image(
+def answer_image(
     response_id: UUID,
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
@@ -85,11 +86,23 @@ async def answer_image(
 ):
     if file.content_type not in _ALLOWED_IMAGE:
         raise ApiError(422, "invalid_type", "请上传 PNG 或 JPEG 图片")
-    payload = await file.read()
+    payload = file.file.read(get_settings().max_upload_bytes + 1)
     if len(payload) > get_settings().max_upload_bytes:
         raise ApiError(413, "too_large", "图片过大")
     row = learning.submit_image_answer(db, owner_user_id=user.id, response_id=response_id, image_bytes=payload)
-    db.commit()
+    path = Path(get_settings().storage_dir).resolve() / row.answer["storage_key"]
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        path.unlink(missing_ok=True)
+        raise
+    previous = getattr(row, "_previous_image_path", None)
+    if previous and previous != path:
+        try:
+            previous.unlink(missing_ok=True)
+        except OSError:
+            pass
     return {
         "response_id": str(row.id),
         "verdict": row.verdict,

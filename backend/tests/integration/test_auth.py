@@ -351,3 +351,71 @@ def test_bearer_required_for_upload_and_private_files(client, monkeypatch, tmp_p
         url = f"/material-versions/{version_id}/{suffix}"
         assert http.get(url).status_code == 401
         assert http.get(url, headers=bearer).content == content
+
+
+def test_refresh_token_is_consumed_only_once_under_concurrent_transactions():
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    from threading import Event
+    from types import SimpleNamespace
+
+    from sqlalchemy.orm import sessionmaker
+
+    from study_platform.services.auth import find_session
+
+    raw_url = os.getenv("TEST_DATABASE_URL")
+    if os.getenv("RUN_DB_TESTS") != "1" or not raw_url:
+        pytest.skip("explicit PostgreSQL test database required")
+    url = make_url(raw_url)
+    if not (url.database or "").endswith("_test") or {"dbname", "service", "servicefile"} & set(url.query):
+        pytest.fail("isolated *_test database required")
+    engine = sa.create_engine(url.set(drivername="postgresql+psycopg"))
+    factory = sessionmaker(engine, expire_on_commit=False)
+    owner, token = uuid4(), uuid4().hex
+    first_locked, second_started, release_first = Event(), Event(), Event()
+    request = SimpleNamespace(cookies={"study_refresh": token})
+    with factory.begin() as db:
+        db.add(User(id=owner, email=f"{owner}@example.test", password_hash="x", display_name="test"))
+        db.flush()
+        db.add(UserSession(user_id=owner, refresh_token_hash=digest(token),
+                           csrf_secret_hash=digest("csrf"), access_generation=0, expires_at=datetime.now(UTC) + timedelta(hours=1)))
+    def first():
+        with factory.begin() as db:
+            session = find_session(db, request)
+            assert session is not None
+            first_locked.set()
+            assert release_first.wait(5)
+            session.refresh_token_hash = digest("rotated")
+    def second():
+        assert first_locked.wait(5)
+        with factory.begin() as db:
+            second_started.set()
+            return find_session(db, request)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(first)
+            b = pool.submit(second)
+            assert second_started.wait(5)
+            with pytest.raises(TimeoutError):
+                b.result(timeout=0.3)
+            release_first.set()
+            a.result(timeout=5)
+            assert b.result(timeout=5) is None
+    finally:
+        release_first.set()
+        with factory.begin() as db:
+            db.execute(sa.delete(UserSession).where(UserSession.user_id == owner))
+            db.execute(sa.delete(User).where(User.id == owner))
+        engine.dispose()
+
+
+def test_csrf_bootstrap_obeys_origin_and_uses_http_only_cookie(client):
+    http, _ = client
+    registered = http.post("/auth/register", json={
+        "email": f"{uuid4().hex}@example.test", "password": "safe-password-123", "display_name": "Tester",
+    })
+    assert registered.status_code == 201
+    response = http.post("/auth/csrf")
+    assert response.status_code == 200
+    assert response.json()["csrf_token"] == registered.json()["csrf_token"]
+    assert response.headers["cache-control"] == "no-store"
+    assert http.post("/auth/csrf", headers={"Origin": "https://evil.test"}).status_code == 403

@@ -7,9 +7,10 @@ import unicodedata
 from io import BytesIO
 from uuid import UUID
 
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from study_platform.core.config import get_settings
+from study_platform.core.errors import ApiError
 from study_platform.services.ingestion import ocr_image
 from study_platform.services.learning_llm import grade_with_llm
 
@@ -21,8 +22,14 @@ def normalize_answer(text: str) -> str:
 
 
 def ocr_answer_bytes(payload: bytes) -> tuple[str, float]:
-    image = Image.open(BytesIO(payload))
-    blocks = ocr_image(image)
+    try:
+        with Image.open(BytesIO(payload)) as image:
+            if image.format not in ("PNG", "JPEG") or image.width * image.height > get_settings().max_image_pixels:
+                raise ApiError(422, "invalid_image", "图片格式或尺寸无效")
+            image.load()
+            blocks = ocr_image(image)
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+        raise ApiError(422, "invalid_image", "图片格式或尺寸无效") from error
     if not blocks:
         return "", 0.0
     texts = [b["text"] for b in blocks if b.get("text")]
@@ -58,9 +65,10 @@ def grade_text_answer(
     norm_ref = normalize_answer(ref)
     if not norm_ref:
         return "pending", 0.3, "题目暂无参考答案，请手动确认。", "learning_stub_v1"
-    if norm_ocr == norm_ref or norm_ref in norm_ocr or norm_ocr in norm_ref:
-        match_conf = max(0.9, min(1.0, ocr_confidence))
-        return "correct", match_conf, "与参考答案一致。", "learning_stub_v1"
+    if norm_ocr == norm_ref:
+        match_conf = max(0.0, min(1.0, ocr_confidence))
+        verdict, confidence, feedback = _apply_threshold("correct", match_conf, "")
+        return verdict, confidence, feedback or "与参考答案一致。", "learning_stub_v1"
     stub = settings.learning_stub_grader or not settings.deepseek_api_key.get_secret_value()
     if stub:
         match_conf = 0.4

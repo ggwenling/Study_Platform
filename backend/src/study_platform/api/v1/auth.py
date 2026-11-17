@@ -156,6 +156,16 @@ def login(
     return {"user": user_payload(user), "access_token": access, "csrf_token": csrf}
 
 
+@router.post("/auth/csrf")
+def csrf_bootstrap(request: Request, response: Response) -> dict:
+    allowed_request_origin(request)
+    token = request.cookies.get("study_csrf")
+    if not token:
+        raise ApiError(401, "unauthenticated", "请先登录")
+    response.headers["Cache-Control"] = "no-store"
+    return {"csrf_token": token}
+
+
 @router.post("/auth/refresh", response_model=AuthDTO)
 def refresh(request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     session = find_session(db, request)

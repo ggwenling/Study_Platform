@@ -411,7 +411,8 @@ def test_cancel_during_rewrite_does_not_embed_or_generate(chat_db, monkeypatch):
     run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
     conv = conversation_for(s, run)
 
-    async def rewrite(_):
+    async def rewrite(_, *, owner_user_id):
+        assert owner_user_id == s.owner
         chat.cancel(s.owner, conv, run)
         return RewriteResult("reworded", "rewritten", 1)
 
@@ -483,7 +484,8 @@ def test_enabled_rewrite_batches_queries_answers_original_and_replay_calls_nothi
     monkeypatch.setattr(chat, "rewrite_query", rewritten)
     monkeypatch.setattr(chat, "embed_texts", embed)
 
-    async def chunks(messages):
+    async def chunks(messages, *, context):
+        assert context.owner_user_id == s.owner
         assert messages[-1].content == "Original question"
         yield SimpleNamespace(content="Private evidence text [S1]", usage_metadata=None)
 
@@ -620,7 +622,8 @@ def test_summary_and_empty_library_skip_rewrite_even_when_enabled(chat_db, monke
         evidence = seed_evidence(s)
         data.update(intent="summary", material_ids=[str(evidence["material_id"])])
 
-    async def answer(_):
+    async def answer(_, *, context):
+        assert context.owner_user_id == s.owner
         yield SimpleNamespace(content="Summary [S1]", usage_metadata=None)
 
     monkeypatch.setattr(chat, "astream_chat", answer)
@@ -860,7 +863,52 @@ def test_lexical_hybrid_respects_owner_scope(chat_db):
                 .values(**lexical_column_values("雪松仓库唯一密钥段落。"))
             )
     scope = {"index_version_ids": [str(owned["index_version_id"])]}
-    settings = Settings(_env_file=None, retrieval_hybrid_enabled=True, retrieval_min_similarity=0.99)
+    settings = Settings(_env_file=None, retrieval_hybrid_enabled=True, retrieval_lexical_weight=1.0, retrieval_min_similarity=0.99)
     with patch.object(chat, "get_settings", lambda: settings):
         hits = chat.retrieve_hybrid(scope, ["雪松仓库唯一密钥"], [[0.0] * 1024], s.owner)
     assert {row["id"] for row in hits} == {owned["id"]}
+
+
+def test_embedding_releases_job_locks_and_fences_cancel(chat_db, monkeypatch, tmp_path):
+    from study_platform.persistence.models import AiJob, IndexVersion, Material, MaterialVersion
+    from study_platform.services import ingestion, storage
+
+    s = chat_db
+    monkeypatch.setattr(ingestion, "session_factory", lambda: s.factory)
+    settings = ingestion.get_settings().model_copy(update={"storage_dir": tmp_path})
+    monkeypatch.setattr(ingestion, "get_settings", lambda: settings)
+    monkeypatch.setattr(storage, "get_settings", lambda: settings)
+    material_id, version_id, job_id = uuid4(), uuid4(), uuid4()
+    with s.factory.begin() as db:
+        db.add(Material(id=material_id, owner_user_id=s.owner, knowledge_base_id=s.kb_a,
+                        title="text", kind="other", status="active"))
+        db.flush()
+        db.add(MaterialVersion(id=version_id, material_id=material_id, version_no=1,
+                               is_current=True, source_mime="text/plain", source_sha256="a" * 64,
+                               byte_size=5, object_key=str(uuid4()), parse_status="pending"))
+        db.flush()
+        db.add(AiJob(id=job_id, owner_user_id=s.owner, job_type="ingest",
+                     resource_type="material_version", resource_id=version_id,
+                     status="queued", progress=0, payload={}, attempt_count=0, max_attempts=3,
+                     next_run_at=ingestion.now()))
+    source = storage.source_path(version_id)
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("hello", encoding="utf-8")
+
+    def cancel_during_embedding(texts, **kwargs):
+        with s.factory.begin() as db:
+            db.execute(sa.text("SET LOCAL lock_timeout = '1s'"))
+            db.scalar(sa.select(KnowledgeBase).where(KnowledgeBase.id == s.kb_a).with_for_update())
+            db.scalar(sa.select(Material).where(Material.id == material_id).with_for_update())
+            job = db.scalar(sa.select(AiJob).where(AiJob.id == job_id).with_for_update())
+            job.status = "cancelled"
+            job.cancel_requested_at = ingestion.now()
+            job.fencing += 1
+        return [[0.1] * 1024 for _ in texts]
+
+    monkeypatch.setattr(ingestion, "embed_texts", cancel_during_embedding)
+    assert ingestion.run_once()
+    with s.factory() as db:
+        assert db.get(AiJob, job_id).status == "cancelled"
+        assert not db.scalar(sa.select(IndexVersion.id).where(
+            IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True)))

@@ -304,7 +304,9 @@ def update_phase(db, job_id, fence, phase, **details):
     job.result = {**job.result, "phase": phase, **details}
     job.progress = {"parsing": 10, "ocr": 30, "indexing": 60}[phase]
     job.lease_expires_at = now() + timedelta(seconds=get_settings().job_lease_seconds)
+    owner_id = job.owner_user_id
     db.commit()
+    return owner_id
 
 
 def run_once():
@@ -321,8 +323,9 @@ def run_once():
             if not is_ingestion:
                 job = locked_job(db, job_id, fence)
                 payload = classification.suggestion_input(db, job)
+                owner_id = job.owner_user_id
                 db.commit()
-                result = classification.suggest(payload, owner_user_id=job.owner_user_id)
+                result = classification.suggest(payload, owner_user_id=owner_id)
                 job = locked_job(db, job_id, fence)
                 active = classification.active_index(db, db.get(MaterialVersion, version_id).material_id)
                 if active is None or str(active.id) != job.payload["index_id"]:
@@ -382,13 +385,12 @@ def run_once():
             ]
             vectors = []
             for offset in range(0, len(chunk_rows), 20):
-                update_phase(db, job_id, fence, "indexing",
-                             chunk_count=len(chunk_rows), embedded_count=len(vectors))
+                owner_id = update_phase(db, job_id, fence, "indexing",
+                                        chunk_count=len(chunk_rows), embedded_count=len(vectors))
                 batch = chunk_rows[offset : offset + 20]
-                job = locked_job(db, job_id, fence)
                 result = embed_texts(
                     [row[0] for row in batch],
-                    context=ModelUsageContext(job.owner_user_id, "embedding"),
+                    context=ModelUsageContext(owner_id, "embedding"),
                 )
                 if len(result) != len(batch) or any(len(v) != 1024 for v in result):
                     raise ApiError(502, "embedding_invalid", "向量模型返回维度或内容不正确")

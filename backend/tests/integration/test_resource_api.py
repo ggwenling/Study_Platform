@@ -1,6 +1,7 @@
 """Database-backed ownership, paging and soft-delete resource checks."""
 
 import os
+from collections import defaultdict
 from uuid import UUID, uuid4
 
 import pytest
@@ -16,12 +17,13 @@ from study_platform.core.config import Settings
 from study_platform.core.errors import ApiError, api_error_handler
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import AiWorkflowRun, Message
+from study_platform.services import auth_limits
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def resource_client():
+def resource_client(monkeypatch):
     if os.getenv("RUN_DB_TESTS") != "1" or not os.getenv("TEST_DATABASE_URL"):
         pytest.skip("explicit PostgreSQL test database required")
     url = make_url(os.environ["TEST_DATABASE_URL"])
@@ -30,6 +32,7 @@ def resource_client():
     ):
         pytest.fail("isolated *_test database required")
     engine = sa.create_engine(url.set(drivername="postgresql+psycopg"))
+    monkeypatch.setattr(auth_limits, "_buckets", defaultdict(list))
     with engine.connect() as connection:
         tx = connection.begin()
         db = Session(connection, join_transaction_mode="create_savepoint")

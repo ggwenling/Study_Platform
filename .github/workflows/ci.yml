@@ -71,6 +71,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Pytest
+        shell: bash
         run: uv run pytest -q --tb=no 2>&1 | tee pytest.log
 
       - name: Summarize pytest counts

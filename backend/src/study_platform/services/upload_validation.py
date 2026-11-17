@@ -1,5 +1,6 @@
 """Upload content sniffing aligned with allowed file extensions."""
 
+from codecs import getincrementaldecoder
 from pathlib import Path
 
 from study_platform.core.errors import ApiError
@@ -16,6 +17,23 @@ EXTENSION_MIMES = {
 
 def expected_mime(filename: str) -> str | None:
     return EXTENSION_MIMES.get(Path(filename).suffix.lower())
+
+
+class Utf8TextValidator:
+    def __init__(self) -> None:
+        self._decoder = getincrementaldecoder("utf-8")()
+
+    def feed(self, block: bytes) -> None:
+        self._decode(block, final=False)
+
+    def finish(self) -> None:
+        self._decode(b"", final=True)
+
+    def _decode(self, block: bytes, *, final: bool) -> None:
+        try:
+            self._decoder.decode(block, final=final)
+        except UnicodeDecodeError as error:
+            raise ApiError(400, "invalid_file_content", "文本文件必须为 UTF-8 编码") from error
 
 
 def validate_upload_content(header: bytes, mime: str, filename: str) -> None:
@@ -37,9 +55,6 @@ def validate_upload_content(header: bytes, mime: str, filename: str) -> None:
         return
     if mime == "text/plain":
         sample = header[:4096]
-        try:
-            sample.decode("utf-8-sig")
-        except UnicodeDecodeError as error:
-            raise ApiError(400, "invalid_file_content", "文本文件必须为 UTF-8 编码") from error
+        Utf8TextValidator().feed(sample)
         return
     raise ApiError(400, "unsupported_file", "Unsupported file type")

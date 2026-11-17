@@ -20,7 +20,7 @@ from study_platform.persistence.models.materials import (
     MaterialVersion,
 )
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
-from study_platform.services import ingestion, models
+from study_platform.services import ingestion
 from study_platform.services.storage import source_path
 
 pytestmark = pytest.mark.integration
@@ -50,7 +50,9 @@ def state(tmp_path, monkeypatch):
         settings = get_settings().model_copy(update={"storage_dir": tmp_path})
         monkeypatch.setattr(ingestion, "get_settings", lambda: settings)
         monkeypatch.setattr("study_platform.services.storage.get_settings", lambda: settings)
-        monkeypatch.setattr(models, "embed_texts", lambda texts: [[0.1] * 1024 for _ in texts])
+        monkeypatch.setattr(
+            ingestion, "embed_texts", lambda texts, **_: [[0.1] * 1024 for _ in texts]
+        )
         with factory() as db:
             user = User(
                 id=uuid4(), email=f"{uuid4()}@example.test", password_hash="x", display_name="Test"
@@ -145,19 +147,19 @@ def test_staging_permission_failure_marks_job_failed_without_killing_worker(stat
 
 def test_short_database_fault_during_indexing_retries_without_duplicate_publication(state, monkeypatch):
     factory, job_id, version_id, _, _ = state
-    embed = models.embed_texts
+    embed = ingestion.embed_texts
 
-    def disconnect(_):
+    def disconnect(_, **__):
         raise OperationalError("", {}, SimpleNamespace(sqlstate="08006"))
 
-    monkeypatch.setattr(models, "embed_texts", disconnect)
+    monkeypatch.setattr(ingestion, "embed_texts", disconnect)
     assert ingestion.run_once()
     with factory() as db:
         job = db.get(AiJob, job_id)
         assert job.status == "queued"
         job.next_run_at = ingestion.now() - timedelta(seconds=1)
         db.commit()
-    monkeypatch.setattr(models, "embed_texts", embed)
+    monkeypatch.setattr(ingestion, "embed_texts", embed)
     assert ingestion.run_once()
     with factory() as db:
         assert db.get(AiJob, job_id).status == "succeeded"
@@ -207,7 +209,7 @@ def test_soft_deleted_knowledge_base_blocks_publish(state):
 def test_cancellation_during_embedding_prevents_publication(state, monkeypatch):
     factory, job_id, version_id, _, _ = state
 
-    def cancel_before_return(texts):
+    def cancel_before_return(texts, **_):
         with factory() as db:
             job = db.get(AiJob, job_id)
             job.status = "cancelled"
@@ -216,7 +218,7 @@ def test_cancellation_during_embedding_prevents_publication(state, monkeypatch):
             db.commit()
         return [[0.1] * 1024 for _ in texts]
 
-    monkeypatch.setattr(models, "embed_texts", cancel_before_return)
+    monkeypatch.setattr(ingestion, "embed_texts", cancel_before_return)
     assert ingestion.run_once()
     with factory() as db:
         assert db.get(AiJob, job_id).status == "cancelled"
@@ -233,7 +235,7 @@ def test_cancellation_during_embedding_prevents_publication(state, monkeypatch):
 def test_soft_delete_during_embedding_prevents_publication(state, monkeypatch):
     factory, job_id, version_id, material_id, _ = state
 
-    def delete_before_return(texts):
+    def delete_before_return(texts, **_):
         with factory() as db:
             material = db.get(Material, material_id)
             material.deleted_at = ingestion.now()
@@ -241,7 +243,7 @@ def test_soft_delete_during_embedding_prevents_publication(state, monkeypatch):
             db.commit()
         return [[0.1] * 1024 for _ in texts]
 
-    monkeypatch.setattr(models, "embed_texts", delete_before_return)
+    monkeypatch.setattr(ingestion, "embed_texts", delete_before_return)
     assert ingestion.run_once()
     with factory() as db:
         assert db.get(AiJob, job_id).status != "succeeded"
@@ -287,10 +289,10 @@ def test_nonretryable_model_error_stops_after_one_attempt(state, monkeypatch):
 
     factory, job_id, version_id, _, _ = state
 
-    def quota_error(_):
+    def quota_error(_, **__):
         raise ApiError(503, "model_quota", "Model quota unavailable", retryable=False)
 
-    monkeypatch.setattr(models, "embed_texts", quota_error)
+    monkeypatch.setattr(ingestion, "embed_texts", quota_error)
     assert ingestion.run_once()
     with factory() as db:
         job = db.get(AiJob, job_id)
@@ -325,7 +327,7 @@ def test_classification_runs_after_ingestion_without_applying_suggestions(state,
     factory, _, version_id, material_id, _ = state
     assert ingestion.run_once()
     calls = []
-    def suggestion(payload):
+    def suggestion(payload, *, owner_user_id=None):
         calls.append(payload)
         return {"topic": "Test topic", "tags": ["Test tag"]}
     monkeypatch.setattr(ingestion.classification, "suggest", suggestion)

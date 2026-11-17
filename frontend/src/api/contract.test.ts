@@ -7,6 +7,7 @@ const contract = JSON.parse(contractText) as { paths: Record<string, Record<stri
 afterEach(() => vi.unstubAllGlobals())
 
 it('uses paths and methods present in the backend OpenAPI contract', async () => {
+  vi.stubGlobal('navigator', {})
   vi.stubGlobal('document', { cookie: 'study_csrf=token' })
   const calls: [string, string][] = []
   vi.stubGlobal('fetch', vi.fn(async (url: string, options: RequestInit = {}) => {
@@ -37,7 +38,7 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.modelUsage(30)
   for await (const _ of streamChat({ knowledge_base_id: 'id', answer_mode: 'knowledge_only', intent: 'qa', content: 'x' }, 'key')) { /* consume */ }
   for await (const _ of retryTurn('id', 'id')) { /* consume */ }
-  expect(calls).toHaveLength(39)
+  expect(calls).toHaveLength(40)
   for (const [url, method] of calls) {
     const path = Object.keys(contract.paths).find((template) => new RegExp('^' + template.replace(/\{[^}]+\}/g, '[^/]+') + '$').test(url))
     expect(path, `${method.toUpperCase()} ${url}`).toBeDefined()

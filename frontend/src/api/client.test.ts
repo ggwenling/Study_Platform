@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, retryTurn, streamChat, uploadMaterial } from './client'
 import { ApiError, parseChatStream } from './stream'
 
@@ -7,6 +7,7 @@ function byteStream(text: string): ReadableStream<Uint8Array> {
   return new ReadableStream({ start(controller) { for (const byte of bytes) controller.enqueue(new Uint8Array([byte])); controller.close() } })
 }
 
+beforeEach(() => { vi.stubGlobal('navigator', {}) })
 afterEach(() => { api.clearSession(); vi.unstubAllGlobals() })
 
 const auth = (token: string) => Response.json({ user: { id: 'u' }, access_token: token, csrf_token: 'csrf-mem' })
@@ -40,9 +41,11 @@ describe('HTTP client', () => {
   it('does not restore a session from a refresh completed after logout', async () => {
     vi.stubGlobal('document', { cookie: 'study_csrf=token' })
     let finish!: (response: Response) => void
-    const fetchMock = vi.fn().mockImplementationOnce(() => new Promise<Response>((resolve) => { finish = resolve }))
+    const fetchMock = vi.fn().mockResolvedValueOnce(auth('initial'))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { finish = resolve }))
       .mockResolvedValueOnce(Response.json({}))
     vi.stubGlobal('fetch', fetchMock)
+    await api.login({ email: 'a', password: 'b' })
     const pending = api.refresh()
     api.clearSession()
     finish(auth('stale'))
@@ -66,6 +69,65 @@ describe('HTTP client', () => {
     await api.login({ email: 'a', password: 'b' })
     await Promise.all([api.me(), api.content('v')])
     expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/refresh'))).toHaveLength(1)
+  })
+  it('recovers the CSRF token on reload and retries after another tab rotates it', async () => {
+    let csrf = 'current'
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/csrf')) return Response.json({ csrf_token: csrf })
+      if (url.endsWith('/refresh')) {
+        const token = new Headers(init.headers).get('X-CSRF-Token')
+        if (token !== csrf) return Response.json({code:'csrf_invalid',message:'stale'}, {status:403})
+        return Response.json({user:{id:'u'}, access_token:'access', csrf_token: csrf})
+      }
+      return new Response(null, {status:401})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await api.refresh()
+    csrf = 'rotated'
+    await api.me().catch(() => {})
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/csrf'))).toHaveLength(2)
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/refresh'))).toHaveLength(3)
+  })
+  it('retries logout with the current CSRF token after another tab rotates it', async () => {
+    let logoutCalls = 0
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/login')) return auth('old')
+      if (url.endsWith('/csrf')) return Response.json({ csrf_token: 'fresh' })
+      logoutCalls += 1
+      if (logoutCalls === 1) return Response.json({code:'csrf_invalid',message:'stale'}, {status:403})
+      expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('fresh')
+      return new Response(null, {status:204})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await api.login({ email: 'a', password: 'b' })
+    await api.logout()
+    expect(logoutCalls).toBe(2)
+  })
+  it('treats logout as complete when another tab already cleared the cookies', async () => {
+    vi.stubGlobal('navigator', { locks: { request: async (_name: string, callback: () => Promise<unknown>) => callback() } })
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/login')) return auth('old')
+      if (url.endsWith('/csrf')) return Response.json({code:'unauthenticated', message:'expired'}, {status:401})
+      return new Response(null, {status:401})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await api.login({ email: 'a', password: 'b' })
+    await expect(api.logout()).resolves.toBeUndefined()
+    await expect(api.me()).rejects.toMatchObject({ status: 401 })
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/refresh'))).toHaveLength(0)
+  })
+  it('serializes cross-tab refresh and reads the current CSRF token after locking', async () => {
+    const lock = vi.fn(async (_name, callback) => callback())
+    vi.stubGlobal('navigator', { locks: { request: lock } })
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/csrf')) return Response.json({ csrf_token: 'fresh' })
+      expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('fresh')
+      return Response.json({ user: { id: 'u' }, access_token: 'new', csrf_token: 'fresh' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await api.refresh()
+    expect(lock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/v1/auth/csrf', '/api/v1/auth/refresh'])
   })
   it('reports actual XHR upload progress and returns the processing job', async () => {
     vi.stubGlobal('document', { cookie: 'study_csrf=token' })

@@ -152,7 +152,7 @@ def find_session(db: Session, request: Request) -> UserSession | None:
             UserSession.refresh_token_hash == digest(token),
             UserSession.revoked_at.is_(None),
             UserSession.expires_at > datetime.now(UTC),
-        )
+        ).with_for_update()
     )
 
 

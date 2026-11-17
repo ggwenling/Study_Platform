@@ -177,6 +177,29 @@
         }
       }
     },
+    "/api/v1/auth/csrf": {
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Csrf Bootstrap",
+        "operationId": "csrf_bootstrap_api_v1_auth_csrf_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Csrf Bootstrap Api V1 Auth Csrf Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/refresh": {
       "post": {
         "tags": [

@@ -18,4 +18,6 @@ class ApiError(Exception):
 
 
 async def api_error_handler(request: Request, error: ApiError) -> JSONResponse:
-    return JSONResponse(error.payload(), status_code=error.status_code)
+    return JSONResponse(
+        error.payload(getattr(request.state, "request_id", None)), status_code=error.status_code
+    )

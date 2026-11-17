@@ -25,3 +25,16 @@ def test_validate_cookie_security_allows_http_local():
         auth_jwt_secret=SecretStr("x" * 32),
     )
     validate_cookie_security(settings)
+
+def test_refresh_lookup_locks_session_before_rotation():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sqlalchemy.dialects import postgresql
+
+    from study_platform.services.auth import find_session
+
+    db = Mock()
+    find_session(db, SimpleNamespace(cookies={"study_refresh": "token"}))
+    statement = db.scalar.call_args.args[0]
+    assert "FOR UPDATE" in str(statement.compile(dialect=postgresql.dialect()))

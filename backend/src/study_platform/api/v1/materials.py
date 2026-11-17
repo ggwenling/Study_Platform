@@ -20,7 +20,11 @@ from study_platform.persistence.models.knowledge import KnowledgeBase
 from study_platform.persistence.models.materials import MaterialSection, MaterialVersion
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
 from study_platform.services.storage import page_path, source_path
-from study_platform.services.upload_validation import expected_mime, validate_upload_content
+from study_platform.services.upload_validation import (
+    Utf8TextValidator,
+    expected_mime,
+    validate_upload_content,
+)
 
 router = APIRouter()
 MIMES = {
@@ -220,6 +224,7 @@ def upload(
     digest = hashlib.sha256()
     size = 0
     header = b""
+    text_validator = Utf8TextValidator() if mime == "text/plain" else None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("xb") as out:
@@ -227,17 +232,16 @@ def upload(
                 size += len(block)
                 if size > get_settings().max_upload_bytes:
                     raise ApiError(413, "file_too_large", "File is too large")
-                if len(header) < 8192:
+                if not text_validator and len(header) < 8192:
                     header += block[: 8192 - len(header)]
+                if text_validator:
+                    text_validator.feed(block)
                 digest.update(block)
                 out.write(block)
-        if not header:
+        if size == 0:
             raise ApiError(400, "empty_file", "File is empty")
-        if mime == "text/plain":
-            try:
-                path.read_bytes()[:8192].decode("utf-8-sig")
-            except UnicodeDecodeError as error:
-                raise ApiError(400, "invalid_file_content", "文本文件必须为 UTF-8 编码") from error
+        if text_validator:
+            text_validator.finish()
         else:
             validate_upload_content(header, mime, title)
         material = Material(
