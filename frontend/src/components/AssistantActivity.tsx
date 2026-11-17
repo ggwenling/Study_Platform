@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { BookOpen } from 'lucide-react'
-import { ThinkingOrb } from 'thinking-orbs'
 import type { ChatPhase } from '@/api/types'
+import { ThinkingOrbLazy } from './ThinkingOrbLazy'
 import './AssistantActivity.css'
 
 export const activityLabels: Record<ChatPhase, string> = {
@@ -15,7 +15,9 @@ export const activityLabels: Record<ChatPhase, string> = {
 export const AssistantActivity = memo(function AssistantActivity({ phase }: { phase: ChatPhase | null }) {
   return (
     <span className="assistant-activity" aria-hidden="true">
-      {phase ? <ThinkingOrb state={phase} size={64} theme="auto" aria-hidden="true" /> : <BookOpen size={20} />}
+      {phase
+        ? <ThinkingOrbLazy state={phase} size={64} theme="auto" aria-hidden="true" />
+        : <BookOpen size={20} />}
     </span>
   )
 })

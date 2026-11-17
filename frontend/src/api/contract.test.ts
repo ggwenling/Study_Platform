@@ -34,9 +34,10 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.job('id'); await api.cancelJob('id'); await api.preview('id'); await api.content('id'); await api.pageImage('id', 1); await api.source('id')
   await api.conversations(); await api.createConversation(); await api.conversation('id'); await api.updateConversation('id', { title: 'x' }); await api.deleteConversation('id'); await api.messages('id')
   await api.overview(); await api.search('q'); await api.capabilities(); await api.turn('id', 'id'); await api.cancelTurn('id', 'id')
+  await api.modelUsage(30)
   for await (const _ of streamChat({ knowledge_base_id: 'id', answer_mode: 'knowledge_only', intent: 'qa', content: 'x' }, 'key')) { /* consume */ }
   for await (const _ of retryTurn('id', 'id')) { /* consume */ }
-  expect(calls).toHaveLength(38)
+  expect(calls).toHaveLength(39)
   for (const [url, method] of calls) {
     const path = Object.keys(contract.paths).find((template) => new RegExp('^' + template.replace(/\{[^}]+\}/g, '[^/]+') + '$').test(url))
     expect(path, `${method.toUpperCase()} ${url}`).toBeDefined()
@@ -52,7 +53,7 @@ it('publishes the fields consumed by the frontend', () => {
     ScopeDTO: ['knowledge_base_id', 'knowledge_base_name', 'answer_mode', 'index_version_ids'],
     UploadResponse: ['material_id', 'version_id', 'job_id', 'status'],
     UserDTO: ['id', 'email', 'display_name'],
-    AuthDTO: ['user', 'access_token'],
+    AuthDTO: ['user', 'access_token', 'csrf_token'],
     KnowledgeBaseDTO: ['id', 'name', 'description', 'created_at', 'updated_at'],
     KnowledgeBasePage: ['items', 'next_cursor'],
     ConversationDTO: ['id', 'title', 'project_knowledge_base_id', 'created_at', 'updated_at'],

@@ -3,6 +3,7 @@
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlparse
 from uuid import UUID
 
 import jwt
@@ -30,6 +31,24 @@ def check_origin(request: Request) -> None:
         raise ApiError(403, "origin_forbidden", "请求来源不被允许")
 
 
+def allowed_request_origin(request: Request) -> None:
+    """Require a whitelisted Origin or Referer before issuing session cookies."""
+    settings = request.app.state.settings
+    origin = request.headers.get("origin")
+    if origin:
+        if origin not in settings.allowed_origins:
+            raise ApiError(403, "origin_forbidden", "请求来源不被允许")
+        return
+    referer = request.headers.get("referer")
+    if referer:
+        parsed = urlparse(referer)
+        if parsed.scheme and parsed.netloc:
+            ref_origin = f"{parsed.scheme}://{parsed.netloc}"
+            if ref_origin in settings.allowed_origins:
+                return
+    raise ApiError(403, "origin_required", "请求来源不明确，请从受信任页面重试")
+
+
 def account_can_login(user: User | None) -> bool:
     return user is not None and user.status == "active" and user.deleted_at is None
 
@@ -52,32 +71,29 @@ def signing_key(request: Request) -> str:
 def issue_token(request: Request, session: UserSession) -> str:
     now = datetime.now(UTC)
     return jwt.encode(
-        {"iss": "knowloop", "aud": "knowloop-api", "sub": str(session.user_id),
-         "sid": str(session.id), "iat": now, "exp": min(now + timedelta(minutes=15), session.expires_at)},
-        signing_key(request), algorithm="HS256", headers={"typ": "at+jwt"},
+        {
+            "iss": "knowloop",
+            "aud": "knowloop-api",
+            "sub": str(session.user_id),
+            "sid": str(session.id),
+            "tg": session.access_generation,
+            "iat": now,
+            "exp": min(now + timedelta(minutes=15), session.expires_at),
+        },
+        signing_key(request),
+        algorithm="HS256",
+        headers={"typ": "at+jwt"},
     )
 
 
-def create_session(db: Session, user: User, request: Request, response: Response) -> str:
-    signing_key(request)
-    settings = request.app.state.settings
-    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-    session = UserSession(
-        user_id=user.id,
-        refresh_token_hash=digest(token),
-        csrf_secret_hash=digest(csrf),
-        expires_at=datetime.now(UTC) + timedelta(seconds=settings.session_ttl_seconds),
-    )
-    db.add(session)
-    user.last_login_at = datetime.now(UTC)
-    db.flush()
-    access = issue_token(request, session)
-    db.commit()
+def set_session_cookies(
+    response: Response, settings, refresh_token: str, csrf_token: str
+) -> None:
     response.delete_cookie("study_session", path="/")
     response.headers["Cache-Control"] = "no-store"
     for name, value, httponly, path in (
-        ("study_refresh", token, True, "/api/v1/auth"),
-        ("study_csrf", csrf, False, "/"),
+        ("study_refresh", refresh_token, True, "/api/v1/auth"),
+        ("study_csrf", csrf_token, True, "/"),
     ):
         response.set_cookie(
             name,
@@ -88,7 +104,43 @@ def create_session(db: Session, user: User, request: Request, response: Response
             samesite="lax",
             path=path,
         )
-    return access
+
+
+def create_session(db: Session, user: User, request: Request, response: Response) -> tuple[str, str]:
+    signing_key(request)
+    settings = request.app.state.settings
+    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    user_agent = request.headers.get("user-agent", "")
+    session = UserSession(
+        user_id=user.id,
+        refresh_token_hash=digest(token),
+        csrf_secret_hash=digest(csrf),
+        user_agent_hash=digest(user_agent) if user_agent else None,
+        access_generation=0,
+        expires_at=datetime.now(UTC) + timedelta(seconds=settings.session_ttl_seconds),
+    )
+    db.add(session)
+    user.last_login_at = datetime.now(UTC)
+    db.flush()
+    access = issue_token(request, session)
+    db.commit()
+    set_session_cookies(response, settings, token, csrf)
+    return access, csrf
+
+
+def rotate_session(db: Session, session: UserSession, request: Request, response: Response) -> tuple[str, str]:
+    settings = request.app.state.settings
+    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    session.refresh_token_hash = digest(token)
+    session.csrf_secret_hash = digest(csrf)
+    session.access_generation += 1
+    user_agent = request.headers.get("user-agent", "")
+    if user_agent:
+        session.user_agent_hash = digest(user_agent)
+    access = issue_token(request, session)
+    db.commit()
+    set_session_cookies(response, settings, token, csrf)
+    return access, csrf
 
 
 def find_session(db: Session, request: Request) -> UserSession | None:
@@ -110,25 +162,35 @@ def access_session(db: Session, request: Request, token: str | None) -> UserSess
     key = signing_key(request)
     try:
         decoded = jwt.decode_complete(
-            token, key, algorithms=["HS256"], audience="knowloop-api", issuer="knowloop",
+            token,
+            key,
+            algorithms=["HS256"],
+            audience="knowloop-api",
+            issuer="knowloop",
             options={"require": ["sub", "sid", "iat", "exp", "iss", "aud"]},
         )
         if decoded["header"].get("typ") != "at+jwt":
             return None
         session_id = UUID(decoded["payload"]["sid"])
         user_id = UUID(decoded["payload"]["sub"])
+        generation = int(decoded["payload"].get("tg", 0))
     except (jwt.InvalidTokenError, ValueError, TypeError, AttributeError):
         return None
-    return db.scalar(
+    session = db.scalar(
         select(UserSession).where(
-            UserSession.id == session_id, UserSession.user_id == user_id,
-            UserSession.revoked_at.is_(None), UserSession.expires_at > datetime.now(UTC),
+            UserSession.id == session_id,
+            UserSession.user_id == user_id,
+            UserSession.revoked_at.is_(None),
+            UserSession.expires_at > datetime.now(UTC),
         )
     )
+    if session is None or session.access_generation != generation:
+        return None
+    return session
 
 
 def check_csrf(request: Request, session: UserSession) -> None:
-    check_origin(request)
+    allowed_request_origin(request)
     cookie, header = request.cookies.get("study_csrf"), request.headers.get("x-csrf-token")
     if (
         not cookie
@@ -137,3 +199,11 @@ def check_csrf(request: Request, session: UserSession) -> None:
         or not secrets.compare_digest(digest(header), session.csrf_secret_hash)
     ):
         raise ApiError(403, "csrf_invalid", "请求验证失败，请刷新后重试")
+
+
+def validate_cookie_security(settings) -> None:
+    public = settings.auth_public_url.strip()
+    if public.startswith("https://") and not settings.cookie_secure:
+        raise RuntimeError(
+            "AUTH_PUBLIC_URL 使用 HTTPS 时必须设置 COOKIE_SECURE=true，否则会话 Cookie 可能在明文连接上泄露"
+        )

@@ -20,6 +20,7 @@ from study_platform.persistence.models.knowledge import KnowledgeBase
 from study_platform.persistence.models.materials import MaterialSection, MaterialVersion
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
 from study_platform.services.storage import page_path, source_path
+from study_platform.services.upload_validation import expected_mime, validate_upload_content
 
 router = APIRouter()
 MIMES = {
@@ -211,13 +212,14 @@ def upload(
 ):
     owned_kb(db, user, kb_id, lock=True)
     title = Path((file.filename or "").replace("\\", "/")).name[:512]
-    mime = MIMES.get(Path(title).suffix.lower())
+    mime = expected_mime(title)
     if not title or not mime:
         raise ApiError(400, "unsupported_file", "Unsupported file type")
     version_id = uuid4()
     path = source_path(version_id)
     digest = hashlib.sha256()
     size = 0
+    header = b""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("xb") as out:
@@ -225,10 +227,19 @@ def upload(
                 size += len(block)
                 if size > get_settings().max_upload_bytes:
                     raise ApiError(413, "file_too_large", "File is too large")
+                if len(header) < 8192:
+                    header += block[: 8192 - len(header)]
                 digest.update(block)
                 out.write(block)
-        if not size:
+        if not header:
             raise ApiError(400, "empty_file", "File is empty")
+        if mime == "text/plain":
+            try:
+                path.read_bytes()[:8192].decode("utf-8-sig")
+            except UnicodeDecodeError as error:
+                raise ApiError(400, "invalid_file_content", "文本文件必须为 UTF-8 编码") from error
+        else:
+            validate_upload_content(header, mime, title)
         material = Material(
             id=uuid4(),
             owner_user_id=user.id,
@@ -442,6 +453,8 @@ def preview(version_id: UUID, db: Session = Depends(get_db), user=Depends(get_cu
 @router.get("/material-versions/{version_id}/content")
 def content(version_id: UUID, db: Session = Depends(get_db), user=Depends(get_current_user)):
     version = owned_version(db, user, version_id)
+    if version.parse_status != "ready":
+        raise ApiError(409, "content_not_ready", "资料处理尚未完成，暂不提供原件下载")
     path = source_path(version.id)
     if not path.is_file():
         raise missing()
@@ -456,7 +469,7 @@ def page(
     version_id: UUID, page_no: int, db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
     owned_version(db, user, version_id)
-    if page_no < 1:
+    if page_no < 1 or page_no > get_settings().max_pdf_page_preview:
         raise missing()
     path = page_path(version_id, page_no)
     if not path.is_file():

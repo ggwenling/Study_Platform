@@ -132,6 +132,15 @@ def test_first_send_idempotency_and_per_conversation_concurrency(chat_db):
     assert "conversation_busy" in results
 
 
+def test_chunk_query_rejects_foreign_owner_index(chat_db):
+    s = chat_db
+    evidence = seed_evidence(s)
+    foreign = uuid4()
+    with s.factory() as db:
+        rows = db.execute(chat.chunk_query([evidence["index_version_id"]], foreign)).all()
+    assert rows == []
+
+
 def test_scope_switch_excludes_old_history_and_enforces_owner(chat_db):
     s = chat_db
     first, fence, _ = chat.prepare(
@@ -169,6 +178,27 @@ def test_cancel_retry_and_expired_lease_reject_stale_publication(chat_db):
     assert len(state["messages"]) == 2
 
 
+def test_with_general_empty_kb_still_composes(chat_db, monkeypatch):
+    s = chat_db
+
+    async def chunks():
+        yield SimpleNamespace(content="【知识库依据】\n当前资料不足。\n【通用补充】\n示例回答。", usage_metadata=None)
+
+    monkeypatch.setattr(chat, "astream_chat", lambda messages, **_: chunks())
+    data = request(s.kb_a, content="空库通用问题")
+    data["answer_mode"] = "with_general"
+    run, fence, _ = chat.prepare(s.owner, data, uuid4().hex)
+
+    async def consume():
+        return [event async for event in chat.stream(s.owner, run, fence)]
+
+    events = asyncio.run(consume())
+    assert any("event: done" in event for event in events)
+    conv = conversation_for(s, run)
+    content = chat.turn(s.owner, conv, run)["messages"][-1]["content"]
+    assert "【知识库依据】" in content and "【通用补充】" in content
+
+
 def test_no_evidence_stream_never_calls_cloud(chat_db, monkeypatch):
     s = chat_db
 
@@ -176,7 +206,7 @@ def test_no_evidence_stream_never_calls_cloud(chat_db, monkeypatch):
         raise AssertionError("Provider must not be called without evidence")
 
     monkeypatch.setattr(chat, "embed_texts", forbidden)
-    monkeypatch.setattr(chat, "chat_model", forbidden)
+    monkeypatch.setattr(chat, "astream_chat", forbidden)
     run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
 
     async def consume():
@@ -211,8 +241,9 @@ def test_stream_reports_phases_at_real_execution_boundaries(chat_db, monkeypatch
     def phases():
         return [e["phase"] for e in events if e["type"] == "phase"]
 
-    def retrieve(scope, content):
+    def retrieve(scope, content, owner, **_kwargs):
         assert phases() == ["working", "searching"]
+        assert owner == s.owner
         return [evidence]
 
     async def chunks():
@@ -220,7 +251,7 @@ def test_stream_reports_phases_at_real_execution_boundaries(chat_db, monkeypatch
         yield SimpleNamespace(content="Answer [S1]", usage_metadata=None)
 
     monkeypatch.setattr(chat, "retrieve", retrieve)
-    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=lambda _: chunks()))
+    monkeypatch.setattr(chat, "astream_chat", lambda messages, **_: chunks())
     data = request(s.kb_a)
     if intent == "summary":
         data.update(intent=intent, material_ids=[str(evidence["material_id"])])
@@ -389,7 +420,7 @@ def test_cancel_during_rewrite_does_not_embed_or_generate(chat_db, monkeypatch):
 
     monkeypatch.setattr(chat, "rewrite_query", rewrite)
     monkeypatch.setattr(chat, "retrieve", forbidden)
-    monkeypatch.setattr(chat, "chat_model", forbidden)
+    monkeypatch.setattr(chat, "astream_chat", forbidden)
 
     async def consume():
         return [payload(frame) async for frame in chat.stream(s.owner, run, fence)]
@@ -397,7 +428,7 @@ def test_cancel_during_rewrite_does_not_embed_or_generate(chat_db, monkeypatch):
     assert asyncio.run(consume())[-1]["type"] == "stopped"
 
 
-def test_retrieval_keeps_scope_and_only_caps_six_for_fusion(chat_db, monkeypatch):
+def test_retrieval_keeps_scope_and_returns_top_k_after_fusion(chat_db, monkeypatch):
     from study_platform.persistence.models import ChunkEmbedding, Material, MaterialChunk
 
     s = chat_db
@@ -420,16 +451,17 @@ def test_retrieval_keeps_scope_and_only_caps_six_for_fusion(chat_db, monkeypatch
     scope = {"index_version_ids": [str(evidence["index_version_id"])]}
     settings = chat.get_settings().model_copy(update={"retrieval_top_k": 12})
     monkeypatch.setattr(chat, "get_settings", lambda: settings)
-    monkeypatch.setattr(chat, "embed_texts", lambda queries: [vector for _ in queries])
-    baseline = chat.retrieve(scope, "Original question")
-    assert len(baseline) == 12
-    hits = chat.retrieve(scope, "Original question", rewritten_query="Equivalent question")
-    assert len(hits) == 6 and len({row["id"] for row in hits}) == 6
+    monkeypatch.setattr(chat, "embed_texts", lambda queries, **_: [vector for _ in queries])
+    baseline = chat.retrieve(scope, "Original question", s.owner)
+    # One document only: document diversification backfills with its other chunks.
+    assert len(baseline) == 12 and len({row["id"] for row in baseline}) == 12
+    hits = chat.retrieve(scope, "Original question", s.owner, rewritten_query="Equivalent question")
+    assert len(hits) == 12 and len({row["id"] for row in hits}) == 12
     assert {row["material_version_id"] for row in hits} == {evidence["material_version_id"]}
     assert {row["material_version_id"] for row in baseline} == {evidence["material_version_id"]}
     with s.factory.begin() as db:
         db.get(Material, evidence["material_id"]).deleted_at = chat.now()
-    assert chat.retrieve_vectors(scope, [vector, vector]) == []
+    assert chat.retrieve_vectors(scope, [vector, vector], s.owner) == []
 
 
 def test_enabled_rewrite_batches_queries_answers_original_and_replay_calls_nothing(chat_db, monkeypatch):
@@ -455,7 +487,7 @@ def test_enabled_rewrite_batches_queries_answers_original_and_replay_calls_nothi
         assert messages[-1].content == "Original question"
         yield SimpleNamespace(content="Private evidence text [S1]", usage_metadata=None)
 
-    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=chunks))
+    monkeypatch.setattr(chat, "astream_chat", chunks)
     run, fence, _ = chat.prepare(s.owner, request(s.kb_a, content="Original question"), uuid4().hex)
 
     async def consume(replay=False):
@@ -463,7 +495,8 @@ def test_enabled_rewrite_batches_queries_answers_original_and_replay_calls_nothi
 
     events = asyncio.run(consume())
     assert events[-1]["type"] == "done" and events[-1]["message"]["citations"]
-    embed.assert_called_once_with(["Original question", "Equivalent question"])
+    embed.assert_called_once()
+    assert embed.call_args.args[0] == ["Original question", "Equivalent question"]
     asyncio.run(consume(True))
     assert rewritten.call_count == 1 and embed.call_count == 1
 
@@ -590,7 +623,7 @@ def test_summary_and_empty_library_skip_rewrite_even_when_enabled(chat_db, monke
     async def answer(_):
         yield SimpleNamespace(content="Summary [S1]", usage_metadata=None)
 
-    monkeypatch.setattr(chat, "chat_model", lambda: SimpleNamespace(astream=answer))
+    monkeypatch.setattr(chat, "astream_chat", answer)
     run, fence, _ = chat.prepare(s.owner, data, uuid4().hex)
 
     async def consume():
@@ -622,15 +655,13 @@ def test_deleted_material_or_retired_index_cannot_publish(chat_db, deleted):
 def test_provider_stream_failure_preserves_partial_and_error_event(chat_db, monkeypatch):
     s = chat_db
     evidence = seed_evidence(s)
-    monkeypatch.setattr(chat, "retrieve", lambda chunks, content: [evidence])
+    monkeypatch.setattr(chat, "retrieve", lambda _scope, _content, _owner, **_kw: [evidence])
 
     async def chunks():
         yield SimpleNamespace(content="Partial answer", usage_metadata=None)
         raise ApiError(502, "provider_test_failure", "Test failure", retryable=True)
 
-    monkeypatch.setattr(
-        chat, "chat_model", lambda: SimpleNamespace(astream=lambda prompt: chunks())
-    )
+    monkeypatch.setattr(chat, "astream_chat", lambda messages, **_: chunks())
     run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
 
     async def consume():
@@ -647,15 +678,13 @@ def test_provider_stream_failure_preserves_partial_and_error_event(chat_db, monk
 def test_cancel_during_actual_stream_fences_late_tokens(chat_db, monkeypatch):
     s = chat_db
     evidence = seed_evidence(s)
-    monkeypatch.setattr(chat, "retrieve", lambda chunks, content: [evidence])
+    monkeypatch.setattr(chat, "retrieve", lambda _scope, _content, _owner, **_kw: [evidence])
 
     async def chunks():
         yield SimpleNamespace(content="Partial ", usage_metadata=None)
         yield SimpleNamespace(content="late answer [S1]", usage_metadata=None)
 
-    monkeypatch.setattr(
-        chat, "chat_model", lambda: SimpleNamespace(astream=lambda prompt: chunks())
-    )
+    monkeypatch.setattr(chat, "astream_chat", lambda messages, **_: chunks())
     run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
     conv = conversation_for(s, run)
 
@@ -710,7 +739,7 @@ def test_library_detail_uses_owned_index_and_atomic_retrieval_settings(chat_db):
         detail.update_retrieval(s.kb_a, detail.RetrievalUpdate(
             ids=[evidence["id"]], enabled=False), db, user)
         assert listed()["items"][0]["retrieval_enabled"] is False
-        assert not db.execute(chat.chunk_query([evidence["index_version_id"]])).all()
+        assert not db.execute(chat.chunk_query([evidence["index_version_id"]], s.owner)).all()
         details = detail.generate(s.kb_a, evidence["material_id"], db, user)
         assert detail.generate(s.kb_a, evidence["material_id"], db, user)["suggestion_id"] == details["suggestion_id"]
         job = db.get(detail.AiJob, details["suggestion_id"])
@@ -753,8 +782,9 @@ def test_disabled_fragment_is_excluded_from_summary_vector_search_and_history(ch
         update_retrieval(s.kb_a, RetrievalUpdate(ids=[evidence["id"]], enabled=False),
                          db, SimpleNamespace(id=s.owner))
     scope, chunks, history = chat.context(next_run)
-    assert chunks == history == []
-    assert chat.retrieve_vectors(scope, [[0.1]*1024]) == []
+    assert chunks == []
+    assert history == first_history
+    assert chat.retrieve_vectors(scope, [[0.1] * 1024], s.owner) == []
     assert chat.turn(s.owner, conv, first)["messages"][-1]["citations"][0]["quote"] == evidence["text"]
 
     with s.factory() as db:
@@ -762,4 +792,75 @@ def test_disabled_fragment_is_excluded_from_summary_vector_search_and_history(ch
                          db, SimpleNamespace(id=s.owner))
     _, chunks, history = chat.context(next_run)
     assert chunks == first_chunks and history == first_history
-    assert chat.retrieve_vectors(scope, [[0.1]*1024])[0]["id"] == evidence["id"]
+    assert chat.retrieve_vectors(scope, [[0.1] * 1024], s.owner)[0]["id"] == evidence["id"]
+
+
+def test_lexical_hybrid_boosts_chinese_keyword_match(chat_db, monkeypatch):
+    from unittest.mock import patch
+
+    import sqlalchemy as sa
+
+    from study_platform.core.config import Settings
+    from study_platform.persistence.models import ChunkEmbedding, MaterialChunk
+    from study_platform.services.lexical import lexical_column_values
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    with s.factory.begin() as db:
+        db.execute(
+            sa.update(MaterialChunk)
+            .where(MaterialChunk.id == evidence["id"])
+            .values(**lexical_column_values("雪松项目仓库允许的最高环境温度为摄氏二十五度。"))
+        )
+        unrelated = MaterialChunk(
+            id=uuid4(),
+            index_version_id=evidence["index_version_id"],
+            material_version_id=evidence["material_version_id"],
+            ordinal=99,
+            text="无关段落仅讨论降雨概率。",
+            text_sha256="b" * 64,
+            locator={"line": 99},
+            **lexical_column_values("无关段落仅讨论降雨概率。"),
+        )
+        db.add(unrelated)
+        db.flush()
+        vector = [0.0] * 1024
+        profile = f"{chat.get_settings().embedding_model}:1024"
+        db.add(ChunkEmbedding(chunk_id=unrelated.id, embedding=vector, model_profile_id=profile))
+        db.add(ChunkEmbedding(chunk_id=evidence["id"], embedding=vector, model_profile_id=profile))
+    scope = {"index_version_ids": [str(evidence["index_version_id"])]}
+    settings = Settings(
+        _env_file=None,
+        retrieval_hybrid_enabled=True,
+        retrieval_lexical_weight=1.0,
+        retrieval_min_similarity=0.99,
+    )
+    with patch.object(chat, "get_settings", lambda: settings):
+        hits = chat.retrieve_hybrid(scope, ["雪松仓库温度上限"], [vector], s.owner)
+    assert hits and hits[0]["id"] == evidence["id"]
+
+
+def test_lexical_hybrid_respects_owner_scope(chat_db):
+    from unittest.mock import patch
+
+    import sqlalchemy as sa
+
+    from study_platform.core.config import Settings
+    from study_platform.persistence.models import MaterialChunk
+    from study_platform.services.lexical import lexical_column_values
+
+    s = chat_db
+    owned = seed_evidence(s)
+    foreign = seed_evidence(s)
+    with s.factory.begin() as db:
+        for item in (owned, foreign):
+            db.execute(
+                sa.update(MaterialChunk)
+                .where(MaterialChunk.id == item["id"])
+                .values(**lexical_column_values("雪松仓库唯一密钥段落。"))
+            )
+    scope = {"index_version_ids": [str(owned["index_version_id"])]}
+    settings = Settings(_env_file=None, retrieval_hybrid_enabled=True, retrieval_min_similarity=0.99)
+    with patch.object(chat, "get_settings", lambda: settings):
+        hits = chat.retrieve_hybrid(scope, ["雪松仓库唯一密钥"], [[0.0] * 1024], s.owner)
+    assert {row["id"] for row in hits} == {owned["id"]}

@@ -3,6 +3,7 @@
 import hashlib
 import shutil
 import socket
+import zipfile
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -24,6 +25,9 @@ from study_platform.persistence.models.materials import (
 )
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
 from study_platform.services import classification
+from study_platform.services.lexical import lexical_column_values
+from study_platform.services.model_usage import ModelUsageContext
+from study_platform.services.models import embed_texts
 from study_platform.services.storage import source_path, version_dir
 
 _ocr = None
@@ -61,7 +65,16 @@ def ocr_image(image):
     )
 
 
+def ensure_docx_uncompressed_limit(path):
+    settings = get_settings()
+    with zipfile.ZipFile(path) as archive:
+        total = sum(info.file_size for info in archive.infolist())
+        if total > settings.max_docx_uncompressed_bytes:
+            raise ValueError("DOCX uncompressed payload too large")
+
+
 def extract_docx(path, *, legacy_columns=False):
+    ensure_docx_uncompressed_limit(path)
     from docx import Document
     from docx.table import Table
     from docx.text.paragraph import Paragraph
@@ -309,7 +322,7 @@ def run_once():
                 job = locked_job(db, job_id, fence)
                 payload = classification.suggestion_input(db, job)
                 db.commit()
-                result = classification.suggest(payload)
+                result = classification.suggest(payload, owner_user_id=job.owner_user_id)
                 job = locked_job(db, job_id, fence)
                 active = classification.active_index(db, db.get(MaterialVersion, version_id).material_id)
                 if active is None or str(active.id) != job.payload["index_id"]:
@@ -367,14 +380,16 @@ def run_once():
                 for ordinal, (text, locator) in enumerate(extracted)
                 for part in chunks(text)
             ]
-            from study_platform.services.models import embed_texts
-
             vectors = []
             for offset in range(0, len(chunk_rows), 20):
                 update_phase(db, job_id, fence, "indexing",
                              chunk_count=len(chunk_rows), embedded_count=len(vectors))
                 batch = chunk_rows[offset : offset + 20]
-                result = embed_texts([row[0] for row in batch])
+                job = locked_job(db, job_id, fence)
+                result = embed_texts(
+                    [row[0] for row in batch],
+                    context=ModelUsageContext(job.owner_user_id, "embedding"),
+                )
                 if len(result) != len(batch) or any(len(v) != 1024 for v in result):
                     raise ApiError(502, "embedding_invalid", "向量模型返回维度或内容不正确")
                 vectors.extend(result)
@@ -406,6 +421,7 @@ def run_once():
                     text=text,
                     text_sha256=hashlib.sha256(text.encode()).hexdigest(),
                     locator=locator,
+                    **lexical_column_values(text),
                 )
                 db.add(chunk)
                 db.flush()

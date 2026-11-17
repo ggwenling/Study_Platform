@@ -1,0 +1,3 @@
+{"id": "M01", "fact_group": "M01", "split": "calibration", "knowledge_base": "A", "question": "雪松项目仓库的最高温度是多少？", "answerable": true, "expected_facts": [["17摄氏度"]], "support": [{"document": "operations", "quote": "雪松项目仓库的温度上限为17摄氏度。"}]}
+{"id": "M02", "fact_group": "M02", "split": "calibration", "knowledge_base": "A", "question": "银杏项目哪一天交付？", "answerable": true, "expected_facts": [["2026年12月18日"]], "support": [{"document": "operations", "quote": "银杏项目的交付日期为2026年12月18日。"}]}
+{"id": "M03", "fact_group": "M03", "split": "calibration", "knowledge_base": "A", "question": "外地来的人能不能直接进员工宿舍？", "answerable": false, "expected_facts": [], "support": []}

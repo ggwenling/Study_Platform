@@ -7,6 +7,7 @@
   color: inherit;
 }
 
+
 .live-chat .ai-message .message-meta { min-height: 64px; }
 .live-chat .ai-message .message-meta > span:nth-child(2) { white-space: nowrap; }
 .live-chat .ai-message .message-meta time { margin-left: auto; }

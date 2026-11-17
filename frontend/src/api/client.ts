@@ -1,16 +1,17 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
-import type { LibraryOverview, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, Job, KnowledgeBase, KnowledgeBaseInput, Material, MaterialPreview, Message, Page, SearchItem, Turn, UploadResult, User } from './types'
+import type { LibraryOverview, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
-type AuthResponse = { user: User; access_token: string }
+type AuthResponse = { user: User; access_token: string; csrf_token: string }
+/** CSRF 仅存内存，避免依赖可被 XSS 读取的 document.cookie（HttpOnly Cookie 由浏览器随请求发送）。 */
 let session: AuthResponse | null = null
+let csrfMemory: string | undefined
 let refreshing: Promise<User> | null = null
 let sessionVersion = 0
 
 function csrfToken(): string | undefined {
-  const cookie = document.cookie.split(/;\s*/).find((part) => part.startsWith('study_csrf='))
-  return cookie ? decodeURIComponent(cookie.slice('study_csrf='.length)) : undefined
+  return csrfMemory ?? session?.csrf_token
 }
 function headersFor(headers?: HeadersInit, csrf = false): Headers {
   const result = new Headers(headers)
@@ -60,6 +61,7 @@ const json = (method: string, body?: unknown): RequestInit => ({ method, ...(bod
 function clearSession() {
   sessionVersion += 1
   session = null
+  csrfMemory = undefined
   refreshing = null
 }
 
@@ -71,6 +73,7 @@ function refresh() {
         throw new ApiError({ code: 'unauthenticated', message: '请重新登录', retryable: false }, 401)
       }
       session = result
+      csrfMemory = result.csrf_token
       return result.user
     }).catch((error) => {
       if (version === sessionVersion && error instanceof ApiError && error.status === 401) session = null
@@ -86,6 +89,7 @@ async function authenticate(path: string, body: unknown) {
   const result = await request<AuthResponse>(path, json('POST', body), 'public')
   clearSession()
   session = result
+  csrfMemory = result.csrf_token
   return result.user
 }
 const query = (values: Record<string, string | undefined>) => {
@@ -97,6 +101,7 @@ const query = (values: Record<string, string | undefined>) => {
 
 export const api = {
   me: () => request<User>('/me'),
+  modelUsage: (days = 30) => request<ModelUsageSummary>('/me/model-usage' + query({ days: String(days) })),
   refresh,
   clearSession,
   authOptions: () => request<{ google: boolean; password_reset: boolean }>('/auth/options', {}, 'public'),
@@ -148,6 +153,49 @@ export const api = {
   capabilities: () => request<Capabilities>('/capabilities'),
   turn: (conversationId: string, turnId: string, signal?: AbortSignal) => request<Turn>(turnPath(conversationId, turnId), { signal }),
   cancelTurn: (conversationId: string, turnId: string) => request<Turn>(turnPath(conversationId, turnId) + '/cancel', json('POST')),
+  learning: {
+    generateQuiz: (knowledgeBaseId: string, count: number) =>
+      request<{ quiz_id: string; title: string; item_count: number }>(
+        `/learning/knowledge-bases/${pathId(knowledgeBaseId)}/quizzes/generate`,
+        json('POST', { count }),
+      ),
+    startAttempt: (quizId: string) =>
+      request<LearningAttempt>('/learning/attempts', json('POST', { quiz_id: quizId })),
+    attempt: (id: string) => request<LearningAttempt>(`/learning/attempts/${pathId(id)}`),
+    submitAnswerImage: async (responseId: string, file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return authorized(async (token) => {
+        const headers = new Headers()
+        if (token) headers.set('Authorization', `Bearer ${token}`)
+        const response = await checked(
+          await fetch(`${base}/learning/responses/${pathId(responseId)}/answer-image`, {
+            method: 'POST',
+            headers,
+            body: form,
+            credentials: 'omit',
+          }),
+        )
+        return response.json() as Promise<{
+        response_id: string
+        verdict: string | null
+        verdict_source: string | null
+        confidence: number | null
+        feedback: string | null
+        answer: Record<string, unknown>
+        reference_answer: string | null
+      }>
+      })
+    },
+    patchVerdict: (responseId: string, body: { verdict: string; reference_answer?: string | null }) =>
+      request<{ response_id: string; verdict: string; verdict_source: string; reference_answer: string | null }>(
+        `/learning/responses/${pathId(responseId)}/verdict`,
+        json('PATCH', body),
+      ),
+    wrongQuestions: () => request<{ items: WrongQuestionItem[] }>('/learning/wrong-questions'),
+    masterWrong: (id: string) =>
+      request<{ id: string; status: string }>(`/learning/wrong-questions/${pathId(id)}/mastered`, json('POST')),
+  },
 }
 function turnPath(conversationId: string, turnId: string) { return `/conversations/${pathId(conversationId)}/turns/${pathId(turnId)}` }
 function fetchProtected(path: string, options?: RequestInit) {

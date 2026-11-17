@@ -26,6 +26,7 @@ dependencies = [
     "python-docx>=1.1,<2",
     "pillow>=11,<13",
     "pyjwt[crypto]>=2.10,<3",
+    "jieba>=0.42,<1",
 ]
 
 [dependency-groups]

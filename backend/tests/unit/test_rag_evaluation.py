@@ -4,14 +4,17 @@ import json
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
 from study_platform.cli import evaluate_rag
 from study_platform.services.rag_evaluation import (
+    format_retrieval_table,
     quality_gate,
     read_dataset,
     review_template,
+    summarize_retrieval,
     support_hit,
 )
 
@@ -78,12 +81,20 @@ def test_interrupted_live_evaluation_keeps_planned_questions_and_running_status(
 ):
     dataset = tmp_path / "facts.jsonl"
     dataset.write_text("test", encoding="utf-8")
-    args = SimpleNamespace(strategy="compare", dataset=dataset)
+    args = SimpleNamespace(
+        strategy="compare",
+        dataset=dataset,
+        retrieval_only=False,
+        metric_k=[1, 3, 6, 10],
+        metrics_format="table",
+    )
     cases = [{"id": n, "knowledge_base": "kb"} for n in ("first", "second")]
     monkeypatch.setattr(evaluate_rag, "isolated_database", lambda _: nullcontext(None))
-    monkeypatch.setattr(evaluate_rag, "seed_corpus", lambda *_: ({"kb": {}}, {}, {}, []))
+    monkeypatch.setattr(
+        evaluate_rag, "seed_corpus", lambda *_: ({"kb": {}}, {}, {}, [], uuid4())
+    )
 
-    async def eval_case(case, *_):
+    async def eval_case(case, *_args, **_kwargs):
         if case["id"] == "second":
             raise RuntimeError("interrupted")
         return [{"id": "first", "strategy": name} for name in ("baseline", "rewrite")]
@@ -214,6 +225,57 @@ def test_default_cli_validates_without_database_or_provider_calls(monkeypatch, c
     monkeypatch.setattr("sys.argv", ["study-eval-rag"])
     evaluate_rag.main()
     assert "No database or provider calls" in capsys.readouterr().out
+
+
+def test_retrieval_summary_from_mock_report():
+    report = {
+        "cases": [
+            {
+                "knowledge_base": "A",
+                "retrieval_ir": {
+                    "skipped": False,
+                    "mrr": 1.0,
+                    "recall@1": 1.0,
+                    "recall@3": 1.0,
+                    "ndcg@1": 1.0,
+                    "ndcg@3": 1.0,
+                    "hit@1": 1.0,
+                    "hit@3": 1.0,
+                },
+            },
+            {
+                "knowledge_base": "A",
+                "retrieval_ir": {
+                    "skipped": True,
+                    "mrr": 0.0,
+                    "recall@1": 0.0,
+                    "recall@3": 0.0,
+                    "ndcg@1": 0.0,
+                    "ndcg@3": 0.0,
+                    "hit@1": 0.0,
+                    "hit@3": 0.0,
+                },
+            },
+            {
+                "knowledge_base": "B",
+                "retrieval_ir": {
+                    "skipped": False,
+                    "mrr": 0.5,
+                    "recall@1": 0.0,
+                    "recall@3": 1.0,
+                    "ndcg@1": 0.0,
+                    "ndcg@3": 0.631,
+                    "hit@1": 0.0,
+                    "hit@3": 1.0,
+                },
+            },
+        ]
+    }
+    summary = summarize_retrieval(report, [1, 3])
+    assert summary["by_scope"]["overall"]["n_scored"] == 2
+    assert summary["by_scope"]["A"]["mrr"] == 1.0
+    table = format_retrieval_table(summary)
+    assert "overall" in table and "R@1" in table
 
 
 def test_equivalent_supporting_passages_are_accepted_but_file_match_alone_is_not():

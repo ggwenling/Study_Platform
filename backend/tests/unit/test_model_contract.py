@@ -10,7 +10,7 @@ from study_platform.persistence.base import Base
 # Source dictionary section 3. Only users.status's width needs the documented correction.
 FIELD_CONTRACT = """
 users: id email password_hash display_name role status email_verified_at last_login_at created_at updated_at deleted_at
-user_sessions: id user_id refresh_token_hash csrf_secret_hash user_agent_hash expires_at revoked_at created_at updated_at
+user_sessions: id user_id refresh_token_hash csrf_secret_hash user_agent_hash access_generation expires_at revoked_at created_at updated_at
 courses: id owner_user_id name subject description language settings created_at updated_at deleted_at
 materials: id owner_user_id course_id title kind status created_at updated_at deleted_at
 material_versions: id material_id version_no is_current source_mime source_sha256 byte_size object_key page_count parser_profile parse_status failure_code created_at updated_at
@@ -30,7 +30,7 @@ quizzes: id owner_user_id course_id title status difficulty source_scope generat
 quiz_items: id quiz_id knowledge_point_id ordinal item_type stem options answer_key rubric explanation difficulty max_score created_at
 quiz_item_sources: id quiz_item_id chunk_id material_version_id index_version_id locator created_at
 quiz_attempts: id quiz_id owner_user_id status started_at submitted_at graded_at total_score max_score created_at updated_at
-quiz_responses: id attempt_id quiz_id quiz_item_id answer score is_correct feedback grader_profile graded_at created_at updated_at
+quiz_responses: id attempt_id quiz_id quiz_item_id answer score is_correct feedback grader_profile confidence verdict verdict_source reference_answer_effective graded_at created_at updated_at
 wrong_questions: id owner_user_id quiz_item_id last_response_id wrong_count status last_wrong_at next_review_at created_at updated_at
 flashcard_decks: id owner_user_id course_id title source_scope generator_profile created_at updated_at deleted_at
 flashcards: id deck_id knowledge_point_id front back ease_factor interval_days repetition_count due_at status created_at updated_at
@@ -72,7 +72,18 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
     }
     expected["study.google_identities"] = {"subject", "user_id"}
     expected["study.password_resets"] = {"token_hash", "user_id", "email_hash", "client_hash", "created_at", "used_at"}
-    assert len(expected) == 40
+    expected["study.model_call_records"] = {
+        "id",
+        "owner_user_id",
+        "purpose",
+        "model_name",
+        "used_fallback",
+        "usage",
+        "elapsed_ms",
+        "success",
+        "created_at",
+    }
+    assert len(expected) == 41
     assert set(Base.metadata.tables) == set(expected)
     for name, fields in expected.items():
         assert set(Base.metadata.tables[name].columns.keys()) == fields, name

@@ -50,7 +50,11 @@ def client(monkeypatch):
         def protected(user=Depends(get_current_user)):
             return {"id": str(user.id)}
 
-        with TestClient(app, base_url="http://testserver/api/v1") as result:
+        with TestClient(
+            app,
+            base_url="http://testserver/api/v1",
+            headers={"Origin": "http://testserver"},
+        ) as result:
             yield result, db
         db.close()
         transaction.rollback()
@@ -70,7 +74,8 @@ def test_bearer_validation_refresh_and_revocation(client):
     access = response.json()["access_token"]
     cookies = response.headers.get_list("set-cookie")
     assert any("study_refresh=" in c and "HttpOnly" in c and "Path=/api/v1/auth" in c for c in cookies)
-    assert any("study_csrf=" in c and "HttpOnly" not in c for c in cookies)
+    assert any("study_csrf=" in c and "HttpOnly" in c for c in cookies)
+    assert response.json()["csrf_token"]
     token = http.cookies["study_refresh"]
     saved = db.scalar(sa.select(UserSession).where(UserSession.refresh_token_hash == digest(token)))
     assert saved and saved.refresh_token_hash != token
@@ -86,9 +91,24 @@ def test_bearer_validation_refresh_and_revocation(client):
     assert http.post("/auth/refresh").status_code == 403
     csrf = {"X-CSRF-Token": http.cookies["study_csrf"]}
     assert http.post("/auth/refresh", headers={**csrf, "Origin": "https://evil.test"}).status_code == 403
-    assert http.post("/auth/refresh", headers=csrf).json()["user"]["id"] == first
-    assert http.post("/auth/logout", headers=csrf).status_code == 204
+    refresh = http.post("/auth/refresh", headers=csrf).json()
+    assert refresh["user"]["id"] == first
     assert http.get("/me", headers=headers).status_code == 401
+    new_access = refresh["access_token"]
+    assert http.get("/me", headers={"Authorization": f"Bearer {new_access}"}).json()["id"] == first
+    active_refresh = http.cookies["study_refresh"]
+    active_csrf = http.cookies["study_csrf"]
+    stale_csrf = response.json()["csrf_token"]
+    http.cookies.set("study_refresh", token)
+    assert http.post("/auth/refresh", headers={"X-CSRF-Token": stale_csrf}).status_code == 401
+    http.cookies.set("study_refresh", active_refresh)
+    http.cookies.set("study_csrf", active_csrf)
+    logout_headers = {
+        "Authorization": f"Bearer {new_access}",
+        "X-CSRF-Token": active_csrf,
+    }
+    assert http.post("/auth/logout", headers=logout_headers).status_code == 204
+    assert http.get("/me", headers={"Authorization": f"Bearer {new_access}"}).status_code == 401
     assert http.post("/auth/refresh", headers=csrf).status_code == 401
 
 
@@ -226,6 +246,7 @@ def test_google_signin_and_verified_account_link(client, monkeypatch):
     assert callback().headers["location"] == "http://testserver/history"
     csrf = {"X-CSRF-Token": http.cookies["study_csrf"]}
     assert http.post("/auth/refresh", headers=csrf).json()["user"]["email"] == profile["email"]
+    csrf = {"X-CSRF-Token": http.cookies["study_csrf"]}
     assert http.post("/auth/logout", headers=csrf).status_code == 204
 
     profile.update(email=f"{uuid4().hex}@example.test", sub=uuid4().hex)
@@ -307,7 +328,7 @@ def test_bearer_required_for_upload_and_private_files(client, monkeypatch, tmp_p
     from study_platform.core.config import get_settings
     from study_platform.services.storage import page_path
 
-    http, _ = client
+    http, db = client
     monkeypatch.setattr(get_settings(), "storage_dir", tmp_path)
     account = http.post("/auth/register", json={
         "email": f"{uuid4().hex}@example.test", "password": "safe-password-123", "display_name": "Owner",
@@ -320,6 +341,11 @@ def test_bearer_required_for_upload_and_private_files(client, monkeypatch, tmp_p
     upload = http.post(path, headers=bearer, files=files)
     assert upload.status_code == 202
     version_id = UUID(upload.json()["version_id"])
+    from study_platform.persistence.models.materials import MaterialVersion
+
+    ready = db.get(MaterialVersion, version_id)
+    ready.parse_status = "ready"
+    db.commit()
     page_path(version_id, 1).write_bytes(b"test image")
     for suffix, content in (("content", b"test document"), ("pages/1", b"test image")):
         url = f"/material-versions/{version_id}/{suffix}"

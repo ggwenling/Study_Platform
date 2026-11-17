@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useDisclosurePreference } from '../useDisclosurePreference'
 import { Copy, FileText, Folder, PanelRight } from 'lucide-react'
 import { Link } from 'react-router'
 import { api } from '@/api/client'
@@ -21,7 +22,8 @@ export default function LiveChat({ id }: { id: string }) {
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [saved, setSaved] = useState<Message[]>([])
   const [error, setError] = useState('')
-  const [panel, setPanel] = useState(true)
+  const sourcesDefault = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 769px)').matches : true
+  const [panel, setPanel] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:chat-sources`, sourcesDefault)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [sourceId, setSourceId] = useState<string | null>(null)
   const [source, setSource] = useState<Citation | null>(null)

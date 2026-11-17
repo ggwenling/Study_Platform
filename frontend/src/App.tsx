@@ -1,14 +1,13 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { BookOpen, ChevronRight, History, Layers, MessageCircle, PanelLeft, Search, Settings } from 'lucide-react'
+import { BookOpen, ChevronRight, GraduationCap, History, Layers, MessageCircle, PanelLeft, Search, Settings } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent, DialogTrigger } from '@/components/arc/dialog/dialog'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
+import { Input } from '@/components/arc/input/input'
 import { UserMenu } from '@/components/arc/user-menu/user-menu'
-import { Home } from './components/Home'
 import { ProjectNavigation } from './components/ProjectNavigation'
-import { Account } from './components/Account'
 import type { AccountMode } from './components/Account'
 import { WorkspaceData, useWorkspace } from './WorkspaceData'
 import { api } from './api/client'
@@ -16,16 +15,38 @@ import { ApiError } from './api/stream'
 import type { SearchItem, User, Conversation } from './api/types'
 import { allPages, errorMessage } from './api/ui'
 
+const Home = lazy(() => import('./components/Home').then((m) => ({ default: m.Home })))
+const Account = lazy(() => import('./components/Account').then((m) => ({ default: m.Account })))
 const DemoChat = lazy(() => import('./components/DemoChat'))
 const LiveChat = lazy(() => import('./components/LiveChat'))
 const Library = lazy(() => import('./components/Library'))
+const Learning = lazy(() => import('./components/Learning').then((m) => ({ default: m.Learning })))
+const VisualOrbSmoke = lazy(() => import('./components/VisualOrbSmoke').then((m) => ({ default: m.VisualOrbSmoke })))
+const SettingsPage = lazy(() => import('./components/Settings').then((m) => ({ default: m.Settings })))
 
 const navigation = [
   { label: '新对话', path: '/', icon: MessageCircle },
   { label: '历史', path: '/history', icon: History },
   { label: '知识库', path: '/knowledge', icon: Layers },
+  { label: '学习', path: '/learning', icon: GraduationCap },
   { label: '设置', path: '/settings', icon: Settings },
 ]
+
+function SettingsRoute({ user, requireLogin }: { user: User | null; requireLogin: () => void }) {
+  return (
+    <Suspense fallback={<div className="placeholder-page" role="status">正在打开设置…</div>}>
+      <SettingsPage user={user} requireLogin={requireLogin} />
+    </Suspense>
+  )
+}
+
+function LearningRoute({ notify }: { notify: (message: string) => void }) {
+  const { user, libraries, requireLogin } = useWorkspace()
+  if (!user) {
+    return <div className="placeholder-page"><EmptyState title="登录后使用学习" description="练习、拍照作答与错题本。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
+  }
+  return <Learning knowledgeBases={libraries} notify={notify} />
+}
 
 function Placeholder({ title, description }: { title: string; description: string }) {
   return (
@@ -65,6 +86,7 @@ export function App() {
 
   function requireLogin(target?: string) {
     if (loginOpen) return
+    void import('./components/Account')
     if (typeof target === 'string') destination.current = target
     trigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     setMode('login')
@@ -127,12 +149,16 @@ export function App() {
       <Shell onLogout={() => setUser(null)} onPrivateLink={requireLogin} privatePage={privatePage && !user} sessionState={sessionState}
         retrySession={() => { setSessionState('loading'); setSessionAttempt((value) => value + 1) }} />
     </WorkspaceData>
-    <Account open={loginOpen} onOpenChange={(open) => {
-      setLoginOpen(open)
-      if (!open) { destination.current = ''; setResetToken(''); setAuthError('') }
-    }} onLogin={signedIn} mode={mode} setMode={(nextMode) => { setMode(nextMode); setAuthError('') }}
-      next={destination.current || path} resetToken={resetToken} initialError={authError}
-      returnFocus={() => { if (trigger.current?.isConnected) trigger.current.focus(); else document.querySelector<HTMLElement>('.nav-toggle')?.focus() }} />
+    {loginOpen && (
+      <Suspense fallback={null}>
+        <Account open={loginOpen} onOpenChange={(open) => {
+          setLoginOpen(open)
+          if (!open) { destination.current = ''; setResetToken(''); setAuthError('') }
+        }} onLogin={signedIn} mode={mode} setMode={(nextMode) => { setMode(nextMode); setAuthError('') }}
+          next={destination.current || path} resetToken={resetToken} initialError={authError}
+          returnFocus={() => { if (trigger.current?.isConnected) trigger.current.focus(); else document.querySelector<HTMLElement>('.nav-toggle')?.focus() }} />
+      </Suspense>
+    )}
     <div className="notice-region" role="status" aria-live="polite">
       <AnimatePresence mode="wait">
         {notice && (
@@ -235,13 +261,16 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
         <main className="page">
           {privatePage ? sessionState === 'error'
             ? <div className="placeholder-page"><EmptyState title="无法恢复登录状态" description="请检查连接后重试。" action={<Button onClick={retrySession}>重试</Button>} /></div>
-            : sessionState === 'loading' ? <div className="placeholder-page" role="status">正在检查登录状态…</div> : <Home />
+            : sessionState === 'loading' ? <div className="placeholder-page" role="status">正在检查登录状态…</div>
+              : <Suspense fallback={<div className="placeholder-page" role="status">正在打开首页…</div>}><Home /></Suspense>
           : <Routes>
-            <Route path="/" element={<Home />} />
+            <Route path="/" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开首页…</div>}><Home /></Suspense>} />
             <Route path="/chat/:id" element={<ChatRoute notify={notify} />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/knowledge" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开知识库…</div>}><Library preferredId={libraryId ?? undefined} /></Suspense>} />
-            <Route path="/settings" element={<Placeholder title="设置暂未开放" description="个人偏好将在这里管理。" />} />
+            <Route path="/learning" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开学习…</div>}><LearningRoute notify={notify} /></Suspense>} />
+            <Route path="/settings" element={<SettingsRoute user={user} requireLogin={requireLogin} />} />
+            <Route path="/__visual/orb" element={<Suspense fallback={<div className="placeholder-page" role="status">正在加载…</div>}><VisualOrbSmoke /></Suspense>} />
             <Route path="*" element={<Placeholder title="页面不存在" description="请检查访问地址，或返回首页。" />} />
           </Routes>}
         </main>
@@ -253,6 +282,15 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
     </Dialog>
   )
 }
+
+const historyWhen = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
 
 function HistoryPage() {
   const { user, revision, report, requireLogin } = useWorkspace()
@@ -270,9 +308,18 @@ function HistoryPage() {
   if (!user) return <div className="placeholder-page"><EmptyState title="登录后查看历史" description="打开已保存的会话。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
   if (error) return <Placeholder title="暂时无法读取历史" description={error} />
   if (!items) return <div className="placeholder-page" role="status">正在读取历史…</div>
-  if (!items.length) return <Placeholder title="暂无会话历史" description="从首页开始第一轮问答。" />
-  return <section className="resource-page"><h1>会话历史</h1><ul className="resource-list">
-    {items.map((row) => <li key={row.id}><Link to={`/chat/${row.id}`}>{row.title || '未命名对话'}</Link></li>)}
+  if (!items.length) {
+    return (
+      <div className="placeholder-page">
+        <EmptyState title="暂无会话历史" description="从首页开始第一轮问答，记录会出现在这里。" action={<Link to="/"><Button>前往首页</Button></Link>} />
+      </div>
+    )
+  }
+  return <section className="resource-page history-page"><h1>会话历史</h1><ul className="resource-list history-list">
+    {items.map((row) => <li key={row.id}>
+      <Link to={`/chat/${row.id}`}>{row.title || '未命名对话'}</Link>
+      <time className="history-meta" dateTime={row.updated_at}>{historyWhen.format(new Date(row.updated_at))}</time>
+    </li>)}
   </ul></section>
 }
 
@@ -292,7 +339,7 @@ function SearchPanel({ onSelect }: { onSelect: () => void }) {
       setResults(null)
       try { setResults(await allPages((cursor) => api.search(query.trim(), cursor))) } catch (error) { report(error) } finally { setBusy(false) }
     }}>
-      <label>关键词<input value={query} maxLength={200} onChange={(event) => setQuery(event.target.value)} /></label>
+      <Input label="关键词" value={query} maxLength={200} onChange={(event) => setQuery(event.target.value)} placeholder="知识库、资料或对话标题" />
       <Button type="submit" loading={busy}>搜索</Button>
     </form>
     {results?.length ? <ul className="resource-list">

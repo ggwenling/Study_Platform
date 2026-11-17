@@ -80,8 +80,35 @@ for await (const event of streamChat({
 
 可选查询改写由后端 `RAG_QUERY_REWRITE_ENABLED` 控制，默认关闭；不增加请求字段或 SSE 事件，实验步骤仍显示为 searching。它只补充当前库内的检索问题，最终回答针对原问题，不能扩大知识范围。行为与实测边界见 [质量回归说明](rag-quality.md)。
 
+## 知识库详情与片段
+
+均需 Bearer。路径前缀 `/knowledge-bases/{kb_id}`。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/overview` | 库内文件数、索引/OCR 进度、主题标签与按日活跃统计 |
+| POST | `/sync` | 刷新统计并写 `last_synced_at` |
+| GET | `/documents/{material_id}/locations` | 按原文段落/页聚合的片段位置 |
+| GET | `/fragments` | 分页列出可检索片段（`q`、`tag`、`day`、`material_id`、`section_id` 等筛选） |
+| PATCH | `/fragments/retrieval` | JSON `{"ids":["UUID",…],"enabled":true\|false}` 批量开关片段是否参与检索 |
+| GET/POST/PATCH | `/documents/{material_id}/classification` | 主题/标签建议与确认 |
+
+片段 `retrieval_enabled=false` 时不进入向量检索与摘要汇总，但不影响历史消息展示；关闭后仍会参与同 scope 的对话历史（仅作表达参考，不作事实依据）。
+
+## 认证强化说明
+
+注册、登录、刷新与退出要求请求带受信任 `Origin` 或 `Referer`（与 `allowed_origins` 一致）。`POST /auth/login` 与 `POST /auth/register` 受每 IP 速率限制（默认 30 次/分钟，超出返回 `429 rate_limited`）。响应体 `AuthDTO` 含 `csrf_token`；刷新会轮转 `study_refresh` 与 `csrf_token`，并使上一枚 access JWT 立即失效（`tg` 代次）。`study_csrf` Cookie 为 HttpOnly，前端应用内存中的 `csrf_token` 设置 `X-CSRF-Token`。部署 HTTPS 时须 `COOKIE_SECURE=true`（且 `AUTH_PUBLIC_URL` 为 `https://` 时启动会校验）。
+
+资料 `GET .../content` 仅在 `parse_status=ready` 时提供原件；上传校验文件头与扩展名一致。进行中返回 `409 content_not_ready`。
+
 ## 运行与费用
 
 开发库执行 `uv run alembic upgrade head`；如需独立的 LangGraph 表再执行 `uv run study-setup-checkpointer`。启动 `uv run study-api` 与独立的 `uv run study-worker`。应用的问答流程通过 LangChain 调用模型、在业务数据库记录轮次，不使用 LangGraph checkpointer 恢复执行。
 
-默认聊天模型为 `deepseek-flash`，向量模型为 `qwen3.7-text-embedding-flash`，向量维度 1024。密钥仅配置在服务端 `DEEPSEEK_API_KEY`、`EMBEDDING_API_KEY`，不要放到前端。模型请求可能产生费用；余额、权限或额度不足时返回错误，不自动换模型，也不会对资料任务反复重试此类错误。`/health/ready` 只检查配置存在，不验证密钥有效性或余额，也不会发起模型调用。
+默认聊天模型为 `deepseek-flash`，向量模型为 `qwen3.7-text-embedding-flash`，向量维度 1024。密钥仅配置在服务端 `DEEPSEEK_API_KEY`、`EMBEDDING_API_KEY`，不要放到前端。
+
+可选聊天备用：设置 `CHAT_FALLBACK_MODEL` 可在同一 OpenAI 兼容端点下切换到另一模型；也可同时配置 `CHAT_FALLBACK_BASE_URL` 与 `CHAT_FALLBACK_API_KEY` 指向其他提供商。未配置时行为与原来一致。非流式调用（学习出题/判题、检索改写、资料分类建议等）在主模型超时、限流（429）、5xx 或连接错误时会自动尝试备用；4xx 参数/客户端错误不切换。流式对话仅在尚未输出任何 token 时切换，已输出部分内容后不再切换。
+
+`GET /me/model-usage?days=30` 返回当前登录用户自己的模型调用汇总（按天/用途/模型聚合），不含提示词、资料或作答正文；用量写入失败不影响主流程。设置页展示最近 30 天摘要。
+
+模型请求可能产生费用；未配置备用时，余额、权限或额度不足仍直接返回错误，资料任务不会对此类错误反复重试。`/health/ready` 只检查配置存在，不验证密钥有效性或余额，也不会发起模型调用。

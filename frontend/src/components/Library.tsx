@@ -252,6 +252,12 @@ function LibraryDetail({ library, libraries, select, create }: {
           if (file) void upload(file)
         }} />
       </header>
+      {overview && overview.processing_count > 0 && (
+        <p className="library-processing-banner" role="status">
+          <CircleDashed size={18} aria-hidden="true" />
+          {overview.processing_count} 份资料正在处理，页面会自动刷新状态。
+        </p>
+      )}
       {busy === 'upload' && <p role="status" className="muted">正在导入资料…</p>}
       {failure && <p className="library-empty" role="alert">{failure} <Button size="sm" onClick={reloadData}>重试</Button></p>}
       <section className="library-panel">

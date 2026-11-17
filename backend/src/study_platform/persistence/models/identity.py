@@ -77,6 +77,9 @@ class UserSession(Base):
     refresh_token_hash = sa.Column("refresh_token_hash", sa.CHAR(64), nullable=False)
     csrf_secret_hash = sa.Column("csrf_secret_hash", sa.CHAR(64), nullable=False)
     user_agent_hash = sa.Column("user_agent_hash", sa.CHAR(64), nullable=True)
+    access_generation = sa.Column(
+        "access_generation", sa.Integer(), nullable=False, server_default=sa.text("0")
+    )
     expires_at = sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False)
     revoked_at = sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True)
     created_at = sa.Column(

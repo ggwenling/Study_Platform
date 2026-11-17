@@ -9,10 +9,12 @@ from study_platform.api.v1 import router as v1_router
 from study_platform.core.config import Settings, get_settings
 from study_platform.core.errors import ApiError, api_error_handler
 from study_platform.persistence.session import create_engine
+from study_platform.services.auth import validate_cookie_security
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    validate_cookie_security(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

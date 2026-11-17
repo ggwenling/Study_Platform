@@ -14,6 +14,8 @@ pytestmark = pytest.mark.integration
 def runtime_urls():
     if os.getenv("RUN_DB_TESTS") != "1":
         pytest.skip("set RUN_DB_TESTS=1 to run PostgreSQL tests")
+    if make_url(os.environ["DATABASE_URL"]).username == "postgres":
+        pytest.skip("runtime access checks require non-superuser DATABASE_URL")
     required = ("TEST_DATABASE_URL", "DATABASE_URL", "GRAPH_DATABASE_URL")
     if not all(os.getenv(key) for key in required):
         pytest.skip("test and runtime database URLs are required")

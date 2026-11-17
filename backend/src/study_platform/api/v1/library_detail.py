@@ -15,7 +15,12 @@ from study_platform.api.v1.materials import missing, owned_kb, owned_material
 from study_platform.core.errors import ApiError
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models.identity import Material
-from study_platform.persistence.models.materials import IndexVersion, MaterialChunk, MaterialSection, MaterialVersion
+from study_platform.persistence.models.materials import (
+    IndexVersion,
+    MaterialChunk,
+    MaterialSection,
+    MaterialVersion,
+)
 from study_platform.persistence.models.operations import AiJob
 from study_platform.services import classification
 
