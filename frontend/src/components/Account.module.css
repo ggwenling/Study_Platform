@@ -1,6 +1,6 @@
 .card {
   width: min(378px, calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
-  background: light-dark(#eee, #121212);
+  background: var(--surface-raised);
   border-color: var(--line);
   border-radius: 14px;
   --control-height-md: 44px;
@@ -28,6 +28,6 @@
 .forgot, .footer { display: flex; align-items: center; gap: 5px; font-size: var(--text-caption); }
 .forgot { justify-content: flex-end; margin-top: -6px; }
 .footer { justify-content: center; color: var(--text-secondary); }
-.divider { display: flex; align-items: center; gap: 12px; font-size: var(--text-xs); color: color-mix(in srgb, var(--ink) 66%, var(--panel)); }
+.divider { display: flex; align-items: center; gap: 12px; font-size: var(--text-xs); color: var(--text-muted); }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
-.overlay[data-state] { background: rgb(0 0 0 / .76); backdrop-filter: blur(2px); }
+.overlay[data-state] { background: var(--overlay); backdrop-filter: blur(2px); }

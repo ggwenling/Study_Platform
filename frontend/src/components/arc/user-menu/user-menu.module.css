@@ -86,7 +86,7 @@
 @keyframes user-menu-spin { to { transform: rotate(360deg); } }
 
 /* Below 640px the same content rises as a bottom sheet with larger rows. */
-.scrim { position: fixed; inset: 0; z-index: 70; background: oklch(0% 0 0 / .32); -webkit-tap-highlight-color: transparent; }
+.scrim { position: fixed; inset: 0; z-index: 70; background: var(--overlay, oklch(0% 0 0 / .32)); -webkit-tap-highlight-color: transparent; }
 .sheet { --row: 46px; --inset: 10px; position: fixed; top: auto; right: 0; bottom: 0; left: 0; z-index: 71; width: auto; max-width: none; max-height: 88dvh; overflow-y: auto; overscroll-behavior: contain; padding: 8px var(--inset) calc(12px + env(safe-area-inset-bottom)); border-bottom: 0; border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
 .handle { display: block; width: 36px; height: 5px; margin: 0 auto 10px; border-radius: var(--radius-pill); background: var(--border-strong); cursor: grab; }
 .sheet .header { padding: 4px 8px 12px; }
