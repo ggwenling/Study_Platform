@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, BookOpen, Camera, Check, ChevronRight, X } from 'lucide-react'
+import { Link } from 'react-router'
 import { Button } from '@/components/arc/button/button'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { api } from '@/api/client'
 import type { KnowledgeBase, LearningAttempt, WrongQuestionItem } from '@/api/types'
 import { ApiError } from '@/api/stream'
 import { errorMessage } from '@/api/ui'
-import { isReferenceRevealed } from '@/learningUi'
+import { formatLearningTimestamp, isReferenceRevealed, labelWrongQuestionStatus } from '@/learningUi'
 
 type Props = {
   knowledgeBases: KnowledgeBase[]
@@ -117,19 +118,35 @@ export function Learning({ knowledgeBases, notify }: Props) {
 
   const current = attempt?.items[index]
 
+  if (!knowledgeBases.length) {
+    return (
+      <div className="learning-page">
+        <header className="learning-header">
+          <h1>学习</h1>
+          <p>基于所选知识库练习，拍照作答，可手动更正判题结果。</p>
+        </header>
+        <EmptyState
+          title="还没有知识库"
+          description="先创建知识库并导入、索引资料，再从这里出题练习。"
+          icon={<BookOpen aria-hidden />}
+          action={<Link to="/knowledge"><Button>前往知识库</Button></Link>}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="learning-page">
       <header className="learning-header">
         <h1>学习</h1>
         <p>基于所选知识库练习，拍照作答，可手动更正判题结果。</p>
       </header>
-      <div className="learning-tabs" role="tablist">
-        <button type="button" role="tab" aria-selected={tab === 'practice'} className={tab === 'practice' ? 'active' : ''} onClick={() => setTab('practice')}>练习</button>
-        <button type="button" role="tab" aria-selected={tab === 'wrong'} className={tab === 'wrong' ? 'active' : ''} onClick={() => setTab('wrong')}>错题本 ({wrongs.length})</button>
+      <div className="learning-tabs" role="tablist" aria-label="学习视图">
+        <button type="button" role="tab" id="learning-tab-practice" aria-selected={tab === 'practice'} aria-controls="learning-panel-practice" className={tab === 'practice' ? 'active' : ''} onClick={() => setTab('practice')}>练习</button>
+        <button type="button" role="tab" id="learning-tab-wrong" aria-selected={tab === 'wrong'} aria-controls="learning-panel-wrong" className={tab === 'wrong' ? 'active' : ''} onClick={() => setTab('wrong')}>错题本 ({wrongs.length})</button>
       </div>
 
-      {tab === 'practice' ? (
-        <section className="learning-panel">
+      <section id="learning-panel-practice" className="learning-panel" role="tabpanel" aria-labelledby="learning-tab-practice" hidden={tab !== 'practice'}>
           <label className="learning-field">
             <span>当前知识库</span>
             <select value={kbId} onChange={(e) => setKbId(e.target.value)} disabled={busy}>
@@ -138,7 +155,7 @@ export function Learning({ knowledgeBases, notify }: Props) {
               ))}
             </select>
           </label>
-          <Button type="button" disabled={busy || !kbId} onClick={() => void startPractice()}>
+          <Button type="button" loading={busy} disabled={busy || !kbId} onClick={() => void startPractice()}>
             从当前库出题
           </Button>
           {!attempt ? (
@@ -186,9 +203,8 @@ export function Learning({ knowledgeBases, notify }: Props) {
               </div>
             </article>
           ) : null}
-        </section>
-      ) : (
-        <section className="learning-panel">
+      </section>
+      <section id="learning-panel-wrong" className="learning-panel" role="tabpanel" aria-labelledby="learning-tab-wrong" hidden={tab !== 'wrong'}>
           {wrongs.length === 0 ? (
             <EmptyState title="暂无错题" description="判错的题目会自动出现在这里。" />
           ) : (
@@ -196,14 +212,16 @@ export function Learning({ knowledgeBases, notify }: Props) {
               {wrongs.map((row) => (
                 <li key={row.id}>
                   <p>{row.stem}</p>
-                  <span>错 {row.wrong_count} 次 · {row.status}</span>
-                  <Button type="button" variant="ghost" onClick={() => void api.learning.masterWrong(row.id).then(refreshWrongs)}>已掌握</Button>
+                  <span className="learning-wrong-meta">
+                    错 {row.wrong_count} 次 · {labelWrongQuestionStatus(row.status)}
+                    <time dateTime={row.last_wrong_at}> · 最近 {formatLearningTimestamp(row.last_wrong_at)}</time>
+                  </span>
+                  <Button type="button" variant="ghost" disabled={busy} onClick={() => void api.learning.masterWrong(row.id).then(refreshWrongs)}>已掌握</Button>
                 </li>
               ))}
             </ul>
           )}
-        </section>
-      )}
+      </section>
     </div>
   )
 }

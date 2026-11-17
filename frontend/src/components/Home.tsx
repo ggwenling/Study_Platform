@@ -78,6 +78,12 @@ export function Home() {
         </section>
         <section>
           <h2>资料概况</h2>
+          {user && !loading && overview && overview.knowledge_base_count === 0 && (
+            <p className="home-onboarding">
+              <Link to="/knowledge">创建首个知识库</Link>
+              ，上传资料后即可在本页提问。
+            </p>
+          )}
           <Link className="overview-row" to="/knowledge"><Layers size={20} />知识库 <span>{overview?.knowledge_base_count}</span><ChevronRight size={15} /></Link>
           <Link className="overview-row" to="/knowledge"><FileText size={20} />资料 <span>{overview?.material_count}</span><ChevronRight size={15} /></Link>
           <Link className="overview-row" to="/history"><HelpCircle size={20} />问答 <span>{overview?.completed_qa_count}</span><ChevronRight size={15} /></Link>

@@ -5,6 +5,7 @@ import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } fro
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent, DialogTrigger } from '@/components/arc/dialog/dialog'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
+import { Input } from '@/components/arc/input/input'
 import { UserMenu } from '@/components/arc/user-menu/user-menu'
 import { ProjectNavigation } from './components/ProjectNavigation'
 import type { AccountMode } from './components/Account'
@@ -282,6 +283,15 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
   )
 }
 
+const historyWhen = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
 function HistoryPage() {
   const { user, revision, report, requireLogin } = useWorkspace()
   const [items, setItems] = useState<Conversation[] | null>(null)
@@ -298,9 +308,18 @@ function HistoryPage() {
   if (!user) return <div className="placeholder-page"><EmptyState title="登录后查看历史" description="打开已保存的会话。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
   if (error) return <Placeholder title="暂时无法读取历史" description={error} />
   if (!items) return <div className="placeholder-page" role="status">正在读取历史…</div>
-  if (!items.length) return <Placeholder title="暂无会话历史" description="从首页开始第一轮问答。" />
-  return <section className="resource-page"><h1>会话历史</h1><ul className="resource-list">
-    {items.map((row) => <li key={row.id}><Link to={`/chat/${row.id}`}>{row.title || '未命名对话'}</Link></li>)}
+  if (!items.length) {
+    return (
+      <div className="placeholder-page">
+        <EmptyState title="暂无会话历史" description="从首页开始第一轮问答，记录会出现在这里。" action={<Link to="/"><Button>前往首页</Button></Link>} />
+      </div>
+    )
+  }
+  return <section className="resource-page history-page"><h1>会话历史</h1><ul className="resource-list history-list">
+    {items.map((row) => <li key={row.id}>
+      <Link to={`/chat/${row.id}`}>{row.title || '未命名对话'}</Link>
+      <time className="history-meta" dateTime={row.updated_at}>{historyWhen.format(new Date(row.updated_at))}</time>
+    </li>)}
   </ul></section>
 }
 
@@ -320,7 +339,7 @@ function SearchPanel({ onSelect }: { onSelect: () => void }) {
       setResults(null)
       try { setResults(await allPages((cursor) => api.search(query.trim(), cursor))) } catch (error) { report(error) } finally { setBusy(false) }
     }}>
-      <label>关键词<input value={query} maxLength={200} onChange={(event) => setQuery(event.target.value)} /></label>
+      <Input label="关键词" value={query} maxLength={200} onChange={(event) => setQuery(event.target.value)} placeholder="知识库、资料或对话标题" />
       <Button type="submit" loading={busy}>搜索</Button>
     </form>
     {results?.length ? <ul className="resource-list">
