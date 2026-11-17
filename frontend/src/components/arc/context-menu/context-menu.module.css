@@ -1,4 +1,4 @@
-.target { display: block; outline: none; }
+.target { display: block; outline: none; cursor: pointer; }
 /* Motion scales the menu from the pointer (transform-origin is set inline) and fades it out faster than it arrives. */
 .menu { position: fixed; z-index: 100; min-width: min(13rem, calc(100vw - 16px)); max-width: calc(100vw - 16px); max-height: min(300px, calc(100vh - 16px)); overflow-y: auto; padding: 5px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface-raised); color: var(--foreground); box-shadow: var(--shadow-floating); outline: none; }
 .highlight { position: absolute; top: 0; right: 5px; left: 5px; border-radius: calc(var(--radius-panel) - 6px); background: var(--surface-muted); opacity: 0; pointer-events: none; transition: background-color var(--duration-fast) var(--ease-standard); }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Check, Ellipsis, Plus, Server, ShieldCheck } from 'lucide-react'
+import { CircleDot, Database, Ellipsis, MessageCircle, Plus, Server, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { api } from '@/api/client'
 import { errorMessage } from '@/api/ui'
 import type { ModelConnection, ModelConnections } from '@/api/types'
@@ -13,7 +13,7 @@ import { Select } from '@/components/arc/select/select'
 import { useWorkspace } from '../WorkspaceData'
 import './ModelConnections.css'
 
-const statusLabel = { draft: '待测试', testing: '测试中', ready: '可用', failed: '测试失败' }
+const statusLabel = { draft: '待测试', testing: '测试中', ready: '已测试', failed: '测试失败' }
 const fixes: Record<string, string> = {
   model_auth_failed: '认证失败。请检查 API Key 和模型访问权限。',
   model_quota_unavailable: '余额不足或请求受限。请检查供应商额度，稍后重试。',
@@ -40,6 +40,7 @@ export function ModelConnectionsPanel() {
   const addRef = useRef<HTMLButtonElement>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const [editSession, setEditSession] = useState(0)
+  const credentialsReady = Boolean(data?.encryption_available)
   function closeEditor() {
     const key = formRef.current?.elements.namedItem('api_key') as HTMLInputElement | null
     if (key) key.value = ''
@@ -72,7 +73,7 @@ export function ModelConnectionsPanel() {
 
   async function choose(kind: 'llm' | 'embedding', id: string | null) {
     setBusy(id ?? kind)
-    try { await api.defaultModelConnection(kind, id); notify('默认模型已更新。'); load() }
+    try { await api.defaultModelConnection(kind, id); notify(kind === 'llm' ? '默认文本模型已更新，将用于下一次新提问。' : '默认向量模型已更新，仅影响之后新建的知识库。'); load() }
     catch (failure) { report(failure) } finally { setBusy('') }
   }
   async function test(row: ModelConnection) {
@@ -80,11 +81,12 @@ export function ModelConnectionsPanel() {
     setData((value) => value && { ...value, items: value.items.map((item) => item.id === row.id ? { ...item, status: 'testing' } : item) })
     try {
       const result = await api.testModelConnection(row.id)
-      notify(result.status === 'ready' ? '连接测试成功，可设为默认。' : fixes[result.error_code ?? ''] ?? '测试失败，请检查配置。')
+      notify(result.status === 'ready' ? row.is_default ? '默认连接测试成功。' : '连接测试成功，可设为默认。' : fixes[result.error_code ?? ''] ?? '测试失败，请检查配置。')
     } catch (failure) { report(failure) } finally { setBusy(''); load() }
   }
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!credentialsReady || busy) return
     const form = new FormData(event.currentTarget)
     const apiKey = String(form.get('api_key') ?? '').trim()
     const body = { kind, name: String(form.get('name')).trim(), base_url: String(form.get('base_url')).trim(),
@@ -104,53 +106,75 @@ export function ModelConnectionsPanel() {
     setKind(row?.kind ?? 'llm')
     setEditing(row ?? 'new')
   }
+
+  function connection(row: ModelConnection) {
+    const testLabel = row.status === 'failed' ? '重新测试' : '测试连接'
+    return <article key={row.id} id={`model-connection-${row.id}`} className="model-connection" data-default={row.is_default || undefined} aria-label={`连接：${row.name}`}>
+      {row.is_default && <p className="model-current"><CircleDot size={14} aria-hidden="true" />当前默认 · 个人连接</p>}
+      <div className="model-connection-heading">
+        <strong>{row.name}</strong>
+        <span className={`model-status status-${row.status}`} role="status">{row.status === 'failed' && <TriangleAlert size={13} aria-hidden="true" />}{statusLabel[row.status]}</span>
+        <DropdownMenu label={`管理连接 ${row.name}`} icon={<Ellipsis size={16} />} iconOnly items={[
+          { label: '删除连接', disabled: Boolean(busy), destructive: true, onSelect: () => { rememberTrigger(row); setDeleting(row) } },
+        ]} />
+      </div>
+      <p className="model-name">{row.model}</p>
+      <p className="model-address">{row.base_url}</p>
+      <div className="model-facts">
+        <span className="model-key"><ShieldCheck size={13} aria-hidden="true" />{row.key_configured ? `Key 已加密 · 尾号 ${row.key_suffix}` : 'Key 未配置'}</span>
+        {row.is_default && row.tested_at && <span>最近测试 {new Date(row.tested_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
+      </div>
+      {row.libraries.length > 0 && <p className="model-bound">绑定 {row.libraries.length} 个知识库 · {row.libraries.map((library) => library.name).join('、')}</p>}
+      {row.status === 'failed' && <p className="model-warning">{fixes[row.error_code ?? ''] ?? '连接不可用，请检查配置并重新测试。'}</p>}
+      {row.is_default && row.status === 'draft' && <p className="model-warning">配置已更改，请重新测试后再使用此默认连接。</p>}
+      <div className="model-actions">
+        <Button size="sm" variant="secondary" aria-label={`${testLabel}：${row.name}`} loading={busy === row.id} disabled={Boolean(busy) || row.status === 'testing' || !credentialsReady} onClick={() => void test(row)}>{testLabel}</Button>
+        <Button size="sm" variant="ghost" aria-label={`编辑连接：${row.name}`} disabled={Boolean(busy) || !credentialsReady} onClick={() => open(row)}>编辑</Button>
+        {row.is_default
+          ? <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void choose(row.kind, null)}>恢复平台默认</Button>
+          : <Button size="sm" variant="ghost" aria-label={`设为默认：${row.name}`} disabled={Boolean(busy) || row.status !== 'ready' || !credentialsReady} onClick={() => void choose(row.kind, row.id)}>设为默认</Button>}
+      </div>
+    </article>
+  }
+
   return <section className="model-settings" aria-labelledby="model-settings-title">
     <header><div><h2 id="model-settings-title"><Server size={20} />模型连接</h2>
-      <p>为账户配置 LLM 与向量模型。请求从后端服务器发出，连接测试会产生少量调用。</p></div>
-      <Button ref={addRef} variant="secondary" onClick={() => open()} disabled={Boolean(busy) || !data?.encryption_available}><Plus size={16} />添加连接</Button>
+      <p>查看当前默认模型，管理个人连接。连接测试会产生少量调用。</p></div>
+      <Button ref={addRef} variant="secondary" onClick={() => open()} disabled={Boolean(busy) || !credentialsReady}><Plus size={16} />添加连接</Button>
     </header>
     {error && <p role="alert">{error} <Button size="sm" onClick={load}>重试</Button></p>}
     {!data && !error && <p role="status">正在读取模型连接…</p>}
-    {data && !data.encryption_available && <p role="alert" className="model-warning">管理员尚未配置有效的模型凭据加密密钥。配置完成后可保存个人连接。</p>}
+    {data && !credentialsReady && <div role="alert" className="model-encryption-warning"><TriangleAlert size={18} aria-hidden="true" /><p>管理员尚未配置有效的模型凭据加密密钥，暂时无法新增、编辑、测试或启用个人连接。你仍可查看连接、恢复平台默认或删除未使用的连接。</p></div>}
     {data && <div className="model-connection-groups">
       {(['llm', 'embedding'] as const).map((type) => {
         const rows = data.items.filter((row) => row.kind === type)
         const selected = rows.find((row) => row.is_default)
+        const others = rows.filter((row) => !row.is_default)
         const platform = type === 'llm' ? data.platform_llm : data.platform_embedding
         return <section key={type} className="model-group">
-          <header><h3>{type === 'llm' ? 'LLM 文本模型' : '向量模型 · 1024 维'}</h3>
-            <p>{type === 'llm' ? '用于对话、摘要、检索改写、学习与资料分类。' : '默认选择仅用于之后新建的知识库。已有知识库继续使用其绑定连接。'}</p>
+          <header><h3>{type === 'llm' ? <MessageCircle size={19} aria-hidden="true" /> : <Database size={19} aria-hidden="true" />}{type === 'llm' ? 'LLM 文本模型' : '向量模型 · 1024 维'}</h3>
+            <p>{type === 'llm' ? '用于对话、摘要和学习。默认变更对下一次新提问生效。' : '用于知识库检索。默认变更仅影响之后新建的知识库。'}</p>
           </header>
-          <div className="model-platform"><span>平台默认 · {platform ?? '尚未配置'}</span>
-            {!selected ? <span className="model-current"><Check size={14} />当前默认</span>
-              : <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void choose(type, null)}>恢复平台默认</Button>}
+          {selected ? connection(selected) : <div className="model-platform" data-default="true">
+            <p className="model-current"><CircleDot size={14} aria-hidden="true" />当前默认 · 平台连接</p>
+            <strong className="model-name">{platform ?? '尚未配置'}</strong>
+          </div>}
+          <div className="model-scope">
+            <p>{type === 'llm' ? '正在生成的回答和原轮次重试仍沿用原连接。' : '已有知识库保持原绑定；更换默认不会迁移已有资料。'}</p>
+            {selected && <p>平台默认：<span className="model-name">{platform ?? '尚未配置'}</span></p>}
           </div>
-          {!rows.length && <p className="muted">尚未添加个人连接。</p>}
-          {rows.map((row) => <article key={row.id} id={`model-connection-${row.id}`} className="model-connection">
-            <div className="model-connection-heading"><strong>{row.name}</strong>
-              {row.is_default && <span className="model-current"><Check size={13} />默认</span>}
-              <span className={`model-status status-${row.status}`} role="status">{statusLabel[row.status]}</span>
-              <DropdownMenu label={`管理连接 ${row.name}`} icon={<Ellipsis size={16} />} iconOnly items={[
-                { label: '编辑连接', disabled: Boolean(busy), onSelect: () => open(row) },
-                { label: '删除连接', disabled: Boolean(busy), destructive: true, onSelect: () => { rememberTrigger(row); setDeleting(row) } },
-              ]} />
-            </div>
-            <p className="model-name">{row.model}</p><p className="model-address">{row.base_url}</p>
-            <p className="model-key"><ShieldCheck size={14} />Key 已加密 · 尾号 {row.key_suffix}</p>
-            {row.libraries.length > 0 && <p className="model-bound">绑定 {row.libraries.length} 个知识库 · {row.libraries.map((library) => library.name).join('、')}</p>}
-            {row.tested_at && <p className="muted">最近测试 {new Date(row.tested_at).toLocaleString('zh-CN')}</p>}
-            {row.error_code && <p className="model-warning">{fixes[row.error_code] ?? '连接不可用，请检查配置并重试。'}</p>}
-            <div className="model-actions">
-              <Button size="sm" variant="secondary" loading={busy === row.id} disabled={Boolean(busy) || row.status === 'testing'} onClick={() => void test(row)}>测试连接</Button>
-              {!row.is_default && <Button size="sm" variant="ghost" disabled={Boolean(busy) || row.status !== 'ready'} onClick={() => void choose(type, row.id)}>设为默认</Button>}
-            </div>
-          </article>)}
+          <div className="model-other-connections">
+            <h4>其他连接 <span>{others.length}</span></h4>
+            {others.map(connection)}
+            {!others.length && <p className="model-empty">{selected ? '暂无其他个人连接。' : '尚未添加个人连接。添加后先测试，再设为默认。'}</p>}
+          </div>
         </section>
       })}
     </div>}
     <Dialog open={Boolean(editing)} onOpenChange={(open) => { if (!open && busy !== 'save') closeEditor() }}>
       <DialogContent title={editing === 'new' ? '添加模型连接' : '编辑模型连接'} closeLabel="关闭" onCloseAutoFocus={restoreFocus}>
         {editing && <form ref={formRef} className="model-form" onSubmit={save} key={editSession}>
+          {editing !== 'new' && editing.tested_at && <p className="muted">最近测试 {new Date(editing.tested_at).toLocaleString('zh-CN')}</p>}
           <Select label="连接类型" value={kind} disabled={editing !== 'new'} onValueChange={(value) => setKind(value as 'llm' | 'embedding')}
             options={[{ value: 'llm', label: 'LLM 文本模型' }, { value: 'embedding', label: '向量模型 · 1024 维' }]} />
           <Input label="连接名称" name="name" maxLength={80} required defaultValue={editing === 'new' ? '' : editing.name} placeholder="例如：个人模型服务" />
@@ -160,7 +184,7 @@ export function ModelConnectionsPanel() {
             readOnly={editing !== 'new' && editing.libraries.length > 0} />
           <PasswordField label={editing === 'new' ? 'API Key' : '替换 API Key（留空保留）'} name="api_key" required={editing === 'new'} autoComplete="new-password" maxLength={4096} messages={{ showPassword: '显示 API Key', hidePassword: '隐藏 API Key' }} />
           {editing !== 'new' && editing.libraries.length > 0 && <p className="muted">此连接已绑定知识库，可更换 Key。更换地址或模型请添加新连接。</p>}
-          <Button type="submit" loading={busy === 'save'} disabled={Boolean(busy)}>保存连接</Button>
+          <Button type="submit" loading={busy === 'save'} disabled={Boolean(busy) || !credentialsReady}>保存连接</Button>
         </form>}
       </DialogContent>
     </Dialog>

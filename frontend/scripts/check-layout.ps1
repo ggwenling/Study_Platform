@@ -30,7 +30,16 @@ try {
     Browser set viewport 1246 955 | Out-Null
     Browser open "$BaseUrl/" | Out-Null
     Browser wait --fn '!!document.querySelector(".home-panel-inner")' | Out-Null
+    Evaluate 'document.fonts.ready.then(()=>true)' | Out-Null
     $homeWidth = Evaluate 'document.querySelector(".sidebar").getBoundingClientRect().width'
+    Evaluate '(()=>{const spacer=document.createElement("div");spacer.id="layout-scroll-probe";spacer.style.height="2000px";document.querySelector(".main-shell").append(spacer);window.scrollTo(0,600)})()' | Out-Null
+    Browser wait --fn 'window.scrollY >= 600' | Out-Null
+    Check (Evaluate 'Math.abs(document.querySelector(".sidebar").getBoundingClientRect().top) < 1') 'Navigation must stay at the viewport top when the page scrolls.'
+    Check (Evaluate 'document.querySelector(".sidebar-inner").scrollTop === 0') 'Page scrolling must not move navigation contents.'
+    Check (Evaluate '(()=>{const brand=document.querySelector(".brand"),r=brand.getBoundingClientRect();return r.top>=0 && document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.closest(".brand")===brand})()') 'Navigation branding must remain visible and reachable after scrolling.'
+    Evaluate '(()=>{const spacer=document.createElement("div");spacer.id="layout-nav-probe";spacer.style.height="2000px";document.querySelector(".sidebar-sections").append(spacer);document.querySelector(".sidebar-inner").scrollTop=200})()' | Out-Null
+    Check (Evaluate 'document.querySelector(".sidebar-inner").scrollTop >= 200 && Math.abs(window.scrollY - 600) < 1') 'Navigation must scroll independently when it overflows.'
+    Evaluate 'document.querySelector("#layout-scroll-probe").remove();document.querySelector("#layout-nav-probe").remove();document.querySelector(".sidebar-inner").scrollTop=0;window.scrollTo(0,0)' | Out-Null
     Browser find role button click --name '收起资料概况' --exact | Out-Null
     Browser wait --fn 'Math.abs(document.querySelector(".home-panel").getBoundingClientRect().width - 36) < 1' | Out-Null
     Check (Evaluate 'document.querySelector("#home-overview").inert') 'Collapsed overview must be inert.'
