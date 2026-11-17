@@ -6,6 +6,7 @@ import { api, uploadMaterial } from './api/client'
 import type { Material, UploadResult } from './api/types'
 import { CurrentMaterials } from './components/CurrentMaterials'
 import { Composer } from './components/Composer'
+import { ThemeProvider } from './Theme'
 
 const workspace = vi.hoisted(() => ({ value: {} as Record<string, any> }))
 vi.mock('./WorkspaceData', () => ({ useWorkspace: () => workspace.value }))
@@ -24,7 +25,7 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done })
   return { promise, resolve }
 }
-async function render(view: ReactNode) { await act(async () => root.render(view)) }
+async function render(view: ReactNode) { await act(async () => root.render(<ThemeProvider>{view}</ThemeProvider>)) }
 async function click(text: string) {
   const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === text)!
   expect(button).toBeTruthy()

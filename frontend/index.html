@@ -2,6 +2,16 @@
 <html lang="zh-CN" data-theme="dark" data-accent="neutral">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      let theme = 'system'
+      try {
+        const saved = localStorage.getItem('knowloop-theme')
+        if (saved === 'light' || saved === 'dark') theme = saved
+      } catch { /* Storage may be unavailable. */ }
+      document.documentElement.dataset.theme = theme === 'system'
+        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : theme
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="referrer" content="no-referrer" />
     <meta name="font-attribution" content="KnowLoop 使用 MiSans（小米）、Geist 和 Geist Mono；许可与版权声明见 /fonts/NOTICE.txt" />

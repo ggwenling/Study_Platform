@@ -10,6 +10,7 @@ import { UserMenu } from '@/components/arc/user-menu/user-menu'
 import { ProjectNavigation } from './components/ProjectNavigation'
 import type { AccountMode } from './components/Account'
 import { WorkspaceData, useWorkspace } from './WorkspaceData'
+import { useTheme } from './Theme'
 import { api } from './api/client'
 import { ApiError } from './api/stream'
 import type { SearchItem, User, Conversation } from './api/types'
@@ -179,6 +180,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
   retrySession: () => void
 }) {
   const { user, libraries, notify, report, requireLogin } = useWorkspace()
+  const { theme, setTheme } = useTheme()
   const [navOpen, setNavOpen] = useState(() => !window.matchMedia('(max-width: 480px)').matches)
   const [searchOpen, setSearchOpen] = useState(false)
   const navigate = useNavigate()
@@ -191,7 +193,9 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
     <UserMenu
       user={{ name: user.display_name, email: user.email, avatarSrc: user.avatar_url ?? undefined }}
       showName
-      showTheme={false}
+      showTheme
+      theme={theme}
+      onThemeChange={setTheme}
       align="start"
       items={[{ label: '设置', icon: <Settings size={16} />, onSelect: () => void navigate('/settings') }]}
       onSignOut={async () => {

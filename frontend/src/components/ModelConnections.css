@@ -17,5 +17,5 @@
 .model-key { display: flex; align-items: center; gap: 6px; }
 .model-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .model-form { display: grid; gap: 14px; }
-.model-warning { color: #e3bc86; font-size: var(--text-sm); }
+.model-warning { color: var(--warning); font-size: var(--text-sm); }
 @media (max-width: 760px) { .model-connection-groups { grid-template-columns: minmax(0,1fr); } .model-group { padding: 13px; } }

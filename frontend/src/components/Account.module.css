@@ -1,7 +1,7 @@
 .card {
   width: min(378px, calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
-  background: #121212;
-  border-color: #303030;
+  background: light-dark(#eee, #121212);
+  border-color: var(--line);
   border-radius: 14px;
   --control-height-md: 44px;
 }
@@ -17,17 +17,17 @@
   background: transparent;
 }
 .brand { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 13px; }
-.brand svg { color: #77af86; }
+.brand svg { color: var(--success); }
 .brand strong { font-size: var(--text-lg); }
-.brand span { color: #ddd; font-size: var(--text-xs); }
-.card h2 { color: #f4f4f4; font-weight: 600; font-size: var(--text-2xl); }
+.brand span { color: var(--ink); font-size: var(--text-xs); }
+.card h2 { color: var(--ink); font-weight: 600; font-size: var(--text-2xl); }
 .card p { font-size: var(--text-caption); }
 .form { display: grid; gap: 8px; padding-inline: 14px; }
 .form input[name="password"], .form input[name="confirmation"] { background: transparent; }
-.form .submit { width: 100%; background: #f4f4f4; color: #151515; }
+.form .submit { width: 100%; background: var(--ink); color: var(--panel); }
 .forgot, .footer { display: flex; align-items: center; gap: 5px; font-size: var(--text-caption); }
 .forgot { justify-content: flex-end; margin-top: -6px; }
-.footer { justify-content: center; color: #b7b7b7; }
-.divider { display: flex; align-items: center; gap: 12px; font-size: var(--text-xs); color: #aaa; }
-.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #303030; }
+.footer { justify-content: center; color: var(--text-secondary); }
+.divider { display: flex; align-items: center; gap: 12px; font-size: var(--text-xs); color: color-mix(in srgb, var(--ink) 66%, var(--panel)); }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .overlay[data-state] { background: rgb(0 0 0 / .76); backdrop-filter: blur(2px); }
