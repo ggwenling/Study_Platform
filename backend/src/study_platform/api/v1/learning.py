@@ -1,10 +1,11 @@
-"""Learning entry: generate quiz, image answers, verdict overrides, wrong book."""
+"""Learning entry: generate quiz, text/image answers, verdict overrides, history & wrong book."""
 
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -23,15 +24,46 @@ _ALLOWED_IMAGE = {"image/png", "image/jpeg"}
 
 class GenerateBody(BaseModel):
     count: int = Field(default=5, ge=1, le=20)
+    mode: Literal["short_answer", "mcq", "mixed"] = "short_answer"
+    material_ids: list[UUID] | None = Field(default=None, max_length=50)
 
 
 class AttemptBody(BaseModel):
     quiz_id: UUID
 
 
+class AnswerTextBody(BaseModel):
+    answer_text: str = Field(min_length=1, max_length=4000)
+
+
 class VerdictBody(BaseModel):
     verdict: str = Field(pattern="^(correct|incorrect|pending)$")
     reference_answer: str | None = Field(default=None, max_length=8000)
+
+
+class RetryWrongBody(BaseModel):
+    wrong_ids: list[UUID] | None = Field(default=None, max_length=20)
+    knowledge_base_id: UUID | None = None
+
+
+def _response_payload(db: Session, row) -> dict:
+    item = (
+        db.get(QuizItem, row.quiz_item_id)
+        if isinstance(db, Session) and hasattr(row, "quiz_item_id")
+        else None
+    )
+    sources = learning._load_sources_by_item(db, [item.id]) if item else {}
+    return {
+        "response_id": str(row.id),
+        "verdict": row.verdict,
+        "verdict_source": getattr(row, "verdict_source", None),
+        "confidence": float(row.confidence) if getattr(row, "confidence", None) is not None else None,
+        "feedback": getattr(row, "feedback", None),
+        "answer": getattr(row, "answer", None),
+        "reference_answer": getattr(row, "reference_answer_effective", None),
+        "explanation": item.explanation if item else None,
+        "sources": sources.get(item.id, []) if item else [],
+    }
 
 
 @router.post("/knowledge-bases/{kb_id}/quizzes/generate")
@@ -48,6 +80,8 @@ def generate_quiz(
         owner_user_id=user.id,
         knowledge_base_id=kb_id,
         count=body.count,
+        mode=body.mode,
+        material_ids=body.material_ids,
     )
     db.flush()
     item_count = db.scalar(
@@ -55,6 +89,22 @@ def generate_quiz(
     )
     db.commit()
     return {"quiz_id": str(quiz.id), "title": quiz.title, "item_count": int(item_count or 0)}
+
+
+@router.get("/attempts")
+def list_attempts(
+    knowledge_base_id: UUID | None = None,
+    limit: int = Query(default=15, ge=1, le=50),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if knowledge_base_id is not None:
+        owned_kb(db, user, knowledge_base_id)
+    return {
+        "items": learning.list_attempts(
+            db, user.id, knowledge_base_id=knowledge_base_id, limit=limit
+        )
+    }
 
 
 @router.post("/attempts")
@@ -77,6 +127,20 @@ def get_attempt(
     return learning.attempt_payload(db, attempt_id, user.id)
 
 
+@router.post("/responses/{response_id}/answer-text")
+def answer_text(
+    response_id: UUID,
+    body: AnswerTextBody,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = learning.submit_text_answer(
+        db, owner_user_id=user.id, response_id=response_id, answer_text=body.answer_text
+    )
+    db.commit()
+    return _response_payload(db, row)
+
+
 @router.post("/responses/{response_id}/answer-image")
 def answer_image(
     response_id: UUID,
@@ -89,7 +153,9 @@ def answer_image(
     payload = file.file.read(get_settings().max_upload_bytes + 1)
     if len(payload) > get_settings().max_upload_bytes:
         raise ApiError(413, "too_large", "图片过大")
-    row = learning.submit_image_answer(db, owner_user_id=user.id, response_id=response_id, image_bytes=payload)
+    row = learning.submit_image_answer(
+        db, owner_user_id=user.id, response_id=response_id, image_bytes=payload
+    )
     path = Path(get_settings().storage_dir).resolve() / row.answer["storage_key"]
     try:
         db.commit()
@@ -103,15 +169,7 @@ def answer_image(
             previous.unlink(missing_ok=True)
         except OSError:
             pass
-    return {
-        "response_id": str(row.id),
-        "verdict": row.verdict,
-        "verdict_source": row.verdict_source,
-        "confidence": float(row.confidence) if row.confidence is not None else None,
-        "feedback": row.feedback,
-        "answer": row.answer,
-        "reference_answer": row.reference_answer_effective,
-    }
+    return _response_payload(db, row)
 
 
 @router.patch("/responses/{response_id}/verdict")
@@ -129,17 +187,40 @@ def patch_verdict(
         reference_answer=body.reference_answer,
     )
     db.commit()
-    return {
-        "response_id": str(row.id),
-        "verdict": row.verdict,
-        "verdict_source": row.verdict_source,
-        "reference_answer": row.reference_answer_effective,
-    }
+    return _response_payload(db, row)
 
 
 @router.get("/wrong-questions")
-def wrong_questions(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return {"items": learning.list_wrong_questions(db, user.id)}
+def wrong_questions(
+    knowledge_base_id: UUID | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if knowledge_base_id is not None:
+        owned_kb(db, user, knowledge_base_id)
+    return {
+        "items": learning.list_wrong_questions(
+            db, user.id, knowledge_base_id=knowledge_base_id
+        )
+    }
+
+
+@router.post("/wrong-questions/retry")
+def retry_wrong(
+    body: RetryWrongBody,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if body.knowledge_base_id is not None:
+        owned_kb(db, user, body.knowledge_base_id)
+    attempt = learning.retry_wrong_questions(
+        db,
+        owner_user_id=user.id,
+        wrong_ids=body.wrong_ids,
+        knowledge_base_id=body.knowledge_base_id,
+    )
+    db.commit()
+    return learning.attempt_payload(db, attempt.id, user.id)
 
 
 @router.post("/wrong-questions/{wrong_id}/mastered")

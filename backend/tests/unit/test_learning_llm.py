@@ -147,3 +147,47 @@ def test_grade_llm_respects_threshold(monkeypatch):
     assert verdict == "pending" and conf == 0.5
     assert profile == "learning_llm_v1"
     assert "部分一致" in feedback
+
+
+def test_parse_mcq_question_and_deterministic_mcq_grading():
+    from types import SimpleNamespace
+
+    from study_platform.services.learning import _grade_mcq_choice
+
+    payload = json.dumps(
+        {
+            "questions": [
+                {
+                    "item_type": "mcq",
+                    "stem": "关于特征值，下列哪项正确？",
+                    "options": ["A. 特征向量可以为零向量", "B. 特征向量必须非零", "C. 只能是实数", "D. 与行列式无关"],
+                    "reference_answer": "B",
+                    "explanation": "按定义特征向量非零。",
+                    "source_indices": [1],
+                },
+                {
+                    "item_type": "mcq",
+                    "stem": "缺少选项的坏题",
+                    "options": ["A. 唯一选项"],
+                    "reference_answer": "A",
+                    "source_indices": [1],
+                },
+            ]
+        }
+    )
+    questions, insufficient = parse_quiz_response(payload, 2)
+    assert insufficient is None
+    assert len(questions) == 1
+    assert questions[0].item_type == "mcq"
+    assert len(questions[0].options) == 4
+    assert questions[0].explanation == "按定义特征向量非零。"
+
+    item = SimpleNamespace(
+        answer_key={"choice": "B", "text": "B"},
+        options=list(questions[0].options),
+        explanation=questions[0].explanation,
+    )
+    verdict_ok, conf_ok, fb_ok, _, _ = _grade_mcq_choice(item, "B. 特征向量必须非零")
+    assert verdict_ok == "correct" and conf_ok == 1.0 and "非零" in fb_ok
+    verdict_bad, _, fb_bad, _, _ = _grade_mcq_choice(item, "A. 特征向量可以为零向量")
+    assert verdict_bad == "incorrect" and "B" in fb_bad

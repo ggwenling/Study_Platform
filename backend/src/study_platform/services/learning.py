@@ -1,4 +1,4 @@
-"""Learning sessions: quiz generation, image answers, verdicts, wrong-book."""
+"""Learning sessions: quiz generation, text/MCQ/image answers, verdicts, wrong-book & history."""
 
 from __future__ import annotations
 
@@ -15,8 +15,11 @@ from sqlalchemy.orm import Session
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
 from study_platform.persistence.models import (
+    IndexVersion,
     KnowledgeBase,
+    Material,
     MaterialChunk,
+    MaterialVersion,
     Quiz,
     QuizAttempt,
     QuizItem,
@@ -26,7 +29,11 @@ from study_platform.persistence.models import (
 )
 from study_platform.services.chat import chunk_dto, chunk_query, retrieve, visible_indices
 from study_platform.services.learning_anchor import ensure_course_anchor
-from study_platform.services.learning_grade import grade_text_answer, ocr_answer_bytes
+from study_platform.services.learning_grade import (
+    grade_text_answer,
+    normalize_answer,
+    ocr_answer_bytes,
+)
 from study_platform.services.learning_llm import (
     generate_questions_with_llm,
     index_to_fragment,
@@ -36,23 +43,113 @@ from study_platform.services.model_connections import llm_available
 from study_platform.services.model_task import learning_task
 
 _QUESTION_LINE = re.compile(r"^\s*(?:\d+[\.\)、．]|第\s*\d+\s*题)", re.M)
+_OPTION_LETTER = re.compile(r"^\s*([A-Fa-f])(?:[\.\)、:：\s]|$)")
 
 
 def _reference_from_answer_key(answer_key) -> str:
     if isinstance(answer_key, str):
         return answer_key
     if isinstance(answer_key, dict):
-        for key in ("text", "value", "answer"):
-            if key in answer_key:
+        for key in ("text", "choice", "value", "answer"):
+            if key in answer_key and answer_key[key]:
                 return str(answer_key[key])
         return json.dumps(answer_key, ensure_ascii=False)
     return str(answer_key)
+
+
+def _extract_choice_letter(text: str) -> str | None:
+    match = _OPTION_LETTER.match(text or "")
+    return match.group(1).upper() if match else None
+
+
+def _locator_label(locator: dict) -> str:
+    if locator.get("heading"):
+        line_no = locator.get("start_line")
+        return f"{locator['heading']} · 第 {line_no} 行" if isinstance(line_no, int) else str(locator["heading"])
+    if locator.get("table_path"):
+        parts = " / ".join(
+            f"表格 {part['table']}，第 {part['row']} 行，第 {part['column']} 列"
+            for part in locator["table_path"]
+        )
+        return f"{parts}，段落 {locator.get('cell_paragraph', 1)}"
+    for key, fmt in (
+        ("page", "第 {} 页"),
+        ("paragraph", "段落 {}"),
+        ("start_line", "第 {} 行"),
+        ("line", "行 {}"),
+    ):
+        if key in locator:
+            return fmt.format(locator[key])
+    return "原文"
+
+
+def _load_sources_by_item(
+    db: Session, item_ids: list[UUID], *, include_quotes: set[UUID] | None = None
+) -> dict[UUID, list[dict]]:
+    if not isinstance(db, Session) or not item_ids:
+        return {}
+    rows = db.execute(
+        sa.select(QuizItemSource, MaterialChunk, MaterialVersion, Material, KnowledgeBase, IndexVersion)
+        .join(MaterialChunk, MaterialChunk.id == QuizItemSource.chunk_id)
+        .join(MaterialVersion, MaterialVersion.id == QuizItemSource.material_version_id)
+        .join(Material, Material.id == MaterialVersion.material_id)
+        .join(KnowledgeBase, KnowledgeBase.id == Material.knowledge_base_id)
+        .outerjoin(IndexVersion, IndexVersion.id == QuizItemSource.index_version_id)
+        .where(QuizItemSource.quiz_item_id.in_(item_ids))
+        .order_by(QuizItemSource.created_at)
+    ).all()
+    grouped: dict[UUID, list[dict]] = {item_id: [] for item_id in item_ids}
+    for src, chunk, version, material, kb, index in rows:
+        available = (
+            kb.deleted_at is None
+            and material.deleted_at is None
+            and material.status != "deleted"
+            and index is not None
+            and index.status in ("ready", "retired")
+        )
+        loc = (src.locator or {}) if available else {}
+        reveal_quote = available and (include_quotes is None or src.quiz_item_id in include_quotes)
+        grouped.setdefault(src.quiz_item_id, []).append(
+            {
+                "chunk_id": str(chunk.id),
+                "material_id": str(material.id),
+                "material_version_id": str(version.id),
+                "title": material.title,
+                "location_label": _locator_label(loc) if available else "来源已不可用",
+                "availability": "available" if available else "unavailable",
+                "quote": chunk.text if reveal_quote else None,
+            }
+        )
+    return grouped
 
 
 def _answer_storage_path(response_id: UUID) -> Path:
     base = Path(get_settings().storage_dir).resolve() / "learning-answers" / str(response_id)
     base.mkdir(parents=True, exist_ok=True)
     return base / f"{uuid4().hex}.image"
+
+
+def _stub_mcq_options(target_ref: str, all_excerpts: list[str], ordinal: int) -> tuple[list[str], str]:
+    clean_ref = target_ref[:60].strip()
+    distractors: list[str] = []
+    for idx, text in enumerate(all_excerpts):
+        candidate = " ".join(ln.strip() for ln in text.splitlines() if ln.strip())[:60].strip()
+        if candidate and candidate != clean_ref and candidate not in distractors:
+            distractors.append(candidate)
+        if len(distractors) >= 3:
+            break
+    fallbacks = ["与原资料所述结论相反", "资料中未提及该条件", "仅在特定边界条件下成立"]
+    for fb in fallbacks:
+        if len(distractors) >= 3:
+            break
+        if fb not in distractors and fb != clean_ref:
+            distractors.append(fb)
+    correct_pos = ordinal % 4
+    raw_Pool = distractors[:3]
+    raw_Pool.insert(correct_pos, clean_ref)
+    letters = ("A", "B", "C", "D")
+    options = [f"{letters[i]}. {raw_Pool[i]}" for i in range(4)]
+    return options, letters[correct_pos]
 
 
 @learning_task
@@ -62,7 +159,11 @@ def generate_learning_quiz(
     owner_user_id: UUID,
     knowledge_base_id: UUID,
     count: int = 5,
+    mode: str = "short_answer",
+    material_ids: list[UUID] | None = None,
 ) -> Quiz:
+    if mode not in ("short_answer", "mcq", "mixed"):
+        raise ApiError(422, "invalid_mode", "不支持的题型模式")
     kb = (
         db.execute(
             sa.select(KnowledgeBase).where(
@@ -77,7 +178,7 @@ def generate_learning_quiz(
     if kb is None:
         raise ApiError(404, "knowledge_base_not_found", "知识库不存在或无权访问")
     ensure_course_anchor(db, kb)
-    scope_ids = visible_indices(db, owner_user_id, knowledge_base_id)
+    scope_ids = visible_indices(db, owner_user_id, knowledge_base_id, material_ids)
     if not scope_ids:
         raise ApiError(409, "library_not_ready", "当前知识库尚无可用索引，请先上传并完成处理。")
     scope = {"index_version_ids": scope_ids}
@@ -85,7 +186,7 @@ def generate_learning_quiz(
     if settings.learning_stub_grader:
         indices = [UUID(x) if isinstance(x, str) else x for x in scope_ids]
         rows = db.execute(
-            chunk_query(indices, owner_user_id).order_by(MaterialChunk.ordinal).limit(max(count * 3, 10))
+            chunk_query(indices, owner_user_id).order_by(MaterialChunk.ordinal).limit(max(count * 3, 12))
         ).all()
         hits = [chunk_dto(row, title) for row, title in rows]
     else:
@@ -93,14 +194,18 @@ def generate_learning_quiz(
     if not hits:
         raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
     use_llm = not settings.learning_stub_grader and llm_available(owner_user_id)
+    mode_label = {"mcq": "单选练习", "mixed": "混合练习"}.get(mode, "简答练习")
+    scope_meta: dict = {"knowledge_base_id": str(knowledge_base_id), "mode": mode}
+    if material_ids:
+        scope_meta["material_ids"] = [str(mid) for mid in material_ids]
     quiz = Quiz(
         owner_user_id=owner_user_id,
         course_id=knowledge_base_id,
-        title="练习",
+        title=f"{kb.name} · {mode_label}",
         status="ready",
         difficulty=3,
-        source_scope={"knowledge_base_id": str(knowledge_base_id)},
-        generator_profile="learning_llm_v1" if use_llm else "learning_stub_v1",
+        source_scope=scope_meta,
+        generator_profile="learning_llm_v2" if use_llm else "learning_stub_v2",
     )
     db.add(quiz)
     db.flush()
@@ -110,7 +215,7 @@ def generate_learning_quiz(
         if not fragments:
             raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
         generated, insufficient = generate_questions_with_llm(
-            fragments, count, owner_user_id=owner_user_id
+            fragments, count, mode=mode, owner_user_id=owner_user_id
         )
         if insufficient:
             raise ApiError(409, "insufficient_material", insufficient)
@@ -121,15 +226,23 @@ def generate_learning_quiz(
             source_refs = [by_index[idx] for idx in question.source_indices if idx in by_index]
             if not source_refs:
                 continue
+            item_type = question.item_type if mode != "short_answer" else "short_answer"
+            options_list = list(question.options) if item_type == "mcq" else []
+            choice = _extract_choice_letter(question.reference_answer) if item_type == "mcq" else None
+            answer_key = (
+                {"choice": choice, "text": question.reference_answer}
+                if choice
+                else {"text": question.reference_answer}
+            )
             item = QuizItem(
                 quiz_id=quiz.id,
                 ordinal=ordinal,
-                item_type="short_answer",
+                item_type=item_type,
                 stem=question.stem,
-                options=[],
-                answer_key={"text": question.reference_answer},
+                options=options_list,
+                answer_key=answer_key,
                 rubric={},
-                explanation=None,
+                explanation=question.explanation,
                 difficulty=3,
                 max_score=Decimal("1"),
             )
@@ -148,6 +261,7 @@ def generate_learning_quiz(
             ordinal += 1
     else:
         used_chunks: set[UUID] = set()
+        all_texts = [str(h.get("text", "")) for h in hits if h.get("text")]
         for hit in hits:
             if ordinal >= count:
                 break
@@ -162,15 +276,28 @@ def generate_learning_quiz(
             stem, ref = _stem_from_chunk(excerpt)
             if not ref:
                 continue
+            make_mcq = mode == "mcq" or (mode == "mixed" and ordinal % 2 == 0)
+            if make_mcq:
+                options_list, letter = _stub_mcq_options(ref, all_texts, ordinal)
+                item_type = "mcq"
+                mcq_stem = f"根据资料，下列哪一项表述正确？（围绕：{stem[:60]}）"
+                answer_key = {"choice": letter, "text": f"{letter}. {ref[:60].strip()}"}
+                explanation = f"依据原资料片段：{ref[:100]}"
+            else:
+                options_list = []
+                item_type = "short_answer"
+                mcq_stem = stem
+                answer_key = {"text": ref}
+                explanation = None
             item = QuizItem(
                 quiz_id=quiz.id,
                 ordinal=ordinal,
-                item_type="short_answer",
-                stem=stem,
-                options=[],
-                answer_key={"text": ref},
+                item_type=item_type,
+                stem=mcq_stem,
+                options=options_list,
+                answer_key=answer_key,
                 rubric={},
-                explanation=None,
+                explanation=explanation,
                 difficulty=3,
                 max_score=Decimal("1"),
             )
@@ -267,6 +394,111 @@ def start_attempt(db: Session, *, owner_user_id: UUID, quiz_id: UUID) -> QuizAtt
     return attempt
 
 
+def _refresh_attempt_progress(db: Session, attempt_id: UUID) -> None:
+    attempt = db.get(QuizAttempt, attempt_id)
+    if attempt is None:
+        return
+    responses = list(
+        db.scalars(sa.select(QuizResponse).where(QuizResponse.attempt_id == attempt_id)).all()
+    )
+    if not responses:
+        return
+    correct = sum(1 for r in responses if r.verdict == "correct")
+    attempt.total_score = Decimal(correct)
+    now = datetime.now(UTC)
+    if all(r.verdict in ("correct", "incorrect") for r in responses):
+        attempt.status = "graded"
+        attempt.submitted_at = attempt.submitted_at or now
+        attempt.graded_at = now
+    else:
+        attempt.status = "in_progress"
+
+
+def _grade_mcq_choice(item: QuizItem, student_text: str) -> tuple[str, float, str, str, str]:
+    answer_key = item.answer_key if isinstance(item.answer_key, dict) else {"text": str(item.answer_key)}
+    expected_choice = (
+        str(answer_key.get("choice") or "").strip().upper()
+        or _extract_choice_letter(str(answer_key.get("text") or ""))
+    )
+    reference = _reference_from_answer_key(item.answer_key)
+    student_choice = _extract_choice_letter(student_text)
+    matched = False
+    if expected_choice and student_choice:
+        matched = expected_choice == student_choice
+    else:
+        norm_student = normalize_answer(student_text)
+        norm_ref = normalize_answer(reference)
+        matched = bool(norm_student and norm_student == norm_ref)
+        if not matched and expected_choice:
+            for opt in item.options or []:
+                if _extract_choice_letter(str(opt)) == expected_choice:
+                    body = re.sub(r"^\s*[A-Fa-f][\.\)、:：\s]+", "", str(opt))
+                    if normalize_answer(body) == norm_student:
+                        matched = True
+                        break
+    verdict = "correct" if matched else "incorrect"
+    label = expected_choice or reference
+    base_fb = "回答正确。" if matched else f"回答不正确，参考答案为 {label}。"
+    if item.explanation:
+        base_fb = f"{base_fb} {item.explanation}"
+    return verdict, 1.0, base_fb, "learning_mcq_v1", reference
+
+
+@learning_task
+def submit_text_answer(
+    db: Session,
+    *,
+    owner_user_id: UUID,
+    response_id: UUID,
+    answer_text: str,
+) -> QuizResponse:
+    cleaned = (answer_text or "").strip()
+    if not cleaned:
+        raise ApiError(422, "empty_answer", "请输入作答内容")
+    row = (
+        db.execute(
+            sa.select(QuizResponse)
+            .join(QuizAttempt, QuizAttempt.id == QuizResponse.attempt_id)
+            .where(
+                QuizResponse.id == response_id,
+                QuizAttempt.owner_user_id == owner_user_id,
+            )
+            .with_for_update(of=QuizResponse)
+        )
+        .scalars()
+        .first()
+    )
+    if row is None:
+        raise ApiError(404, "response_not_found", "作答记录不存在")
+    item = db.get(QuizItem, row.quiz_item_id)
+    if item is None:
+        raise ApiError(404, "item_not_found", "题目不存在")
+    if item.item_type == "mcq":
+        verdict, conf, feedback, grader_profile, reference = _grade_mcq_choice(item, cleaned)
+    else:
+        reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
+        verdict, conf, feedback, grader_profile = grade_text_answer(
+            cleaned, reference, 1.0, stem=item.stem, owner_user_id=owner_user_id
+        )
+        if item.explanation and item.explanation not in feedback:
+            feedback = f"{feedback} {item.explanation}".strip()
+    row.answer = {"type": "text", "text": cleaned}
+    row.reference_answer_effective = reference
+    row.confidence = Decimal(str(round(conf, 4)))
+    row.verdict = verdict
+    row.verdict_source = "auto"
+    row.is_correct = True if verdict == "correct" else False if verdict == "incorrect" else None
+    row.feedback = feedback
+    row.grader_profile = grader_profile
+    row.graded_at = datetime.now(UTC)
+    db.flush()
+    _sync_wrong_book(db, owner_user_id, item.id, row)
+    _refresh_attempt_progress(db, row.attempt_id)
+    db.flush()
+    db.refresh(row)
+    return row
+
+
 @learning_task
 def submit_image_answer(
     db: Session,
@@ -282,7 +514,8 @@ def submit_image_answer(
             .where(
                 QuizResponse.id == response_id,
                 QuizAttempt.owner_user_id == owner_user_id,
-            ).with_for_update(of=QuizResponse)
+            )
+            .with_for_update(of=QuizResponse)
         )
         .scalars()
         .first()
@@ -291,8 +524,14 @@ def submit_image_answer(
         raise ApiError(404, "response_not_found", "作答记录不存在")
     previous = row.answer.get("storage_key") if isinstance(row.answer, dict) else None
     previous_dir = (Path(get_settings().storage_dir).resolve() / "learning-answers" / str(row.id)).resolve()
-    previous_path = (Path(get_settings().storage_dir).resolve() / previous).resolve() if isinstance(previous, str) else None
-    row._previous_image_path = previous_path if previous_path and previous_path.parent == previous_dir else None
+    previous_path = (
+        (Path(get_settings().storage_dir).resolve() / previous).resolve()
+        if isinstance(previous, str)
+        else None
+    )
+    row._previous_image_path = (
+        previous_path if previous_path and previous_path.parent == previous_dir else None
+    )
     item = db.get(QuizItem, row.quiz_item_id)
     if item is None:
         raise ApiError(404, "item_not_found", "题目不存在")
@@ -320,6 +559,7 @@ def submit_image_answer(
         row.graded_at = datetime.now(UTC)
         db.flush()
         _sync_wrong_book(db, owner_user_id, item.id, row)
+        _refresh_attempt_progress(db, row.attempt_id)
         db.flush()
         db.refresh(row)
     except Exception:
@@ -365,22 +605,40 @@ def override_verdict(
     item = db.get(QuizItem, row.quiz_item_id)
     if item is not None:
         _sync_wrong_book(db, owner_user_id, item.id, row)
+    _refresh_attempt_progress(db, row.attempt_id)
     db.flush()
     db.refresh(row)
     return row
 
 
 def _sync_wrong_book(db: Session, owner_user_id: UUID, item_id: UUID, response: QuizResponse) -> None:
-    existing = (
-        db.execute(
+    item = db.get(QuizItem, item_id)
+    origin_wrong_id = None
+    if item and isinstance(item.rubric, dict) and item.rubric.get("origin_wrong_id"):
+        try:
+            origin_wrong_id = UUID(str(item.rubric["origin_wrong_id"]))
+        except ValueError:
+            origin_wrong_id = None
+
+    existing = None
+    if origin_wrong_id is not None:
+        existing = db.scalar(
             sa.select(WrongQuestion).where(
+                WrongQuestion.id == origin_wrong_id,
                 WrongQuestion.owner_user_id == owner_user_id,
-                WrongQuestion.quiz_item_id == item_id,
             )
         )
-        .scalars()
-        .first()
-    )
+    if existing is None:
+        existing = (
+            db.execute(
+                sa.select(WrongQuestion).where(
+                    WrongQuestion.owner_user_id == owner_user_id,
+                    WrongQuestion.quiz_item_id == item_id,
+                )
+            )
+            .scalars()
+            .first()
+        )
     now = datetime.now(UTC)
     if response.verdict == "incorrect":
         if existing is None:
@@ -396,39 +654,216 @@ def _sync_wrong_book(db: Session, owner_user_id: UUID, item_id: UUID, response: 
             )
         else:
             existing.wrong_count += 1
-            existing.last_response_id = response.id
+            if existing.quiz_item_id == item_id:
+                existing.last_response_id = response.id
             existing.last_wrong_at = now
             existing.status = "open"
     elif response.verdict == "correct" and existing is not None:
         existing.status = "reviewing"
 
 
-def list_wrong_questions(db: Session, owner_user_id: UUID) -> list[dict]:
-    rows = (
-        db.execute(
-            sa.select(WrongQuestion, QuizItem)
-            .join(QuizItem, QuizItem.id == WrongQuestion.quiz_item_id)
-            .where(
-                WrongQuestion.owner_user_id == owner_user_id,
-                WrongQuestion.status != "mastered",
-            )
-            .order_by(WrongQuestion.last_wrong_at.desc())
+def list_attempts(
+    db: Session,
+    owner_user_id: UUID,
+    *,
+    knowledge_base_id: UUID | None = None,
+    limit: int = 15,
+) -> list[dict]:
+    stmt = (
+        sa.select(QuizAttempt, Quiz, KnowledgeBase.name)
+        .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
+        .outerjoin(
+            KnowledgeBase,
+            sa.and_(
+                KnowledgeBase.id == Quiz.course_id,
+                KnowledgeBase.owner_user_id == owner_user_id,
+                KnowledgeBase.deleted_at.is_(None),
+            ),
         )
-        .all()
+        .where(
+            QuizAttempt.owner_user_id == owner_user_id,
+            Quiz.deleted_at.is_(None),
+        )
     )
+    if knowledge_base_id is not None:
+        stmt = stmt.where(Quiz.course_id == knowledge_base_id)
+    rows = db.execute(stmt.order_by(QuizAttempt.updated_at.desc()).limit(limit)).all()
+    if not rows:
+        return []
+    attempt_ids = [att.id for att, _, _ in rows]
+    resp_rows = db.execute(
+        sa.select(
+            QuizResponse.attempt_id,
+            sa.func.count(),
+            sa.func.count().filter(QuizResponse.verdict.is_not(None)),
+            sa.func.count().filter(QuizResponse.verdict == "correct"),
+        )
+        .where(QuizResponse.attempt_id.in_(attempt_ids))
+        .group_by(QuizResponse.attempt_id)
+    ).all()
+    counts = {aid: (total, answered, correct) for aid, total, answered, correct in resp_rows}
     out = []
-    for wrong, item in rows:
+    for att, quiz, kb_name in rows:
+        total, answered, correct = counts.get(att.id, (0, 0, 0))
+        out.append(
+            {
+                "id": str(att.id),
+                "quiz_id": str(quiz.id),
+                "title": quiz.title,
+                "knowledge_base_id": str(quiz.course_id),
+                "knowledge_base_name": kb_name,
+                "status": att.status,
+                "item_count": int(total),
+                "answered_count": int(answered),
+                "correct_count": int(correct),
+                "started_at": att.started_at.isoformat(),
+                "updated_at": att.updated_at.isoformat(),
+            }
+        )
+    return out
+
+
+def list_wrong_questions(
+    db: Session,
+    owner_user_id: UUID,
+    *,
+    knowledge_base_id: UUID | None = None,
+) -> list[dict]:
+    stmt = (
+        sa.select(WrongQuestion, QuizItem, Quiz, KnowledgeBase.name, QuizResponse)
+        .join(QuizItem, QuizItem.id == WrongQuestion.quiz_item_id)
+        .join(Quiz, Quiz.id == QuizItem.quiz_id)
+        .outerjoin(
+            KnowledgeBase,
+            sa.and_(
+                KnowledgeBase.id == Quiz.course_id,
+                KnowledgeBase.owner_user_id == owner_user_id,
+                KnowledgeBase.deleted_at.is_(None),
+            ),
+        )
+        .outerjoin(QuizResponse, QuizResponse.id == WrongQuestion.last_response_id)
+        .where(
+            WrongQuestion.owner_user_id == owner_user_id,
+            WrongQuestion.status != "mastered",
+        )
+    )
+    if knowledge_base_id is not None:
+        stmt = stmt.where(Quiz.course_id == knowledge_base_id)
+    rows = db.execute(stmt.order_by(WrongQuestion.last_wrong_at.desc())).all()
+    item_ids = [item.id for _, item, *_ in rows]
+    sources_map = _load_sources_by_item(db, item_ids)
+    out = []
+    for wrong, item, quiz, kb_name, last_resp in rows:
+        ref = (
+            (last_resp.reference_answer_effective if last_resp else None)
+            or _reference_from_answer_key(item.answer_key)
+        )
+        last_answer_text = None
+        if last_resp and isinstance(last_resp.answer, dict):
+            last_answer_text = last_resp.answer.get("text") or last_resp.answer.get("ocr_text")
         out.append(
             {
                 "id": str(wrong.id),
                 "quiz_item_id": str(item.id),
+                "knowledge_base_id": str(quiz.course_id),
+                "knowledge_base_name": kb_name,
+                "item_type": item.item_type,
                 "stem": item.stem,
+                "options": list(item.options or []),
+                "reference_answer": ref,
+                "explanation": item.explanation,
+                "last_feedback": last_resp.feedback if last_resp else None,
+                "last_answer": last_answer_text,
+                "sources": sources_map.get(item.id, []),
                 "status": wrong.status,
                 "wrong_count": wrong.wrong_count,
                 "last_wrong_at": wrong.last_wrong_at.isoformat(),
             }
         )
     return out
+
+
+def retry_wrong_questions(
+    db: Session,
+    *,
+    owner_user_id: UUID,
+    wrong_ids: list[UUID] | None = None,
+    knowledge_base_id: UUID | None = None,
+) -> QuizAttempt:
+    stmt = (
+        sa.select(WrongQuestion, QuizItem, Quiz)
+        .join(QuizItem, QuizItem.id == WrongQuestion.quiz_item_id)
+        .join(Quiz, Quiz.id == QuizItem.quiz_id)
+        .where(
+            WrongQuestion.owner_user_id == owner_user_id,
+            WrongQuestion.status != "mastered",
+        )
+    )
+    if wrong_ids:
+        stmt = stmt.where(WrongQuestion.id.in_(wrong_ids))
+    if knowledge_base_id is not None:
+        stmt = stmt.where(Quiz.course_id == knowledge_base_id)
+    rows = db.execute(stmt.order_by(WrongQuestion.last_wrong_at.desc()).limit(20)).all()
+    if not rows:
+        raise ApiError(409, "no_wrong_questions", "当前没有可重练的错题")
+    anchor_course_id = knowledge_base_id or rows[0][2].course_id
+    kb = db.scalar(
+        sa.select(KnowledgeBase).where(
+            KnowledgeBase.id == anchor_course_id,
+            KnowledgeBase.owner_user_id == owner_user_id,
+        )
+    )
+    if kb is not None:
+        ensure_course_anchor(db, kb)
+    retry_quiz = Quiz(
+        owner_user_id=owner_user_id,
+        course_id=anchor_course_id,
+        title=f"{kb.name} · 错题重练" if kb else "错题重练",
+        status="ready",
+        difficulty=3,
+        source_scope={
+            "knowledge_base_id": str(anchor_course_id),
+            "retry_wrong_ids": [str(w.id) for w, _, _ in rows],
+        },
+        generator_profile="wrong_retry_v1",
+    )
+    db.add(retry_quiz)
+    db.flush()
+    orig_item_ids = [item.id for _, item, _ in rows]
+    orig_sources = db.scalars(
+        sa.select(QuizItemSource).where(QuizItemSource.quiz_item_id.in_(orig_item_ids))
+    ).all()
+    sources_by_orig: dict[UUID, list[QuizItemSource]] = {}
+    for s in orig_sources:
+        sources_by_orig.setdefault(s.quiz_item_id, []).append(s)
+
+    for ordinal, (wrong, orig_item, _) in enumerate(rows):
+        cloned = QuizItem(
+            quiz_id=retry_quiz.id,
+            ordinal=ordinal,
+            item_type=orig_item.item_type,
+            stem=orig_item.stem,
+            options=list(orig_item.options or []),
+            answer_key=orig_item.answer_key,
+            rubric={**(orig_item.rubric or {}), "origin_wrong_id": str(wrong.id)},
+            explanation=orig_item.explanation,
+            difficulty=orig_item.difficulty or 3,
+            max_score=orig_item.max_score,
+        )
+        db.add(cloned)
+        db.flush()
+        for src in sources_by_orig.get(orig_item.id, []):
+            db.add(
+                QuizItemSource(
+                    quiz_item_id=cloned.id,
+                    chunk_id=src.chunk_id,
+                    material_version_id=src.material_version_id,
+                    index_version_id=src.index_version_id,
+                    locator=src.locator,
+                )
+            )
+    db.flush()
+    return start_attempt(db, owner_user_id=owner_user_id, quiz_id=retry_quiz.id)
 
 
 def mark_wrong_mastered(db: Session, owner_user_id: UUID, wrong_id: UUID) -> None:
@@ -452,7 +887,7 @@ def _reference_revealed(response: QuizResponse) -> bool:
     if response.verdict is not None:
         return True
     answer = response.answer if isinstance(response.answer, dict) else {}
-    return answer.get("type") == "image"
+    return answer.get("type") in ("image", "text")
 
 
 def attempt_payload(db: Session, attempt_id: UUID, owner_user_id: UUID) -> dict:
@@ -477,27 +912,38 @@ def attempt_payload(db: Session, attempt_id: UUID, owner_user_id: UUID) -> dict:
             .order_by(QuizItem.ordinal)
         ).all()
     )
+    item_ids = [item.id for _, item in responses]
+    revealed_ids = {item.id for resp, item in responses if _reference_revealed(resp)}
+    sources_map = _load_sources_by_item(db, item_ids, include_quotes=revealed_ids)
     items = []
     for resp, item in responses:
         ref = resp.reference_answer_effective or _reference_from_answer_key(item.answer_key)
+        revealed = _reference_revealed(resp)
+        raw_options = getattr(item, "options", None)
         row = {
             "response_id": str(resp.id),
             "quiz_item_id": str(item.id),
             "ordinal": item.ordinal,
             "stem": item.stem,
             "item_type": item.item_type,
+            "options": list(raw_options) if isinstance(raw_options, list) else [],
             "verdict": resp.verdict,
             "verdict_source": resp.verdict_source,
             "confidence": float(resp.confidence) if resp.confidence is not None else None,
             "feedback": resp.feedback,
             "answer": resp.answer,
+            "sources": sources_map.get(item.id, []),
         }
-        if _reference_revealed(resp):
+        if revealed:
             row["reference_answer"] = ref
+            explanation = getattr(item, "explanation", None)
+            if explanation:
+                row["explanation"] = explanation
         items.append(row)
     return {
         "id": str(attempt.id),
         "quiz_id": str(attempt.quiz_id),
+        "title": getattr(quiz, "title", None),
         "knowledge_base_id": str(quiz.course_id) if quiz else None,
         "status": attempt.status,
         "items": items,

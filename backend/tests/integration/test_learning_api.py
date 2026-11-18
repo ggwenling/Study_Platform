@@ -186,3 +186,50 @@ def test_learning_flow(learning_env):
 def test_wrong_book_api_requires_auth(learning_env):
     http, db, owner, kb_id = learning_env
     assert http.get("/learning/wrong-questions").status_code == 401
+
+
+def test_learning_v2_mcq_text_answer_history_and_wrong_retry(learning_env):
+    _, db, owner, kb_id = learning_env
+    quiz = learning.generate_learning_quiz(
+        db, owner_user_id=owner, knowledge_base_id=kb_id, count=1, mode="mcq"
+    )
+    attempt = learning.start_attempt(db, owner_user_id=owner, quiz_id=quiz.id)
+    payload = learning.attempt_payload(db, attempt.id, owner)
+    item = payload["items"][0]
+    assert item["item_type"] == "mcq"
+    assert len(item["options"]) == 4
+    assert item["sources"] and item["sources"][0]["quote"] is None
+
+    # Answer with a deliberately wrong letter first to populate wrong-book
+    first_resp = learning.submit_text_answer(
+        db, owner_user_id=owner, response_id=UUID(item["response_id"]), answer_text="D"
+    )
+    if first_resp.verdict == "correct":
+        first_resp = learning.submit_text_answer(
+            db, owner_user_id=owner, response_id=UUID(item["response_id"]), answer_text="B"
+        )
+    assert first_resp.verdict == "incorrect"
+
+    history = learning.list_attempts(db, owner, knowledge_base_id=kb_id)
+    assert history and history[0]["answered_count"] == 1
+
+    wrongs = learning.list_wrong_questions(db, owner, knowledge_base_id=kb_id)
+    assert len(wrongs) == 1
+    assert wrongs[0]["status"] == "open"
+    assert wrongs[0]["sources"] and wrongs[0]["sources"][0]["quote"]
+
+    # Retry wrong question and answer correctly -> original wrong question becomes reviewing
+    retry_attempt = learning.retry_wrong_questions(
+        db, owner_user_id=owner, wrong_ids=[UUID(wrongs[0]["id"])], knowledge_base_id=kb_id
+    )
+    retry_payload = learning.attempt_payload(db, retry_attempt.id, owner)
+    retry_item = retry_payload["items"][0]
+    correct_answer = wrongs[0]["reference_answer"]
+    retry_resp = learning.submit_text_answer(
+        db, owner_user_id=owner, response_id=UUID(retry_item["response_id"]), answer_text=correct_answer
+    )
+    assert retry_resp.verdict == "correct"
+
+    updated_wrongs = learning.list_wrong_questions(db, owner, knowledge_base_id=kb_id)
+    assert len(updated_wrongs) == 1
+    assert updated_wrongs[0]["status"] == "reviewing"

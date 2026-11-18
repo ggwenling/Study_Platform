@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { ChevronRight, FileText, HelpCircle, Image, Layers, MessageCircle, PanelRight } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
-import { Link } from 'react-router'
+import { Link, useLocation } from 'react-router'
 import { Button } from '@/components/arc/button/button'
 import { Composer } from './Composer'
 import type { ComposerHandle } from './Composer'
@@ -17,6 +17,8 @@ const shortcuts = [
 
 export function Home() {
   const reduced = useReducedMotion()
+  const location = useLocation()
+  const navState = (location.state ?? null) as { preferredLibrary?: string; initialDraft?: string } | null
   const [summary, setSummary] = useState(false)
   const composer = useRef<ComposerHandle>(null)
   const { overview, user, loading, requireLogin } = useWorkspace()
@@ -46,7 +48,12 @@ export function Home() {
             <h1>欢迎使用 知循</h1>
             <p>你的个人多知识库 RAG 工具，基于自己的资料获得更可靠的答案与洞察。</p>
           </header>
-          <Composer ref={composer} summary={summary} />
+          <Composer
+            ref={composer}
+            summary={summary}
+            preferredLibrary={navState?.preferredLibrary}
+            initialDraft={navState?.initialDraft}
+          />
           <div className="shortcuts">
             {shortcuts.map(({ label, description, icon: Icon }, index) => (
               <Button key={label} variant="secondary" className="shortcut" onClick={() => {

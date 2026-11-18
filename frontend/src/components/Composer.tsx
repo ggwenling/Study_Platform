@@ -32,15 +32,16 @@ export type ComposerHandle = {
   setSummaryMode: (enabled: boolean) => void
 }
 
-export function Composer({ demo = false, conversationId, preferredLibrary, summary = false, ref }: {
+export function Composer({ demo = false, conversationId, preferredLibrary, initialDraft, summary = false, ref }: {
   demo?: boolean
   conversationId?: string
   preferredLibrary?: string
+  initialDraft?: string
   summary?: boolean
   ref?: Ref<ComposerHandle>
 }) {
   const { user, libraries, capabilities, chat, notify, report, requireLogin, refresh } = useWorkspace()
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState(initialDraft ?? '')
   const [supplement, setSupplement] = useState(false)
   const [summaryMode, setSummaryMode] = useState(summary)
   const [selected, setSelected] = useState('')
@@ -76,6 +77,10 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   useEffect(() => {
     setSummaryMode(summary)
   }, [summary])
+
+  useEffect(() => {
+    if (initialDraft) setDraft(initialDraft)
+  }, [initialDraft])
 
   useEffect(() => {
     setSelectedMaterialIds([])

@@ -29,6 +29,17 @@ QUIZ_SYSTEM = (
     "题干和参考答案使用中文，题型为简答或填空，参考答案简短明确。"
 )
 
+QUIZ_TYPED_SYSTEM = (
+    "你是出题助手。只能根据用户提供的编号资料片段出题，不得编造片段中不存在的事实。"
+    "输出唯一一个 JSON 对象，不要 Markdown 或解释。"
+    '格式：{"questions":[{"item_type":"mcq"|"short_answer","stem":"题干",'
+    '"options":["A. 选项1","B. 选项2","C. 选项3","D. 选项4"],'
+    '"reference_answer":"参考答案（单选题填 A/B/C/D）","explanation":"简短解析","source_indices":[1]}]}'
+    "当 item_type 为 short_answer 时 options 为空数组 []；当 item_type 为 mcq 时必须给 4 个清晰选项且唯一正确。"
+    "source_indices 为所用片段的编号（正整数），必须来自给定编号列表。"
+    '若资料不足以出题，输出：{"questions":[],"insufficient":true,"message":"简短原因"}。全部使用中文。'
+)
+
 QUIZ_RETRY_SUFFIX = "\n上次输出无法解析。请仅输出符合上述格式的合法 JSON，不要其他文字。"
 
 GRADE_SYSTEM = (
@@ -58,6 +69,9 @@ class GeneratedQuestion:
     stem: str
     reference_answer: str
     source_indices: list[int]
+    item_type: str = "short_answer"
+    options: tuple[str, ...] = ()
+    explanation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +139,27 @@ def parse_quiz_response(raw: str, fragment_count: int) -> tuple[list[GeneratedQu
         stem = row.get("stem")
         reference = row.get("reference_answer")
         indices = _valid_source_indices(row.get("source_indices"), fragment_count)
+        raw_type = row.get("item_type") or "short_answer"
+        item_type = raw_type if raw_type in ("mcq", "short_answer") else "short_answer"
+        raw_options = row.get("options")
+        options: tuple[str, ...] = ()
+        if item_type == "mcq":
+            if not isinstance(raw_options, list) or not (2 <= len(raw_options) <= 6):
+                continue
+            cleaned_opts = [
+                str(opt).strip()
+                for opt in raw_options
+                if isinstance(opt, str) and opt.strip() and len(opt.strip()) <= 500
+            ]
+            if len(cleaned_opts) != len(raw_options):
+                continue
+            options = tuple(cleaned_opts)
+        explanation_raw = row.get("explanation")
+        explanation = (
+            explanation_raw.strip()[:1000]
+            if isinstance(explanation_raw, str) and explanation_raw.strip()
+            else None
+        )
         if (
             not isinstance(stem, str)
             or not isinstance(reference, str)
@@ -140,6 +175,9 @@ def parse_quiz_response(raw: str, fragment_count: int) -> tuple[list[GeneratedQu
                 stem=stem.strip(),
                 reference_answer=reference.strip(),
                 source_indices=indices,
+                item_type=item_type,
+                options=options,
+                explanation=explanation,
             )
         )
     return out, None
@@ -198,6 +236,7 @@ def generate_questions_with_llm(
     fragments: list[FragmentRef],
     count: int,
     *,
+    mode: str = "short_answer",
     invoker: LlmInvoker | None = None,
     owner_user_id: UUID | None = None,
 ) -> tuple[list[GeneratedQuestion], str | None]:
@@ -209,15 +248,19 @@ def generate_questions_with_llm(
         )
     )
     settings = get_settings()
-    user = json.dumps(
-        {"target_count": count, "fragments": _fragments_prompt(fragments)},
-        ensure_ascii=False,
-    )
+    payload: dict[str, Any] = {"target_count": count, "fragments": _fragments_prompt(fragments)}
+    system_prompt = QUIZ_SYSTEM
+    if mode in ("mcq", "mixed"):
+        system_prompt = QUIZ_TYPED_SYSTEM
+        payload["question_mode"] = (
+            "全部生成单选题（mcq）" if mode == "mcq" else "混合生成单选题（mcq）与简答题（short_answer）"
+        )
+    user = json.dumps(payload, ensure_ascii=False)
     last_raw = ""
     for attempt in range(settings.learning_llm_max_retries + 1):
         retry = QUIZ_RETRY_SUFFIX if attempt else ""
         try:
-            last_raw = call(QUIZ_SYSTEM, user, retry_hint=retry)
+            last_raw = call(system_prompt, user, retry_hint=retry)
         except ApiError as exc:
             logger.warning("learning quiz LLM failed: %s", exc.code)
             raise

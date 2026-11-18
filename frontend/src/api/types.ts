@@ -26,32 +26,81 @@ export interface ModelUsageTotals { calls: number; successes: number; failures: 
 export interface ModelUsageSummary { days: number; since: string; totals: ModelUsageTotals; by_day: ModelUsageBucket[]; by_purpose: ModelUsageBucket[]; by_model: ModelUsageBucket[]; by_connection: ModelUsageBucket[] }
 export interface Turn { turn_id: string; conversation_id: string; status: string; scope: Scope; messages: Message[]; error_code: string | null }
 
+export interface LearningSource {
+  chunk_id: string
+  material_id: string
+  material_version_id: string
+  title: string
+  location_label: string
+  availability: 'available' | 'unavailable'
+  quote?: string | null
+}
+
+export interface LearningResponseResult {
+  response_id: string
+  verdict: string | null
+  verdict_source: string | null
+  confidence: number | null
+  feedback: string | null
+  answer: Record<string, unknown> | null
+  reference_answer: string | null
+  explanation?: string | null
+  sources?: LearningSource[]
+}
+
 export interface LearningItem {
   response_id: string
   quiz_item_id: string
   ordinal: number
   stem: string
   item_type: string
+  options?: string[]
   reference_answer?: string | null
+  explanation?: string | null
   verdict: string | null
   verdict_source: string | null
   confidence: number | null
   feedback: string | null
   answer: Record<string, unknown> | null
+  sources?: LearningSource[]
 }
 
 export interface LearningAttempt {
   id: string
   quiz_id: string
+  title?: string | null
   knowledge_base_id: string | null
   status: string
   items: LearningItem[]
 }
 
+export interface LearningAttemptSummary {
+  id: string
+  quiz_id: string
+  title: string
+  knowledge_base_id: string
+  knowledge_base_name: string | null
+  status: string
+  item_count: number
+  answered_count: number
+  correct_count: number
+  started_at: string
+  updated_at: string
+}
+
 export interface WrongQuestionItem {
   id: string
   quiz_item_id: string
+  knowledge_base_id?: string
+  knowledge_base_name?: string | null
+  item_type?: string
   stem: string
+  options?: string[]
+  reference_answer?: string | null
+  explanation?: string | null
+  last_feedback?: string | null
+  last_answer?: string | null
+  sources?: LearningSource[]
   status: string
   wrong_count: number
   last_wrong_at: string

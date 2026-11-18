@@ -1,5 +1,5 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
-import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, Turn, UploadResult, User, WrongQuestionItem } from './types'
+import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
@@ -204,14 +204,27 @@ export const api = {
   turn: (conversationId: string, turnId: string, signal?: AbortSignal) => request<Turn>(turnPath(conversationId, turnId), { signal }),
   cancelTurn: (conversationId: string, turnId: string) => request<Turn>(turnPath(conversationId, turnId) + '/cancel', json('POST')),
   learning: {
-    generateQuiz: (knowledgeBaseId: string, count: number) =>
+    generateQuiz: (
+      knowledgeBaseId: string,
+      count: number,
+      options?: { mode?: 'short_answer' | 'mcq' | 'mixed'; material_ids?: string[] | null },
+    ) =>
       request<{ quiz_id: string; title: string; item_count: number }>(
         `/learning/knowledge-bases/${pathId(knowledgeBaseId)}/quizzes/generate`,
-        json('POST', { count }),
+        json('POST', { count, mode: options?.mode ?? 'short_answer', material_ids: options?.material_ids ?? null }),
+      ),
+    attempts: (knowledgeBaseId?: string, limit = 15) =>
+      request<{ items: LearningAttemptSummary[] }>(
+        '/learning/attempts' + query({ knowledge_base_id: knowledgeBaseId, limit: String(limit) }),
       ),
     startAttempt: (quizId: string) =>
       request<LearningAttempt>('/learning/attempts', json('POST', { quiz_id: quizId })),
     attempt: (id: string) => request<LearningAttempt>(`/learning/attempts/${pathId(id)}`),
+    submitAnswerText: (responseId: string, answerText: string) =>
+      request<LearningResponseResult>(
+        `/learning/responses/${pathId(responseId)}/answer-text`,
+        json('POST', { answer_text: answerText }),
+      ),
     submitAnswerImage: async (responseId: string, file: File) => {
       const form = new FormData()
       form.append('file', file)
@@ -226,23 +239,20 @@ export const api = {
             credentials: 'omit',
           }),
         )
-        return response.json() as Promise<{
-        response_id: string
-        verdict: string | null
-        verdict_source: string | null
-        confidence: number | null
-        feedback: string | null
-        answer: Record<string, unknown>
-        reference_answer: string | null
-      }>
+        return response.json() as Promise<LearningResponseResult>
       })
     },
     patchVerdict: (responseId: string, body: { verdict: string; reference_answer?: string | null }) =>
-      request<{ response_id: string; verdict: string; verdict_source: string; reference_answer: string | null }>(
+      request<LearningResponseResult>(
         `/learning/responses/${pathId(responseId)}/verdict`,
         json('PATCH', body),
       ),
-    wrongQuestions: () => request<{ items: WrongQuestionItem[] }>('/learning/wrong-questions'),
+    wrongQuestions: (knowledgeBaseId?: string) =>
+      request<{ items: WrongQuestionItem[] }>(
+        '/learning/wrong-questions' + query({ knowledge_base_id: knowledgeBaseId }),
+      ),
+    retryWrong: (body: { wrong_ids?: string[]; knowledge_base_id?: string } = {}) =>
+      request<LearningAttempt>('/learning/wrong-questions/retry', json('POST', body)),
     masterWrong: (id: string) =>
       request<{ id: string; status: string }>(`/learning/wrong-questions/${pathId(id)}/mastered`, json('POST')),
   },
