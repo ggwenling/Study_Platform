@@ -245,7 +245,7 @@ def create_note(
     )
     db.add(note)
     db.flush()
-    for ordinal, cit in enumerate(msg_citations):
+    for cit in msg_citations:
         db.add(
             NoteCitation(
                 note_id=note.id,
@@ -253,7 +253,7 @@ def create_note(
                 material_version_id=cit.material_version_id,
                 index_version_id=cit.index_version_id,
                 locator=cit.locator if isinstance(cit.locator, dict) else {},
-                ordinal=ordinal,
+                ordinal=cit.ordinal,
             )
         )
     db.flush()
@@ -461,10 +461,8 @@ def generate_studio_artifact(
         content_md = _stub_studio_markdown(kb.name, kind, evidence)
         generator_profile = "studio_stub_v1"
 
-    cited_nums = list(
-        dict.fromkeys(
-            int(x) for x in re.findall(r"\[S(\d+)\]", content_md) if 1 <= int(x) <= len(evidence)
-        )
+    cited_nums = sorted(
+        {int(x) for x in re.findall(r"\[S(\d+)\]", content_md) if 1 <= int(x) <= len(evidence)}
     )
     if not cited_nums and evidence:
         cited_nums = [1]
@@ -492,7 +490,7 @@ def generate_studio_artifact(
     )
     db.add(note)
     db.flush()
-    for ordinal, source_num in enumerate(cited_nums):
+    for source_num in cited_nums:
         chunk = evidence[source_num - 1]
         db.add(
             NoteCitation(
@@ -501,7 +499,7 @@ def generate_studio_artifact(
                 material_version_id=chunk["material_version_id"],
                 index_version_id=chunk["index_version_id"],
                 locator=chunk["locator"] if isinstance(chunk["locator"], dict) else {},
-                ordinal=ordinal,
+                ordinal=source_num - 1,
             )
         )
     db.flush()
@@ -704,6 +702,38 @@ def _card_dto(card: Flashcard, sources: list[dict[str, Any]], now: datetime) -> 
     }
 
 
+def _load_flashcard_sources(
+    db: Session, card_ids: list[UUID]
+) -> dict[UUID, list[dict[str, Any]]]:
+    sources_map: dict[UUID, list[dict[str, Any]]] = {cid: [] for cid in card_ids}
+    if not card_ids:
+        return sources_map
+    src_rows = db.execute(
+        sa.select(FlashcardSource, Material, KnowledgeBase, IndexVersion)
+        .join(MaterialVersion, MaterialVersion.id == FlashcardSource.material_version_id)
+        .join(Material, Material.id == MaterialVersion.material_id)
+        .join(KnowledgeBase, KnowledgeBase.id == Material.knowledge_base_id)
+        .outerjoin(IndexVersion, IndexVersion.id == FlashcardSource.index_version_id)
+        .where(FlashcardSource.flashcard_id.in_(card_ids))
+        .order_by(FlashcardSource.created_at)
+    ).all()
+    for src, material, kb, index in src_rows:
+        available = (
+            kb.deleted_at is None
+            and material.deleted_at is None
+            and material.status != "deleted"
+            and index is not None
+            and index.status in ("ready", "retired")
+        )
+        sources_map.setdefault(src.flashcard_id, []).append(
+            {
+                "title": material.title,
+                "availability": "available" if available else "unavailable",
+            }
+        )
+    return sources_map
+
+
 def get_flashcard_deck(db: Session, owner_user_id: UUID, deck_id: UUID) -> dict[str, Any]:
     deck = db.scalar(
         sa.select(FlashcardDeck).where(
@@ -727,29 +757,7 @@ def get_flashcard_deck(db: Session, owner_user_id: UUID, deck_id: UUID) -> dict[
             .order_by(Flashcard.due_at.asc(), Flashcard.created_at.asc())
         ).all()
     )
-    card_ids = [c.id for c in cards]
-    sources_map: dict[UUID, list[dict[str, Any]]] = {cid: [] for cid in card_ids}
-    if card_ids:
-        src_rows = db.execute(
-            sa.select(FlashcardSource, Material, IndexVersion)
-            .join(MaterialVersion, MaterialVersion.id == FlashcardSource.material_version_id)
-            .join(Material, Material.id == MaterialVersion.material_id)
-            .outerjoin(IndexVersion, IndexVersion.id == FlashcardSource.index_version_id)
-            .where(FlashcardSource.flashcard_id.in_(card_ids))
-        ).all()
-        for src, material, index in src_rows:
-            available = (
-                material.deleted_at is None
-                and material.status != "deleted"
-                and index is not None
-                and index.status in ("ready", "retired")
-            )
-            sources_map.setdefault(src.flashcard_id, []).append(
-                {
-                    "title": material.title,
-                    "availability": "available" if available else "unavailable",
-                }
-            )
+    sources_map = _load_flashcard_sources(db, [c.id for c in cards])
     now = _now()
     return {
         "id": str(deck.id),
@@ -804,6 +812,21 @@ def review_flashcard(
         raise ApiError(404, "not_found", "闪卡不存在")
 
     now = _now()
+    cleaned_key = (idempotency_key or "").strip()[:128] or None
+    if cleaned_key is not None:
+        existing_review = db.scalar(
+            sa.select(FlashcardReview).where(
+                FlashcardReview.owner_user_id == owner_user_id,
+                FlashcardReview.flashcard_id == card.id,
+                FlashcardReview.idempotency_key == cleaned_key,
+            )
+        )
+        if existing_review is not None:
+            if existing_review.rating != rating:
+                raise ApiError(409, "idempotency_conflict", "同一幂等键不能用于不同评分")
+            sources = _load_flashcard_sources(db, [card.id]).get(card.id, [])
+            return _card_dto(card, sources, now)
+
     prev_ease = float(card.ease_factor)
     prev_interval = int(card.interval_days)
     prev_rep = int(card.repetition_count)
@@ -864,9 +887,10 @@ def review_flashcard(
             previous_state=previous_state,
             new_state=new_state,
             reviewed_at=now,
-            idempotency_key=(idempotency_key or uuid4().hex)[:128],
+            idempotency_key=cleaned_key or uuid4().hex,
         )
     )
     db.flush()
     db.refresh(card)
-    return _card_dto(card, [], now)
+    sources = _load_flashcard_sources(db, [card.id]).get(card.id, [])
+    return _card_dto(card, sources, now)
