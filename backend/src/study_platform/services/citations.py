@@ -28,14 +28,33 @@ def citation_dto(db, citation) -> dict:
     elif not index or index.status not in ("ready", "retired"):
         availability = "index_unavailable"
     locator = citation.locator or {}
-    label = next(
-        (
-            (f"第 {locator[key]} 页" if key == "page" else f"{label} {locator[key]}")
-            for key, label in (("page", "第页"), ("paragraph", "段落"), ("line", "行"))
-            if key in locator
-        ),
-        "原文",
-    )
+    if locator.get("heading"):
+        line_no = locator.get("start_line")
+        label = (
+            f"{locator['heading']} · 第 {line_no} 行"
+            if isinstance(line_no, int)
+            else str(locator["heading"])
+        )
+    else:
+        label = next(
+            (
+                (
+                    f"第 {locator[key]} 页"
+                    if key == "page"
+                    else f"第 {locator[key]} 行"
+                    if key == "start_line"
+                    else f"{prefix} {locator[key]}"
+                )
+                for key, prefix in (
+                    ("page", "第页"),
+                    ("paragraph", "段落"),
+                    ("start_line", "第行"),
+                    ("line", "行"),
+                )
+                if key in locator
+            ),
+            "原文",
+        )
     if locator.get("table_path"):
         label = " / ".join(
             f"表格 {part['table']}，第 {part['row']} 行，第 {part['column']} 列"

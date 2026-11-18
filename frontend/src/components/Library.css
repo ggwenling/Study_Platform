@@ -35,6 +35,8 @@
   color: var(--text-secondary);
 }
 .library-processing-banner svg { flex: none; color: var(--accent); }
+.library-upload-note { margin: 0 8px; font-size: var(--text-caption); }
+.library-detail[data-dragging] .library-panel { border-style: dashed; border-color: var(--border-strong); }
 .library-panel { min-width: 0; border: 1px solid var(--line); border-radius: 14px; padding: 12px 19px 15px; background: linear-gradient(135deg, color-mix(in srgb, var(--ink) 3%, var(--panel)), var(--panel) 48%, color-mix(in srgb, var(--ink) 2%, var(--panel))); }
 .library-section-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 13px; margin-bottom: 12px; }
 .library-section-heading h2, .library-aside h2 { font-size: var(--text-lg); line-height: 1.3; }

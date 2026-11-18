@@ -1,6 +1,7 @@
 """Durable ingestion worker and document extraction."""
 
 import hashlib
+import re
 import shutil
 import socket
 import zipfile
@@ -110,6 +111,65 @@ def extract_docx(path, *, legacy_columns=False):
     yield from blocks(Document(path))
 
 
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_ATX_HEADING_RE = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
+
+
+def extract_markdown(path):
+    """Yield Markdown sections split on ATX headings while ignoring fenced code blocks."""
+    in_fence: tuple[str, int] | None = None
+    heading: str | None = None
+    level = 1
+    start_line: int | None = None
+    end_line = 0
+    buf: list[str] = []
+
+    def flush():
+        body = "\n".join(buf).strip()
+        if not body or start_line is None:
+            return None
+        loc: dict = {"start_line": start_line, "end_line": end_line}
+        if heading:
+            loc["heading"] = heading
+            loc["level"] = level
+        return body, loc
+
+    with path.open(encoding="utf-8-sig") as f:
+        for line_no, raw in enumerate(f, 1):
+            line = raw.rstrip("\r\n")
+            fence_match = _FENCE_RE.match(line)
+            if fence_match:
+                marker, rest = fence_match.group(1), fence_match.group(2)
+                if in_fence is None:
+                    if marker[0] != "`" or "`" not in rest:
+                        in_fence = (marker[0], len(marker))
+                elif marker[0] == in_fence[0] and len(marker) >= in_fence[1] and not rest.strip():
+                    in_fence = None
+            elif in_fence is None:
+                heading_match = _ATX_HEADING_RE.match(line)
+                if heading_match:
+                    item = flush()
+                    if item is not None:
+                        yield item
+                    heading = heading_match.group(2).strip()
+                    level = len(heading_match.group(1))
+                    start_line = line_no
+                    end_line = line_no
+                    buf = [line]
+                    continue
+            if line.strip():
+                if start_line is None:
+                    start_line = line_no
+                end_line = line_no
+                buf.append(line)
+            elif buf:
+                buf.append("")
+
+    item = flush()
+    if item is not None:
+        yield item
+
+
 def extract(version, output_dir, phase):
     """Yield text with original page/paragraph/line locators."""
     settings = get_settings()
@@ -120,6 +180,8 @@ def extract(version, output_dir, phase):
             for number, line in enumerate(f, 1):
                 if line.strip():
                     yield line.strip(), {"line": number}
+    elif mime == "text/markdown":
+        yield from extract_markdown(path)
     elif mime.endswith("wordprocessingml.document"):
         yield from extract_docx(path)
     elif mime == "application/pdf":
@@ -410,11 +472,13 @@ def run_once():
                 index = db.get(IndexVersion, index_id)
                 sections = []
                 for ordinal, (text, locator) in enumerate(extracted):
+                    raw_level = locator.get("level", 1)
                     section = MaterialSection(
                         id=uuid4(),
                         material_version_id=version_id,
                         ordinal=ordinal,
-                        level=1,
+                        heading=locator.get("heading"),
+                        level=raw_level if isinstance(raw_level, int) and 1 <= raw_level <= 8 else 1,
                         text=text,
                         locator=locator,
                     )

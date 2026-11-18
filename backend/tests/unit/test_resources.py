@@ -77,6 +77,10 @@ def test_citation_snapshot_and_unavailable_sources(monkeypatch, tmp_path):
     assert citation_dto(db, citation)["location_label"] == (
         "表格 2，第 1 行，第 3 列 / 表格 1，第 2 行，第 1 列，段落 2"
     )
+    citation.locator = {"heading": "1.1 子节", "start_line": 10, "end_line": 11, "level": 2}
+    assert citation_dto(db, citation)["location_label"] == "1.1 子节 · 第 10 行"
+    citation.locator = {"start_line": 1, "end_line": 3}
+    assert citation_dto(db, citation)["location_label"] == "第 1 行"
     material.deleted_at = datetime.now(UTC)
     dto = citation_dto(db, citation)
     assert dto["availability"] == "unavailable"

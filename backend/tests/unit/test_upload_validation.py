@@ -22,6 +22,15 @@ def test_validate_docx_zip_header():
     validation.validate_upload_content(b"PK\x03\x04", validation.EXTENSION_MIMES[".docx"], "a.docx")
 
 
+def test_validate_markdown_extension_and_utf8_content():
+    assert validation.expected_mime("notes.md") == "text/markdown"
+    assert validation.expected_mime("README.MARKDOWN") == "text/markdown"
+    validation.validate_upload_content("# 标题\n正文".encode("utf-8"), "text/markdown", "notes.md")
+    with pytest.raises(ApiError) as error:
+        validation.validate_upload_content(b"\xff\xfe", "text/markdown", "bad.md")
+    assert error.value.code == "invalid_file_content"
+
+
 def test_validate_text_sample_with_utf8_character_split_at_boundary():
     content = b"a" * 4095 + "中".encode("utf-8") + b"tail"
     validation.validate_upload_content(content[:4096], "text/plain", "a.txt")

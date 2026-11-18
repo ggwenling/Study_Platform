@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent, ReactNode } from 'react'
-import { ChevronRight, CircleDashed, Ellipsis, FileText, Folder, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, Trash2, TriangleAlert, Upload } from 'lucide-react'
+import type { DragEvent, FormEvent, ReactNode } from 'react'
+import { ChevronRight, CircleDashed, Ellipsis, FilePlus2, FileText, Folder, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, Trash2, TriangleAlert, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router'
-import { api, uploadMaterial } from '@/api/client'
+import { api } from '@/api/client'
 import type { DocumentLocation, Fragment, KnowledgeBase, LibraryOverview, Material, MaterialPreview } from '@/api/types'
 import { allPages, errorMessage } from '@/api/ui'
+import { useUploadQueue } from '../useUploadQueue'
+import { PasteTextDialog } from './PasteTextDialog'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
@@ -94,7 +96,7 @@ function LibraryForm({ library, onSubmit, busy, submit }: {
 function LibraryDetail({ library, libraries, select, create, onDeleted }: {
   library: KnowledgeBase; libraries: KnowledgeBase[]; select: (id: string) => void; create: () => void; onDeleted: () => void;
 }) {
-  const { revision, capabilities, refresh, notify, report } = useWorkspace()
+  const { user, revision, capabilities, refresh, notify, report } = useWorkspace()
   const id = library.id
   const [overview, setOverview] = useState<LibraryOverview>()
   const [materials, setMaterials] = useState<Material[]>([])
@@ -103,6 +105,8 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
   const [fragmentRevision, setFragmentRevision] = useState(0)
   const [busy, setBusy] = useState<string>()
   const [panel, setPanel] = useState<Panel>()
+  const [pasteOpen, setPasteOpen] = useState(false)
+  const [dragging, setDragging] = useState(false)
   const [confirmMaterial, setConfirmMaterial] = useState<Material | null>(null)
   const [scope, setScope] = useState<DocumentScope>({})
   const [day, setDay] = useState<string>()
@@ -145,6 +149,33 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
   }, [expanded, id, locations, materials])
 
   const reloadData = () => setReload((value) => value + 1)
+  const uploadQueue = useUploadQueue({
+    userId: user?.id,
+    maxUploadBytes: capabilities?.max_upload_bytes,
+    refresh: () => { reloadData(); refresh() },
+    notify,
+    report,
+  })
+  const addFiles = (files: FileList | File[]) => uploadQueue.enqueue(files, { id, name: library.name })
+  const failedUploads = uploadQueue.items.filter((row) => row.status === 'failed')
+
+  function onDragOver(event: DragEvent<HTMLElement>) {
+    if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return
+    event.preventDefault()
+    if (!dragging) setDragging(true)
+  }
+
+  function onDragLeave(event: DragEvent<HTMLElement>) {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+    setDragging(false)
+  }
+
+  function onDrop(event: DragEvent<HTMLElement>) {
+    if (!event.dataTransfer?.files?.length) return
+    event.preventDefault()
+    setDragging(false)
+    addFiles(event.dataTransfer.files)
+  }
   const selectDay = (value: string | null) => { setDay(value ?? undefined); setPanel(undefined) }
   const scrollToFragments = () => fragmentPanel.current?.scrollIntoView({ block: 'nearest' })
 
@@ -169,17 +200,6 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
       setPanel(undefined)
       refresh()
       notify('知识库已更新。')
-    } catch (error) { report(error) } finally { setBusy(undefined) }
-  }
-
-  async function upload(file: File) {
-    if (busy) return
-    if (capabilities && file.size > capabilities.max_upload_bytes) return notify('文件超过服务器允许的大小。')
-    setBusy('upload')
-    try {
-      await uploadMaterial(id, file)
-      refresh()
-      notify('资料已提交处理。')
     } catch (error) { report(error) } finally { setBusy(undefined) }
   }
 
@@ -273,7 +293,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
   const heatmap = (selectable = true) => overview ? <ActivityHeatmap className="library-heatmap" days={overview.activity} label="资料活动" period="最近 12 周" weekStartsOn={1} locale="zh-CN"
     unit={{ one: '次索引', other: '次索引' }} selectedDate={day} onSelectDate={selectable ? (value) => { selectDay(value); scrollToFragments() } : undefined} /> : <p className="muted">暂无活动记录</p>
 
-  return <section className="library-detail" aria-label="知识库详情">
+  return <section className="library-detail" aria-label="知识库详情" data-dragging={dragging || undefined} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
     <div className="orbit-light library-orbit" aria-hidden="true" />
     <div className="library-main">
       <header className="library-header">
@@ -285,25 +305,37 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
           <Button size="sm" variant="secondary" loading={busy === 'sync'} disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步</Button>
           <DropdownMenu label="知识库操作" icon={<Ellipsis size={17} />} iconOnly disabled={Boolean(busy)} items={[
             { label: '导入资料', icon: <Upload size={16} />, onSelect: () => fileInput.current?.click() },
+            { label: '随手贴文本', icon: <FilePlus2 size={16} />, onSelect: () => setPasteOpen(true) },
             { label: '管理资料', icon: <FileText size={16} />, onSelect: () => { setConfirmMaterial(null); setPanel('files') } },
             { label: '新建知识库', icon: <Plus size={16} />, onSelect: create },
             ...libraries.filter((item) => item.id !== id).map((item, index) => ({ label: item.name, icon: <Folder size={16} />, separatorBefore: index === 0, onSelect: () => select(item.id) })),
             { label: '删除知识库', icon: <Trash2 size={16} />, destructive: true, separatorBefore: true, onSelect: () => setPanel('deleteKb') },
           ]} />
         </div>
-        <input ref={fileInput} type="file" hidden accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" disabled={Boolean(busy)} onChange={(event) => {
-          const file = event.target.files?.[0]
+        <input ref={fileInput} type="file" multiple hidden accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg" onChange={(event) => {
+          const files = event.target.files ? Array.from(event.target.files) : []
           event.target.value = ''
-          if (file) void upload(file)
+          if (files.length) addFiles(files)
         }} />
       </header>
+      {dragging && <p className="library-processing-banner" role="status">松开鼠标，将文件批量导入「{library.name}」。</p>}
       {overview && overview.processing_count > 0 && (
         <p className="library-processing-banner" role="status">
           <CircleDashed size={18} aria-hidden="true" />
           {overview.processing_count} 份资料正在处理，页面会自动刷新状态。
         </p>
       )}
-      {busy === 'upload' && <p role="status" className="muted">正在导入资料…</p>}
+      {uploadQueue.latestNote && <p role="status" className="muted library-upload-note">{uploadQueue.latestNote}</p>}
+      {failedUploads.length > 0 && (
+        <div className="upload-queue-failures library-upload-note">
+          {failedUploads.map((item) => (
+            <span key={item.id} className="upload-failure-item">
+              <span>「{item.name}」上传失败</span>
+              <Button type="button" size="sm" variant="secondary" onClick={() => uploadQueue.retryItem(item.id)}>重试上传</Button>
+            </span>
+          ))}
+        </div>
+      )}
       {failure && <p className="library-empty" role="alert">{failure} <Button size="sm" onClick={reloadData}>重试</Button></p>}
       <section className="library-panel">
         {heading(<Layers size={22} />, '知识结构', '从文档、主题、标签到片段的结构化视图')}
@@ -422,6 +454,12 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
         </>}
       </DialogContent>}
     </Dialog>
+    <PasteTextDialog
+      open={pasteOpen}
+      onOpenChange={setPasteOpen}
+      libraryName={library.name}
+      onSubmitFile={(file) => addFiles([file])}
+    />
   </section>
 }
 

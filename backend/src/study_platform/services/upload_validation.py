@@ -9,6 +9,8 @@ EXTENSION_MIMES = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -53,7 +55,7 @@ def validate_upload_content(header: bytes, mime: str, filename: str) -> None:
         if not header.startswith(b"PK\x03\x04"):
             raise ApiError(400, "invalid_file_content", "文件内容与 DOCX 类型不符")
         return
-    if mime == "text/plain":
+    if mime in ("text/plain", "text/markdown"):
         sample = header[:4096]
         Utf8TextValidator().feed(sample)
         return

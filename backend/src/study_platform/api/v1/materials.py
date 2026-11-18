@@ -31,6 +31,8 @@ MIMES = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -231,7 +233,7 @@ def upload(
     digest = hashlib.sha256()
     size = 0
     header = b""
-    text_validator = Utf8TextValidator() if mime == "text/plain" else None
+    text_validator = Utf8TextValidator() if mime in ("text/plain", "text/markdown") else None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("xb") as out:

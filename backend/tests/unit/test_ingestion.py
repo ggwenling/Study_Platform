@@ -24,6 +24,36 @@ def test_text_line_locators_and_chunk_overlap(tmp_path, monkeypatch):
     assert parts[0][-120:] == parts[1][:120]
 
 
+def test_markdown_sections_split_headings_and_ignore_code_fences(tmp_path, monkeypatch):
+    path = tmp_path / "notes.md"
+    path.write_text(
+        "导言说明\n\n"
+        "# 第一章 概述 ##\n"
+        "第一段内容\n"
+        "```python\n"
+        "# 这不是标题\n"
+        "x = 1\n"
+        "```\n\n"
+        "## 1.1 子节\n"
+        "子节正文\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ingestion, "source_path", lambda _: path)
+    version = SimpleNamespace(id=uuid4(), source_mime="text/markdown")
+    sections = list(ingestion.extract(version, tmp_path, lambda _: None))
+    assert sections == [
+        ("导言说明", {"start_line": 1, "end_line": 1}),
+        (
+            "# 第一章 概述 ##\n第一段内容\n```python\n# 这不是标题\nx = 1\n```",
+            {"start_line": 3, "end_line": 8, "heading": "第一章 概述", "level": 1},
+        ),
+        (
+            "## 1.1 子节\n子节正文",
+            {"start_line": 10, "end_line": 11, "heading": "1.1 子节", "level": 2},
+        ),
+    ]
+
+
 def test_docx_paragraph_numbers_preserve_empty_paragraphs(tmp_path, monkeypatch):
     path = tmp_path / "source"
     doc = Document()

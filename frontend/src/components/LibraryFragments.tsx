@@ -16,6 +16,9 @@ import { useWorkspace } from '../WorkspaceData'
 export const number = new Intl.NumberFormat('zh-CN')
 
 export function locatorLabel(locator: Record<string, unknown>) {
+  if (typeof locator.heading === 'string' && locator.heading) {
+    return typeof locator.start_line === 'number' ? `${locator.heading} · 第 ${locator.start_line} 行` : locator.heading
+  }
   if (typeof locator.page === 'number') return `第 ${locator.page} 页`
   if (typeof locator.image === 'number') return `图片 ${locator.image}`
   if (typeof locator.paragraph === 'number') return `段落 ${locator.paragraph}`
@@ -33,6 +36,7 @@ const mimeTypes = [
   { value: 'all', label: '文件类型' },
   { value: 'application/pdf', label: 'PDF' },
   { value: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', label: 'Word' },
+  { value: 'text/markdown', label: 'Markdown' },
   { value: 'text/plain', label: '文本' },
   { value: 'image/', label: '图片' },
 ]

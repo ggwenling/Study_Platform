@@ -1,13 +1,14 @@
 import { lazy, Suspense, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import type { Ref } from 'react'
-import { ArrowUp, Globe, Image, Paperclip, Plus, Square } from 'lucide-react'
+import type { DragEvent, Ref } from 'react'
+import { ArrowUp, FileText, Globe, Image, Paperclip, Plus, Square } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
 const ComposerMetalSend = lazy(() =>
   import('./ComposerMetalSend').then((m) => ({ default: m.ComposerMetalSend })),
 )
-import { api, uploadMaterial } from '@/api/client'
+import { api } from '@/api/client'
 import { allPages, errorMessage } from '@/api/ui'
 import type { Material } from '@/api/types'
+import { clipboardImageFiles, useUploadQueue } from '../useUploadQueue'
 import { useWorkspace } from '../WorkspaceData'
 import { Button } from '@/components/arc/button/button'
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
@@ -15,6 +16,7 @@ import { Select } from '@/components/arc/select/select'
 import { Tooltip } from '@/components/arc/tooltip/tooltip'
 import { FadingTextarea } from './FadingTextarea'
 import { CurrentMaterials } from './CurrentMaterials'
+import { PasteTextDialog } from './PasteTextDialog'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { Input } from '@/components/arc/input/input'
 
@@ -40,13 +42,12 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   const [selected, setSelected] = useState('')
   const [ready, setReady] = useState<Material[]>([])
   const [materialId, setMaterialId] = useState('')
-  const [uploading, setUploading] = useState(false)
-  const [uploadNote, setUploadNote] = useState('')
   const [uploadTarget, setUploadTarget] = useState<{ id: string; at: number } | null>(null)
+  const [pasteOpen, setPasteOpen] = useState(false)
+  const [dragging, setDragging] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createBusy, setCreateBusy] = useState(false)
   const [createError, setCreateError] = useState('')
-  const uploadController = useRef<AbortController | null>(null)
   const form = useRef<HTMLFormElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const imageInput = useRef<HTMLInputElement>(null)
@@ -54,16 +55,24 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   const reducedMotion = useReducedMotion() ?? false
   const enableMetal = !reducedMotion
   const requestedLibrary = selected || preferredLibrary
-  const libraryId = requestedLibrary ? libraries.find((library) => library.id === requestedLibrary)?.id : libraries[0]?.id
+  const currentLibrary = requestedLibrary ? libraries.find((library) => library.id === requestedLibrary) : libraries[0]
+  const libraryId = currentLibrary?.id
   const modelReady = libraryId ? capabilities?.library_rag?.[libraryId] ?? capabilities?.rag : capabilities?.rag
   const active = chat.active?.conversationId === conversationId ? chat.active : null
   const pending = !demo && chat.pending && (chat.pending.body.conversation_id ?? undefined) === conversationId
 
+  const uploadQueue = useUploadQueue({
+    userId: user?.id,
+    maxUploadBytes: capabilities?.max_upload_bytes,
+    refresh,
+    notify,
+    report,
+    onUploadedToLibrary: (targetId) => setUploadTarget({ id: targetId, at: Date.now() }),
+  })
+
   useEffect(() => {
     if (!reducedMotion) void import('./ComposerMetalSend')
   }, [reducedMotion])
-
-  useEffect(() => () => uploadController.current?.abort(), [user?.id])
 
   useEffect(() => {
     if (demo || !summary || !libraryId) return
@@ -96,12 +105,22 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
     })) setDraft((current) => current.trim() === content ? '' : current)
   }
 
+  function ensureImportReady(): boolean {
+    if (demo) { notify('请从真实会话或知识库添加资料。'); return false }
+    if (!user) { requireLogin(); return false }
+    if (!currentLibrary) { notify('请先创建或选择要导入的知识库。'); return false }
+    return true
+  }
+
   function chooseFile(image: boolean) {
-    if (demo) return notify('请从真实会话或知识库添加资料。')
-    if (!user) return requireLogin()
-    if (!libraryId) return notify('请先创建或选择要导入的知识库。')
+    if (!ensureImportReady()) return
     const input = image ? imageInput : fileInput
     input.current?.click()
+  }
+
+  function addFiles(files: FileList | File[]) {
+    if (!ensureImportReady() || !currentLibrary) return
+    uploadQueue.enqueue(files, { id: currentLibrary.id, name: currentLibrary.name })
   }
 
   useImperativeHandle(ref, () => ({
@@ -109,26 +128,25 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
     chooseImage: () => chooseFile(true),
   }))
 
-  async function upload(file: File) {
-    if (!libraryId || uploading) return
-    if (capabilities && file.size > capabilities.max_upload_bytes) return notify('文件超过服务器允许的大小。')
-    setUploading(true)
-    const target = libraries.find((library) => library.id === libraryId)!
-    const controller = new AbortController()
-    uploadController.current = controller
-    setUploadTarget({ id: target.id, at: Date.now() })
-    setUploadNote(`正在上传「${file.name}」至「${target.name}」…`)
-    try {
-      await uploadMaterial(target.id, file, undefined, controller.signal)
-      if (controller.signal.aborted) return
-      refresh()
-      setUploadNote(`「${file.name}」已提交至「${target.name}」。`)
-    } catch (error) {
-      if (!controller.signal.aborted) { setUploadNote(`「${file.name}」上传失败，请重新添加。`); report(error) }
-    } finally {
-      if (!controller.signal.aborted) setUploading(false)
-    }
+  function onDragOver(event: DragEvent<HTMLFormElement>) {
+    if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return
+    event.preventDefault()
+    if (!dragging) setDragging(true)
   }
+
+  function onDragLeave(event: DragEvent<HTMLFormElement>) {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+    setDragging(false)
+  }
+
+  function onDrop(event: DragEvent<HTMLFormElement>) {
+    if (!event.dataTransfer?.files?.length) return
+    event.preventDefault()
+    setDragging(false)
+    addFiles(event.dataTransfer.files)
+  }
+
+  const failedUploads = uploadQueue.items.filter((row) => row.status === 'failed')
 
   return (
     <div className="composer-wrapper">
@@ -137,6 +155,10 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
       ref={form}
       inert={!user}
       className="composer"
+      data-dragging={dragging || undefined}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       onSubmit={(event) => {
         event.preventDefault()
         void submit()
@@ -145,6 +167,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
       {!demo && user && libraries.length === 0 && <Button type="button" variant="ghost" size="sm" onClick={() => { setCreateError(''); setCreating(true) }}>创建知识库并导入资料</Button>}
       {!demo && requestedLibrary && !libraryId && libraries.length > 0 && <p className="composer-hint">原知识库不可用，请重新选择。</p>}
       {!demo && modelReady === false && <p className="composer-hint">当前模型不可用，请在设置的「模型连接」中配置或测试连接。</p>}
+      {dragging && <p className="composer-hint" role="status">松开鼠标，将文件导入当前知识库</p>}
       {summary && <Select label="摘要资料" value={materialId} onValueChange={setMaterialId} options={ready.map(({ id, title }) => ({ value: id, label: title }))} placeholder="选择已就绪资料" />}
       <div className="composer-field">
         <FadingTextarea
@@ -155,6 +178,12 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
           maxLength={8000}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
+          onPaste={(event) => {
+            const images = clipboardImageFiles(event.clipboardData)
+            if (!images.length) return
+            event.preventDefault()
+            addFiles(images)
+          }}
           onKeyDown={(event) => {
             if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return
             event.preventDefault()
@@ -168,17 +197,17 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
           icon={<Plus size={20} />}
           iconOnly
           className="composer-add"
-          disabled={uploading}
           items={[
             { label: '添加附件', icon: <Paperclip size={16} />, onSelect: () => chooseFile(false) },
             { label: '添加图片', icon: <Image size={16} />, onSelect: () => chooseFile(true) },
+            { label: '随手贴文本', icon: <FileText size={16} />, onSelect: () => { if (ensureImportReady()) setPasteOpen(true) } },
           ]}
         />
-        {[{ ref: fileInput, accept: '.pdf,.docx,.txt,.png,.jpg,.jpeg' }, { ref: imageInput, accept: 'image/png,image/jpeg' }].map(({ ref, accept }) => (
-          <input key={accept} type="file" ref={ref} accept={accept} hidden onChange={(event) => {
-            const file = event.target.files?.[0]
+        {[{ ref: fileInput, accept: '.pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg' }, { ref: imageInput, accept: 'image/png,image/jpeg' }].map(({ ref, accept }) => (
+          <input key={accept} type="file" ref={ref} accept={accept} multiple hidden onChange={(event) => {
+            const files = event.target.files ? Array.from(event.target.files) : []
             event.target.value = ''
-            if (file) void upload(file)
+            if (files.length) addFiles(files)
           }} />
         ))}
         <div className="composer-options">
@@ -214,10 +243,26 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
           </div>
         )}
       </div>
-      {uploadNote && <span className="composer-hint" role="status">{uploadNote}</span>}
+      {uploadQueue.latestNote && <span className="composer-hint" role="status">{uploadQueue.latestNote}</span>}
+      {failedUploads.length > 0 && (
+        <div className="upload-queue-failures">
+          {failedUploads.map((item) => (
+            <span key={item.id} className="upload-failure-item">
+              <span>「{item.name}」上传失败</span>
+              <Button type="button" size="sm" variant="secondary" onClick={() => uploadQueue.retryItem(item.id)}>重试上传</Button>
+            </span>
+          ))}
+        </div>
+      )}
       {pending && <Button type="button" variant="secondary" size="sm" onClick={async () => { if (await chat.resend()) setDraft('') }}>重发上次请求</Button>}
     </form>
     {!demo && user && libraryId && <CurrentMaterials key={`${user.id}:${libraryId}`} libraryId={libraryId} name={libraries.find((library) => library.id === libraryId)!.name} reveal={uploadTarget?.id === libraryId ? uploadTarget.at : 0} />}
+    <PasteTextDialog
+      open={pasteOpen}
+      onOpenChange={setPasteOpen}
+      libraryName={currentLibrary?.name}
+      onSubmitFile={(file) => addFiles([file])}
+    />
     <Dialog open={creating} onOpenChange={setCreating}>
       <DialogContent title="创建知识库" description="创建后可直接添加资料并提问。" closeLabel="关闭创建知识库">
         <form className="stack-form" onSubmit={async (event) => {

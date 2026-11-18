@@ -6,6 +6,8 @@ import { api, uploadMaterial } from './api/client'
 import type { Material, UploadResult } from './api/types'
 import { CurrentMaterials } from './components/CurrentMaterials'
 import { Composer } from './components/Composer'
+import { locatorLabel } from './components/LibraryFragments'
+import { PasteTextDialog } from './components/PasteTextDialog'
 import { ThemeProvider } from './Theme'
 
 const workspace = vi.hoisted(() => ({ value: {} as Record<string, any> }))
@@ -140,4 +142,65 @@ it('creates and selects the first library without leaving chat', async () => {
   workspace.value.libraries = [library('A'), library('C')]
   await render(<Composer />)
   expect(node.querySelector('select')?.value).toBe('C')
+})
+
+it('processes multi-file queue sequentially without blocking subsequent files on error and supports single-item retry', async () => {
+  const first = new File(['broken'], '一.txt', { type: 'text/plain' })
+  const second = new File(['# 笔记\n正文'], '二.md', { type: 'text/markdown' })
+  vi.mocked(uploadMaterial)
+    .mockRejectedValueOnce(new Error('network error'))
+    .mockResolvedValue({ material_id: 'm2', version_id: 'v2', job_id: 'j2', status: 'queued' })
+
+  await render(<Composer />)
+  const input = node.querySelector<HTMLInputElement>('input[type=file]')!
+  Object.defineProperty(input, 'files', { value: [first, second] })
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+  expect(uploadMaterial).toHaveBeenCalledTimes(2)
+  expect(uploadMaterial).toHaveBeenNthCalledWith(1, 'A', first, undefined, expect.any(AbortSignal))
+  expect(uploadMaterial).toHaveBeenNthCalledWith(2, 'A', second, undefined, expect.any(AbortSignal))
+  expect(node.textContent).toContain('「二.md」已提交至「库A」')
+  expect(node.textContent).toContain('「一.txt」上传失败')
+
+  await click('重试上传')
+  await act(async () => { await Promise.resolve() })
+  expect(uploadMaterial).toHaveBeenCalledTimes(3)
+})
+
+it('accepts drag-and-drop files and Ctrl+V pasted screenshots in Composer', async () => {
+  vi.mocked(uploadMaterial).mockResolvedValue({ material_id: 'm', version_id: 'v', job_id: 'j', status: 'queued' })
+  await render(<Composer />)
+
+  const form = node.querySelector('form.composer')!
+  const dropped = new File(['# 第一章'], '讲义.md', { type: 'text/markdown' })
+  const dropEvent = new Event('drop', { bubbles: true, cancelable: true })
+  Object.defineProperty(dropEvent, 'dataTransfer', { value: { files: [dropped], types: ['Files'] } })
+  await act(async () => form.dispatchEvent(dropEvent))
+  expect(uploadMaterial).toHaveBeenCalledWith('A', dropped, undefined, expect.any(AbortSignal))
+
+  const textarea = node.querySelector('textarea')!
+  const rawImage = new File([new Uint8Array([137, 80, 78, 71])], 'image.png', { type: 'image/png' })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', { value: { files: [rawImage], items: [] } })
+  await act(async () => textarea.dispatchEvent(pasteEvent))
+  expect(pasteEvent.defaultPrevented).toBe(true)
+  const pastedCall = vi.mocked(uploadMaterial).mock.calls.at(-1)!
+  expect(pastedCall[0]).toBe('A')
+  expect((pastedCall[1] as File).name).toMatch(/^截图-.*\.png$/)
+})
+
+it('packages pasted Markdown note with auto-derived filename and formats Markdown heading locators', async () => {
+  const onSubmitFile = vi.fn()
+  await render(<PasteTextDialog open onOpenChange={vi.fn()} libraryName="库A" onSubmitFile={onSubmitFile} />)
+  const contentInput = document.querySelector<HTMLTextAreaElement>('textarea[name=content]')!
+  contentInput.value = '# 矩阵特征值总结\n特征向量非零。'
+  await act(async () => {
+    contentInput.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  })
+  expect(onSubmitFile).toHaveBeenCalledOnce()
+  const generated = onSubmitFile.mock.calls[0][0] as File
+  expect(generated.name).toBe('矩阵特征值总结.md')
+  expect(generated.type).toBe('text/markdown')
+  expect(locatorLabel({ heading: '矩阵特征值总结', start_line: 1 })).toBe('矩阵特征值总结 · 第 1 行')
 })
