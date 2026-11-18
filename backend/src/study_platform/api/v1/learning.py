@@ -14,7 +14,7 @@ from study_platform.api.v1.materials import owned_kb
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
 from study_platform.persistence.database import get_db
-from study_platform.persistence.models import QuizItem, User
+from study_platform.persistence.models import KnowledgeBase, QuizItem, User
 from study_platform.services import learning
 
 router = APIRouter(prefix="/learning", tags=["learning"])
@@ -53,6 +53,9 @@ def _response_payload(db: Session, row) -> dict:
         else None
     )
     sources = learning._load_sources_by_item(db, [item.id]) if item else {}
+    ref = getattr(row, "reference_answer_effective", None)
+    if not ref and item is not None and learning._reference_revealed(row):
+        ref = learning._reference_from_answer_key(item.answer_key)
     return {
         "response_id": str(row.id),
         "verdict": row.verdict,
@@ -60,7 +63,7 @@ def _response_payload(db: Session, row) -> dict:
         "confidence": float(row.confidence) if getattr(row, "confidence", None) is not None else None,
         "feedback": getattr(row, "feedback", None),
         "answer": getattr(row, "answer", None),
-        "reference_answer": getattr(row, "reference_answer_effective", None),
+        "reference_answer": ref,
         "explanation": item.explanation if item else None,
         "sources": sources.get(item.id, []) if item else [],
     }
@@ -138,6 +141,12 @@ def answer_text(
         db, owner_user_id=user.id, response_id=response_id, answer_text=body.answer_text
     )
     db.commit()
+    previous = getattr(row, "_previous_image_path", None)
+    if previous:
+        try:
+            previous.unlink(missing_ok=True)
+        except OSError:
+            pass
     return _response_payload(db, row)
 
 
@@ -212,7 +221,14 @@ def retry_wrong(
     db: Session = Depends(get_db),
 ):
     if body.knowledge_base_id is not None:
-        owned_kb(db, user, body.knowledge_base_id)
+        kb_exists = db.scalar(
+            sa.select(KnowledgeBase.id).where(
+                KnowledgeBase.id == body.knowledge_base_id,
+                KnowledgeBase.owner_user_id == user.id,
+            )
+        )
+        if kb_exists is None:
+            raise ApiError(404, "not_found", "知识库不存在")
     attempt = learning.retry_wrong_questions(
         db,
         owner_user_id=user.id,

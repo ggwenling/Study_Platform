@@ -30,6 +30,7 @@ from study_platform.persistence.models import (
 from study_platform.services.chat import chunk_dto, chunk_query, retrieve, visible_indices
 from study_platform.services.learning_anchor import ensure_course_anchor
 from study_platform.services.learning_grade import (
+    _apply_threshold,
     grade_text_answer,
     normalize_answer,
     ocr_answer_bytes,
@@ -38,6 +39,7 @@ from study_platform.services.learning_llm import (
     generate_questions_with_llm,
     index_to_fragment,
     map_fragment_hits,
+    resolve_mcq_choice,
 )
 from study_platform.services.model_connections import llm_available
 from study_platform.services.model_task import learning_task
@@ -228,7 +230,11 @@ def generate_learning_quiz(
                 continue
             item_type = question.item_type if mode != "short_answer" else "short_answer"
             options_list = list(question.options) if item_type == "mcq" else []
-            choice = _extract_choice_letter(question.reference_answer) if item_type == "mcq" else None
+            choice = (
+                resolve_mcq_choice(question.reference_answer, options_list)
+                if item_type == "mcq"
+                else None
+            )
             answer_key = (
                 {"choice": choice, "text": question.reference_answer}
                 if choice
@@ -414,14 +420,25 @@ def _refresh_attempt_progress(db: Session, attempt_id: UUID) -> None:
         attempt.status = "in_progress"
 
 
+def _previous_answer_image_path(row: QuizResponse) -> Path | None:
+    previous = row.answer.get("storage_key") if isinstance(row.answer, dict) else None
+    if not isinstance(previous, str) or not previous:
+        return None
+    base = Path(get_settings().storage_dir).resolve()
+    previous_dir = (base / "learning-answers" / str(row.id)).resolve()
+    previous_path = (base / previous).resolve()
+    return previous_path if previous_path.parent == previous_dir else None
+
+
 def _grade_mcq_choice(item: QuizItem, student_text: str) -> tuple[str, float, str, str, str]:
     answer_key = item.answer_key if isinstance(item.answer_key, dict) else {"text": str(item.answer_key)}
+    raw_options = list(item.options or [])
     expected_choice = (
-        str(answer_key.get("choice") or "").strip().upper()
-        or _extract_choice_letter(str(answer_key.get("text") or ""))
+        resolve_mcq_choice(str(answer_key.get("choice") or ""), raw_options)
+        or resolve_mcq_choice(str(answer_key.get("text") or ""), raw_options)
     )
     reference = _reference_from_answer_key(item.answer_key)
-    student_choice = _extract_choice_letter(student_text)
+    student_choice = resolve_mcq_choice(student_text, raw_options)
     matched = False
     if expected_choice and student_choice:
         matched = expected_choice == student_choice
@@ -429,13 +446,6 @@ def _grade_mcq_choice(item: QuizItem, student_text: str) -> tuple[str, float, st
         norm_student = normalize_answer(student_text)
         norm_ref = normalize_answer(reference)
         matched = bool(norm_student and norm_student == norm_ref)
-        if not matched and expected_choice:
-            for opt in item.options or []:
-                if _extract_choice_letter(str(opt)) == expected_choice:
-                    body = re.sub(r"^\s*[A-Fa-f][\.\)、:：\s]+", "", str(opt))
-                    if normalize_answer(body) == norm_student:
-                        matched = True
-                        break
     verdict = "correct" if matched else "incorrect"
     label = expected_choice or reference
     base_fb = "回答正确。" if matched else f"回答不正确，参考答案为 {label}。"
@@ -470,6 +480,7 @@ def submit_text_answer(
     )
     if row is None:
         raise ApiError(404, "response_not_found", "作答记录不存在")
+    row._previous_image_path = _previous_answer_image_path(row)
     item = db.get(QuizItem, row.quiz_item_id)
     if item is None:
         raise ApiError(404, "item_not_found", "题目不存在")
@@ -522,24 +533,32 @@ def submit_image_answer(
     )
     if row is None:
         raise ApiError(404, "response_not_found", "作答记录不存在")
-    previous = row.answer.get("storage_key") if isinstance(row.answer, dict) else None
-    previous_dir = (Path(get_settings().storage_dir).resolve() / "learning-answers" / str(row.id)).resolve()
-    previous_path = (
-        (Path(get_settings().storage_dir).resolve() / previous).resolve()
-        if isinstance(previous, str)
-        else None
-    )
-    row._previous_image_path = (
-        previous_path if previous_path and previous_path.parent == previous_dir else None
-    )
+    row._previous_image_path = _previous_answer_image_path(row)
     item = db.get(QuizItem, row.quiz_item_id)
     if item is None:
         raise ApiError(404, "item_not_found", "题目不存在")
     ocr_text, ocr_conf = ocr_answer_bytes(image_bytes)
-    reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
-    verdict, conf, feedback, grader_profile = grade_text_answer(
-        ocr_text, reference, ocr_conf, stem=item.stem, owner_user_id=owner_user_id
-    )
+    if item.item_type == "mcq":
+        reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
+        if not ocr_text.strip():
+            verdict, conf, feedback, grader_profile = (
+                "pending",
+                0.0,
+                "未能识别作答文字，请重拍或手动判题。",
+                "learning_mcq_v1",
+            )
+        else:
+            raw_verdict, _, raw_fb, grader_profile, reference = _grade_mcq_choice(item, ocr_text)
+            verdict, conf, feedback = _apply_threshold(
+                raw_verdict, max(0.0, min(1.0, ocr_conf)), raw_fb
+            )
+    else:
+        reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
+        verdict, conf, feedback, grader_profile = grade_text_answer(
+            ocr_text, reference, ocr_conf, stem=item.stem, owner_user_id=owner_user_id
+        )
+        if item.explanation and item.explanation not in feedback:
+            feedback = f"{feedback} {item.explanation}".strip()
     path = _answer_storage_path(row.id)
     try:
         path.write_bytes(image_bytes)
@@ -592,17 +611,24 @@ def override_verdict(
     )
     if row is None:
         raise ApiError(404, "response_not_found", "作答记录不存在")
+    item = db.get(QuizItem, row.quiz_item_id)
     if reference_answer is not None and reference_answer.strip():
-        row.reference_answer_effective = reference_answer.strip()
-        item = db.get(QuizItem, row.quiz_item_id)
+        cleaned_ref = reference_answer.strip()
+        row.reference_answer_effective = cleaned_ref
         if item is not None:
-            item.answer_key = {"text": reference_answer.strip()}
+            choice = (
+                resolve_mcq_choice(cleaned_ref, list(item.options or []))
+                if item.item_type == "mcq"
+                else None
+            )
+            item.answer_key = {"choice": choice, "text": cleaned_ref} if choice else {"text": cleaned_ref}
+    elif not row.reference_answer_effective and item is not None:
+        row.reference_answer_effective = _reference_from_answer_key(item.answer_key)
     row.verdict = verdict
     row.verdict_source = "user"
     row.is_correct = True if verdict == "correct" else False if verdict == "incorrect" else None
     row.graded_at = datetime.now(UTC)
     db.flush()
-    item = db.get(QuizItem, row.quiz_item_id)
     if item is not None:
         _sync_wrong_book(db, owner_user_id, item.id, row)
     _refresh_attempt_progress(db, row.attempt_id)
@@ -752,15 +778,46 @@ def list_wrong_questions(
     rows = db.execute(stmt.order_by(WrongQuestion.last_wrong_at.desc())).all()
     item_ids = [item.id for _, item, *_ in rows]
     sources_map = _load_sources_by_item(db, item_ids)
+    latest_retry_by_wrong: dict[str, QuizResponse] = {}
+    if rows:
+        wrong_id_strs = [str(w.id) for w, *_ in rows]
+        retry_origin = QuizItem.rubric["origin_wrong_id"].astext
+        retry_rows = db.execute(
+            sa.select(retry_origin, QuizResponse)
+            .join(QuizItem, QuizItem.id == QuizResponse.quiz_item_id)
+            .join(QuizAttempt, QuizAttempt.id == QuizResponse.attempt_id)
+            .where(
+                QuizAttempt.owner_user_id == owner_user_id,
+                QuizResponse.verdict == "incorrect",
+                retry_origin.in_(wrong_id_strs),
+            )
+            .order_by(
+                QuizResponse.graded_at.desc().nullslast(),
+                QuizResponse.updated_at.desc(),
+            )
+        ).all()
+        for origin_id, r_resp in retry_rows:
+            if origin_id and origin_id not in latest_retry_by_wrong:
+                latest_retry_by_wrong[origin_id] = r_resp
+
+    def _resp_ts(r: QuizResponse) -> datetime:
+        return r.graded_at or r.updated_at or r.created_at or datetime.min.replace(tzinfo=UTC)
+
     out = []
     for wrong, item, quiz, kb_name, last_resp in rows:
+        retry_resp = latest_retry_by_wrong.get(str(wrong.id))
+        effective_resp = (
+            retry_resp
+            if retry_resp is not None and (last_resp is None or _resp_ts(retry_resp) >= _resp_ts(last_resp))
+            else last_resp
+        )
         ref = (
-            (last_resp.reference_answer_effective if last_resp else None)
+            (effective_resp.reference_answer_effective if effective_resp else None)
             or _reference_from_answer_key(item.answer_key)
         )
         last_answer_text = None
-        if last_resp and isinstance(last_resp.answer, dict):
-            last_answer_text = last_resp.answer.get("text") or last_resp.answer.get("ocr_text")
+        if effective_resp and isinstance(effective_resp.answer, dict):
+            last_answer_text = effective_resp.answer.get("text") or effective_resp.answer.get("ocr_text")
         out.append(
             {
                 "id": str(wrong.id),
@@ -772,7 +829,7 @@ def list_wrong_questions(
                 "options": list(item.options or []),
                 "reference_answer": ref,
                 "explanation": item.explanation,
-                "last_feedback": last_resp.feedback if last_resp else None,
+                "last_feedback": effective_resp.feedback if effective_resp else None,
                 "last_answer": last_answer_text,
                 "sources": sources_map.get(item.id, []),
                 "status": wrong.status,

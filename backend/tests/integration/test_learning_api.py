@@ -56,6 +56,7 @@ def learning_env(tmp_path, monkeypatch):
         "study_platform.services.learning_grade.get_settings",
         "study_platform.services.learning.get_settings",
         "study_platform.services.chat.get_settings",
+        "study_platform.api.v1.learning.get_settings",
         "study_platform.core.config.get_settings",
     ):
         monkeypatch.setattr(target, lambda: settings)
@@ -412,3 +413,95 @@ def test_studio_citation_ordinals_and_flashcard_idempotency(learning_env, monkey
         )
     assert exc_info.value.status_code == 409
     assert exc_info.value.code == "idempotency_conflict"
+
+
+
+def test_learning_regressions_mcq_image_override_cleanup_deleted_kb_and_retry_feedback(
+    learning_env, monkeypatch
+):
+    from pathlib import Path
+
+    from study_platform.api.v1.auth import get_current_user
+
+    http, db, owner, kb_id = learning_env
+    user_obj = db.get(User, owner)
+    http.app.dependency_overrides[get_current_user] = lambda: user_obj
+    try:
+        quiz = learning.generate_learning_quiz(
+            db, owner_user_id=owner, knowledge_base_id=kb_id, count=1, mode="mcq"
+        )
+        attempt = learning.start_attempt(db, owner_user_id=owner, quiz_id=quiz.id)
+        payload = learning.attempt_payload(db, attempt.id, owner)
+        resp_id = payload["items"][0]["response_id"]
+
+        # 1. Item 7a: Manual verdict override on unanswered question populates reference_answer
+        patch_res = http.patch(
+            f"/learning/responses/{resp_id}/verdict", json={"verdict": "incorrect"}
+        )
+        assert patch_res.status_code == 200
+        patched_data = patch_res.json()
+        assert patched_data["reference_answer"]
+
+        # 2. Item 2c: Handwritten MCQ image with single letter grades correct
+        expected_letter = patched_data["reference_answer"][0]
+        monkeypatch.setattr(
+            learning, "ocr_answer_bytes", lambda _bytes: (expected_letter, 0.96)
+        )
+        img_res = http.post(
+            f"/learning/responses/{resp_id}/answer-image",
+            files={"file": ("ans.png", _png_with_text(expected_letter), "image/png")},
+        )
+        assert img_res.status_code == 200
+        img_data = img_res.json()
+        assert img_data["verdict"] == "correct"
+        saved_key = img_data["answer"]["storage_key"]
+        saved_file = Path(learning.get_settings().storage_dir).resolve() / saved_key
+        assert saved_file.is_file()
+
+        # 3. Item 7b: Switching to text answer deletes the previous handwritten image file
+        wrong_letter = "D" if expected_letter != "D" else "A"
+        txt_res = http.post(
+            f"/learning/responses/{resp_id}/answer-text",
+            json={"answer_text": wrong_letter},
+        )
+        assert txt_res.status_code == 200
+        assert txt_res.json()["verdict"] == "incorrect"
+        assert not saved_file.exists()
+
+        # 4. Item 9: Retrying wrong question and answering wrong again updates last_answer & last_feedback
+        wrongs1 = http.get("/learning/wrong-questions").json()["items"]
+        assert len(wrongs1) == 1
+        wrong_id = wrongs1[0]["id"]
+        assert wrongs1[0]["last_answer"] == wrong_letter
+
+        retry_res = http.post(
+            "/learning/wrong-questions/retry", json={"wrong_ids": [wrong_id]}
+        )
+        assert retry_res.status_code == 200
+        retry_resp_id = retry_res.json()["items"][0]["response_id"]
+
+        second_wrong = "C" if expected_letter != "C" else "B"
+        txt_res2 = http.post(
+            f"/learning/responses/{retry_resp_id}/answer-text",
+            json={"answer_text": f"{second_wrong}. 重练第二次选错"},
+        )
+        assert txt_res2.status_code == 200
+        assert txt_res2.json()["verdict"] == "incorrect"
+
+        wrongs2 = http.get("/learning/wrong-questions").json()["items"]
+        assert wrongs2[0]["wrong_count"] >= 2
+        assert wrongs2[0]["last_answer"] == f"{second_wrong}. 重练第二次选错"
+
+        # 5. Item 8a: Soft-deleting KB still allows retrying wrong question even when knowledge_base_id is passed
+        kb = db.get(KnowledgeBase, kb_id)
+        kb.deleted_at = datetime.now(UTC)
+        db.commit()
+
+        retry_deleted_kb = http.post(
+            "/learning/wrong-questions/retry",
+            json={"wrong_ids": [wrong_id], "knowledge_base_id": str(kb_id)},
+        )
+        assert retry_deleted_kb.status_code == 200
+        assert len(retry_deleted_kb.json()["items"]) == 1
+    finally:
+        http.app.dependency_overrides.pop(get_current_user, None)

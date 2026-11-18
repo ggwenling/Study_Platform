@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
@@ -119,6 +121,80 @@ def _valid_source_indices(value: Any, fragment_count: int) -> list[int] | None:
     return out
 
 
+MCQ_LETTERS = ("A", "B", "C", "D", "E", "F")
+_OPT_PREFIX_RE = re.compile(r"^\s*(?:[\(（\[]([A-Fa-f])[\)）\]]\s*|([A-Fa-f])[\.\、:：]\s*)")
+_CHOICE_DIRECT_RE = re.compile(r"^\s*[\(（\[]?([A-Fa-f])[\)）\]]?(?:[\.\、:：\s]|$)")
+_CHOICE_WRAPPED_RE = re.compile(
+    r"(?:答案|选项|正解|选)\s*(?:为|是|:|：)?\s*[\(（\[]?([A-Fa-f])[\)）\]]?(?=$|[^A-Za-z])"
+)
+
+
+def _norm_mcq_text(text: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text or "").lower())
+
+
+def strip_mcq_option_prefix(opt: str) -> tuple[str | None, str]:
+    raw = (opt or "").strip()
+    match = _OPT_PREFIX_RE.match(raw)
+    if not match:
+        return None, raw
+    letter = (match.group(1) or match.group(2)).upper()
+    return letter, raw[match.end() :].strip()
+
+
+def normalize_mcq_options(raw_options: Sequence[str]) -> tuple[str, ...] | None:
+    if not (2 <= len(raw_options) <= len(MCQ_LETTERS)):
+        return None
+    parsed: list[tuple[str | None, str]] = []
+    for raw in raw_options:
+        if not isinstance(raw, str):
+            return None
+        stripped = raw.strip()
+        if not stripped or len(stripped) > 500:
+            return None
+        letter, body = strip_mcq_option_prefix(stripped)
+        if not body:
+            return None
+        parsed.append((letter, body))
+    allowed = set(MCQ_LETTERS[: len(parsed)])
+    explicit = [let for let, _ in parsed if let is not None]
+    if len(explicit) == len(parsed) and set(explicit) == allowed:
+        return tuple(f"{let}. {body}" for let, body in parsed)
+    return tuple(f"{MCQ_LETTERS[i]}. {body}" for i, (_, body) in enumerate(parsed))
+
+
+def resolve_mcq_choice(text: str, options: Sequence[str] = ()) -> str | None:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    option_map: dict[str, str] = {}
+    for idx, opt in enumerate(options):
+        let, body = strip_mcq_option_prefix(str(opt))
+        key = let or (MCQ_LETTERS[idx] if idx < len(MCQ_LETTERS) else None)
+        if key:
+            option_map[key] = body
+
+    direct = _CHOICE_DIRECT_RE.match(cleaned)
+    if direct:
+        cand = direct.group(1).upper()
+        if not option_map or cand in option_map:
+            return cand
+
+    wrapped = _CHOICE_WRAPPED_RE.search(cleaned)
+    if wrapped:
+        cand = wrapped.group(1).upper()
+        if not option_map or cand in option_map:
+            return cand
+
+    if option_map:
+        norm_target = _norm_mcq_text(cleaned)
+        if norm_target:
+            for let, body in option_map.items():
+                if norm_target in (_norm_mcq_text(body), _norm_mcq_text(f"{let}. {body}")):
+                    return let
+    return None
+
+
 def parse_quiz_response(raw: str, fragment_count: int) -> tuple[list[GeneratedQuestion], str | None]:
     """Return validated questions and optional insufficient-material message."""
     payload = _parse_json_object(raw)
@@ -143,23 +219,6 @@ def parse_quiz_response(raw: str, fragment_count: int) -> tuple[list[GeneratedQu
         item_type = raw_type if raw_type in ("mcq", "short_answer") else "short_answer"
         raw_options = row.get("options")
         options: tuple[str, ...] = ()
-        if item_type == "mcq":
-            if not isinstance(raw_options, list) or not (2 <= len(raw_options) <= 6):
-                continue
-            cleaned_opts = [
-                str(opt).strip()
-                for opt in raw_options
-                if isinstance(opt, str) and opt.strip() and len(opt.strip()) <= 500
-            ]
-            if len(cleaned_opts) != len(raw_options):
-                continue
-            options = tuple(cleaned_opts)
-        explanation_raw = row.get("explanation")
-        explanation = (
-            explanation_raw.strip()[:1000]
-            if isinstance(explanation_raw, str) and explanation_raw.strip()
-            else None
-        )
         if (
             not isinstance(stem, str)
             or not isinstance(reference, str)
@@ -170,10 +229,30 @@ def parse_quiz_response(raw: str, fragment_count: int) -> tuple[list[GeneratedQu
             or len(reference) > 2000
         ):
             continue
+        final_ref = reference.strip()
+        if item_type == "mcq":
+            if not isinstance(raw_options, list):
+                continue
+            norm_options = normalize_mcq_options(raw_options)
+            if norm_options is None:
+                continue
+            choice = resolve_mcq_choice(final_ref, norm_options)
+            if choice is None:
+                continue
+            options = norm_options
+            if final_ref.upper() != choice and not final_ref.upper().startswith(f"{choice}."):
+                matched_opt = next((o for o in norm_options if o.startswith(f"{choice}.")), choice)
+                final_ref = matched_opt
+        explanation_raw = row.get("explanation")
+        explanation = (
+            explanation_raw.strip()[:1000]
+            if isinstance(explanation_raw, str) and explanation_raw.strip()
+            else None
+        )
         out.append(
             GeneratedQuestion(
                 stem=stem.strip(),
-                reference_answer=reference.strip(),
+                reference_answer=final_ref,
                 source_indices=indices,
                 item_type=item_type,
                 options=options,

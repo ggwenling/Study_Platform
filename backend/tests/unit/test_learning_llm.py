@@ -191,3 +191,60 @@ def test_parse_mcq_question_and_deterministic_mcq_grading():
     assert verdict_ok == "correct" and conf_ok == 1.0 and "非零" in fb_ok
     verdict_bad, _, fb_bad, _, _ = _grade_mcq_choice(item, "A. 特征向量可以为零向量")
     assert verdict_bad == "incorrect" and "B" in fb_bad
+
+
+
+def test_parse_mcq_normalizes_unprefixed_options_and_text_or_wrapped_reference():
+    from types import SimpleNamespace
+
+    from study_platform.services.learning import _grade_mcq_choice
+
+    payload = json.dumps(
+        {
+            "questions": [
+                {
+                    "item_type": "mcq",
+                    "stem": "无前缀选项 + 字母答案",
+                    "options": ["零向量", "非零向量", "奇异矩阵", "标量"],
+                    "reference_answer": "B",
+                    "source_indices": [1],
+                },
+                {
+                    "item_type": "mcq",
+                    "stem": "带前缀选项 + 选项正文答案",
+                    "options": ["A. 零向量", "B. 非零向量", "C. 奇异矩阵", "D. 标量"],
+                    "reference_answer": "非零向量",
+                    "source_indices": [1],
+                },
+                {
+                    "item_type": "mcq",
+                    "stem": "带前缀选项 + 包装字母答案",
+                    "options": ["(A) 零向量", "(B) 非零向量", "(C) 奇异矩阵", "(D) 标量"],
+                    "reference_answer": "答案：(B)",
+                    "source_indices": [1],
+                },
+                {
+                    "item_type": "mcq",
+                    "stem": "无法匹配任何选项的坏单选题",
+                    "options": ["A. 甲", "B. 乙"],
+                    "reference_answer": "不存在的丙",
+                    "source_indices": [1],
+                },
+            ]
+        }
+    )
+    questions, insufficient = parse_quiz_response(payload, 2)
+    assert insufficient is None
+    assert len(questions) == 3
+
+    for q in questions:
+        assert q.options == ("A. 零向量", "B. 非零向量", "C. 奇异矩阵", "D. 标量")
+        item = SimpleNamespace(
+            answer_key={"text": q.reference_answer},
+            options=list(q.options),
+            explanation=None,
+        )
+        assert _grade_mcq_choice(item, "B. 非零向量")[0] == "correct"
+        assert _grade_mcq_choice(item, "非零向量")[0] == "correct"
+        assert _grade_mcq_choice(item, "B")[0] == "correct"
+        assert _grade_mcq_choice(item, "A. 零向量")[0] == "incorrect"
