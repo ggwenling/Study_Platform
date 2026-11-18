@@ -22,7 +22,7 @@ from study_platform.persistence.models.materials import (
     MaterialVersion,
 )
 from study_platform.persistence.models.operations import AiJob
-from study_platform.services import classification
+from study_platform.services import classification, rag_workshop
 
 router = APIRouter(prefix="/knowledge-bases/{kb_id}")
 LOCAL_ZONE = "Asia/Shanghai"
@@ -346,3 +346,71 @@ def confirm(kb_id: UUID, material_id: UUID, body: ClassificationDecision,
     result = classification_state(material, index, job)
     db.commit()
     return result
+
+
+class FragmentEditBody(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class HitTestBody(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    top_k: int = Field(default=6, ge=1, le=20)
+    lexical_weight: float = Field(default=0.4, ge=0.0, le=2.0)
+    material_ids: list[UUID] | None = Field(default=None, max_length=50)
+
+
+class HitTestItem(BaseModel):
+    chunk_id: UUID
+    material_id: UUID
+    version_id: UUID
+    title: str
+    locator: dict
+    location_label: str
+    text: str
+    retrieval_enabled: bool
+    vector_rank: int | None
+    vector_similarity: float | None
+    above_threshold: bool
+    lexical_rank: int | None
+    lexical_score: float | None
+    matched_terms: list[str]
+    rrf_score: float
+
+
+class HitTestResponse(BaseModel):
+    query: str
+    query_terms: list[str]
+    lexical_weight: float
+    min_similarity_threshold: float
+    items: list[HitTestItem]
+
+
+@router.patch("/fragments/{chunk_id}", response_model=Fragment)
+def edit_fragment(
+    kb_id: UUID,
+    chunk_id: UUID,
+    body: FragmentEditBody,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    return rag_workshop.edit_fragment_text(
+        db, user=user, kb_id=kb_id, chunk_id=chunk_id, text=body.text
+    )
+
+
+@router.post("/hit-test", response_model=HitTestResponse)
+def hit_test(
+    kb_id: UUID,
+    body: HitTestBody,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    return rag_workshop.run_hit_test(
+        db,
+        user=user,
+        kb_id=kb_id,
+        query=body.query,
+        top_k=body.top_k,
+        lexical_weight=body.lexical_weight,
+        material_ids=body.material_ids,
+    )

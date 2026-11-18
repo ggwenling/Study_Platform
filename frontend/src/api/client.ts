@@ -1,5 +1,5 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
-import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
+import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
@@ -290,6 +290,21 @@ export const api = {
     deleteFlashcardDeck: (deckId: string) => request<void>(`/flashcard-decks/${pathId(deckId)}`, json('DELETE')),
     reviewFlashcard: (cardId: string, rating: 0 | 1 | 2 | 3) =>
       request<FlashcardItem>(`/flashcards/${pathId(cardId)}/review`, json('POST', { rating })),
+  },
+  workshop: {
+    hitTest: (
+      knowledgeBaseId: string,
+      body: { query: string; top_k?: number; lexical_weight?: number; material_ids?: string[] | null },
+    ) =>
+      request<HitTestResponse>(
+        `/knowledge-bases/${pathId(knowledgeBaseId)}/hit-test`,
+        json('POST', body),
+      ),
+    updateFragment: (knowledgeBaseId: string, chunkId: string, text: string) =>
+      request<Fragment>(
+        `/knowledge-bases/${pathId(knowledgeBaseId)}/fragments/${pathId(chunkId)}`,
+        json('PATCH', { text }),
+      ),
   },
 }
 function turnPath(conversationId: string, turnId: string) { return `/conversations/${pathId(conversationId)}/turns/${pathId(turnId)}` }

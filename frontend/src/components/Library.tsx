@@ -21,6 +21,7 @@ import { useWorkspace } from '../WorkspaceData'
 import { LibraryClassification } from './LibraryClassification'
 import { LibraryFragments, locatorLabel, number } from './LibraryFragments'
 import { LibraryStudio } from './LibraryStudio'
+import { LibraryHitTest } from './LibraryHitTest'
 import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
 import './Library.css'
 
@@ -378,6 +379,12 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
             notify('此来源已不可访问。')
           }
         }}
+      />
+      <LibraryHitTest
+        kbId={id}
+        readyCount={overview?.ready_count ?? 0}
+        onOpenSource={(item) => void openSource(item.version_id, item.title, item.locator)}
+        onFragmentUpdated={() => setFragmentRevision((value) => value + 1)}
       />
       <section className="library-panel library-fragment-panel" ref={fragmentPanel}>
         {heading(<FileText size={22} />, '片段浏览', '检索与管理已生成的内容片段')}

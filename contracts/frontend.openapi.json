@@ -2320,6 +2320,132 @@
         }
       }
     },
+    "/api/v1/knowledge-bases/{kb_id}/fragments/{chunk_id}": {
+      "patch": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Edit Fragment",
+        "operationId": "edit_fragment_api_v1_knowledge_bases__kb_id__fragments__chunk_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          },
+          {
+            "name": "chunk_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Chunk Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FragmentEditBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Fragment"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/hit-test": {
+      "post": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Hit Test",
+        "operationId": "hit_test_api_v1_knowledge_bases__kb_id__hit_test_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HitTestBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HitTestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/chat/stream": {
       "post": {
         "tags": [
@@ -5001,6 +5127,21 @@
         ],
         "title": "Fragment"
       },
+      "FragmentEditBody": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "FragmentEditBody"
+      },
       "FragmentPage": {
         "properties": {
           "total": {
@@ -5165,6 +5306,208 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HitTestBody": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "default": 6
+          },
+          "lexical_weight": {
+            "type": "number",
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Lexical Weight",
+            "default": 0.4
+          },
+          "material_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array",
+                "maxItems": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "HitTestBody"
+      },
+      "HitTestItem": {
+        "properties": {
+          "chunk_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Chunk Id"
+          },
+          "material_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Material Id"
+          },
+          "version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Version Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "locator": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Locator"
+          },
+          "location_label": {
+            "type": "string",
+            "title": "Location Label"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "retrieval_enabled": {
+            "type": "boolean",
+            "title": "Retrieval Enabled"
+          },
+          "vector_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Rank"
+          },
+          "vector_similarity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Similarity"
+          },
+          "above_threshold": {
+            "type": "boolean",
+            "title": "Above Threshold"
+          },
+          "lexical_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lexical Rank"
+          },
+          "lexical_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lexical Score"
+          },
+          "matched_terms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Matched Terms"
+          },
+          "rrf_score": {
+            "type": "number",
+            "title": "Rrf Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "material_id",
+          "version_id",
+          "title",
+          "locator",
+          "location_label",
+          "text",
+          "retrieval_enabled",
+          "vector_rank",
+          "vector_similarity",
+          "above_threshold",
+          "lexical_rank",
+          "lexical_score",
+          "matched_terms",
+          "rrf_score"
+        ],
+        "title": "HitTestItem"
+      },
+      "HitTestResponse": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "query_terms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Query Terms"
+          },
+          "lexical_weight": {
+            "type": "number",
+            "title": "Lexical Weight"
+          },
+          "min_similarity_threshold": {
+            "type": "number",
+            "title": "Min Similarity Threshold"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HitTestItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "query_terms",
+          "lexical_weight",
+          "min_similarity_threshold",
+          "items"
+        ],
+        "title": "HitTestResponse"
       },
       "JobCancelResponse": {
         "properties": {

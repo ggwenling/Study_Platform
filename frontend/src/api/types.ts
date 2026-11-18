@@ -196,3 +196,29 @@ export interface FlashcardDeckSummary {
 export interface FlashcardDeckDetail extends FlashcardDeckSummary {
   cards: FlashcardItem[]
 }
+
+export interface HitTestItem {
+  chunk_id: string
+  material_id: string
+  version_id: string
+  title: string
+  locator: Record<string, unknown>
+  location_label: string
+  text: string
+  retrieval_enabled: boolean
+  vector_rank: number | null
+  vector_similarity: number | null
+  above_threshold: boolean
+  lexical_rank: number | null
+  lexical_score: number | null
+  matched_terms: string[]
+  rrf_score: number
+}
+
+export interface HitTestResponse {
+  query: string
+  query_terms: string[]
+  lexical_weight: number
+  min_similarity_threshold: number
+  items: HitTestItem[]
+}

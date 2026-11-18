@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
 import { Check, CircleDashed, Ellipsis, FileText, Search, TriangleAlert } from 'lucide-react'
 import { api } from '@/api/client'
 import type { Fragment, FragmentPage } from '@/api/types'
@@ -11,6 +12,8 @@ import { Select } from '@/components/arc/select/select'
 import { SortableDataTable } from '@/components/arc/sortable-data-table/sortable-data-table'
 import type { DataColumn } from '@/components/arc/sortable-data-table/sortable-data-table'
 import { Switch } from '@/components/arc/switch/switch'
+import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
+import { Textarea } from '@/components/arc/textarea/textarea'
 import { useWorkspace } from '../WorkspaceData'
 
 export const number = new Intl.NumberFormat('zh-CN')
@@ -80,6 +83,7 @@ export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, rev
   const [view, setView] = useState<{ key: string; data?: FragmentPage; error?: string }>({ key: '' })
   const [reload, setReload] = useState(0)
   const [updating, setUpdating] = useState(false)
+  const [editingFragment, setEditingFragment] = useState<Fragment | null>(null)
   const data = view.key === resultKey ? view.data : undefined
 
   useEffect(() => {
@@ -143,6 +147,7 @@ export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, rev
     { key: 'actions', label: '操作', width: '48px', sortable: false,
       render: (_, row) => <DropdownMenu label="片段操作" icon={<Ellipsis size={16} />} iconOnly items={[
         { label: '查看全文', onSelect: () => onPreview(row) },
+        { label: '编辑片段', onSelect: () => setEditingFragment(row) },
         { label: '打开原文', onSelect: () => onOpenSource(row) },
       ]} /> },
   ]
@@ -169,10 +174,86 @@ export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, rev
       : <SortableDataTable rows={data?.items ?? []} columns={columns} rowKey="id" caption="知识库片段"
           selectable scrollTable showSelectionFooter={false} selectedKeys={visibleSelection} onSelectionChange={(ids) => setSelection({ key: resultKey, ids })}
           emptyMessage={data ? '没有匹配的片段。' : '正在读取片段…'} />}
+    <FragmentEditDialog
+      kbId={id}
+      target={editingFragment ? { id: editingFragment.id, title: editingFragment.title, text: editingFragment.text } : null}
+      onClose={() => setEditingFragment(null)}
+      onSaved={(updated) => {
+        setView((current) => current.data ? {
+          ...current,
+          data: {
+            ...current.data,
+            items: current.data.items.map((row) => row.id === updated.id ? updated : row),
+          },
+        } : current)
+        setEditingFragment(null)
+      }}
+    />
     {data && data.total > data.page_size && <div className="library-pagination">
       <Button size="sm" variant="ghost" disabled={page === 1} onClick={() => { setSelection({ key: '', ids: [] }); setPaging({ filterKey, page: page - 1 }) }}>上一页</Button>
       <span className="numeric">{page} / {Math.ceil(data.total / data.page_size)}</span>
       <Button size="sm" variant="ghost" disabled={page * data.page_size >= data.total} onClick={() => { setSelection({ key: '', ids: [] }); setPaging({ filterKey, page: page + 1 }) }}>下一页</Button>
     </div>}
   </>
+}
+
+
+export function FragmentEditDialog({
+  kbId,
+  target,
+  onClose,
+  onSaved,
+}: {
+  kbId: string
+  target: { id: string; title: string; text: string } | null
+  onClose: () => void
+  onSaved: (updated: Fragment) => void
+}) {
+  const { notify, report } = useWorkspace()
+  const [saving, setSaving] = useState(false)
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!target || saving || !api.workshop?.updateFragment) return
+    const form = new FormData(event.currentTarget)
+    const nextText = String(form.get('text') ?? '').trim()
+    if (!nextText) return
+    setSaving(true)
+    try {
+      const updated = await api.workshop.updateFragment(kbId, target.id, nextText)
+      notify('片段已更新并重新生成向量索引。')
+      onSaved(updated)
+    } catch (error) {
+      report(error)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={Boolean(target)} onOpenChange={(open) => { if (!open && !saving) onClose() }}>
+      {target && (
+        <DialogContent
+          title="编辑片段内容"
+          description={`来源：${target.title} · 保存后将自动更新分词与 1024 维向量索引`}
+          closeLabel="关闭编辑片段"
+        >
+          <form key={target.id} className="library-dialog-stack" onSubmit={(event) => void submit(event)}>
+            <Textarea
+              label="片段文本"
+              name="text"
+              defaultValue={target.text}
+              rows={8}
+              maxLength={8000}
+              required
+            />
+            <div className="form-actions">
+              <Button type="submit" loading={saving} disabled={saving}>保存并重建向量</Button>
+              <Button type="button" variant="ghost" disabled={saving} onClick={onClose}>取消</Button>
+            </div>
+          </form>
+        </DialogContent>
+      )}
+    </Dialog>
+  )
 }
