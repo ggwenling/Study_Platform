@@ -42,14 +42,7 @@ export function LibraryHitTest({
 
   if (!api.workshop?.hitTest) return null
 
-  async function runTest(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const cleaned = queryText.trim()
-    if (!cleaned || busy) return
-    if (readyCount === 0) {
-      notify('请先导入并完成至少 1 份资料的索引。')
-      return
-    }
+  async function executeHitTest(cleaned: string, clearOnError = false) {
     setBusy(true)
     try {
       const response = await api.workshop.hitTest(kbId, {
@@ -59,10 +52,22 @@ export function LibraryHitTest({
       })
       setResult(response)
     } catch (error) {
+      if (clearOnError) setResult(null)
       report(error)
     } finally {
       setBusy(false)
     }
+  }
+
+  async function runTest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const cleaned = queryText.trim()
+    if (!cleaned || busy) return
+    if (readyCount === 0) {
+      notify('请先导入并完成至少 1 份资料的索引。')
+      return
+    }
+    await executeHitTest(cleaned)
   }
 
   return (
@@ -183,19 +188,13 @@ export function LibraryHitTest({
         kbId={kbId}
         target={editingItem ? { id: editingItem.chunk_id, title: editingItem.title, text: editingItem.text } : null}
         onClose={() => setEditingItem(null)}
-        onSaved={(updated) => {
-          setResult((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  items: prev.items.map((it) =>
-                    it.chunk_id === updated.id ? { ...it, text: updated.text } : it,
-                  ),
-                }
-              : prev,
-          )
+        onSaved={() => {
           setEditingItem(null)
           onFragmentUpdated?.()
+          const activeQuery = result?.query || queryText.trim()
+          if (activeQuery) {
+            void executeHitTest(activeQuery, true)
+          }
         }}
       />
     </section>

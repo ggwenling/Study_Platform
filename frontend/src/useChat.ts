@@ -5,7 +5,7 @@ import type { ChatPhase, ChatRequest, Citation, Message, Scope, Turn } from '@/a
 
 type Active = { conversationId: string; turnId: string; assistantId: string; phase: ChatPhase | null }
 type Pending = { body: ChatRequest; key: string }
-type Recovery = { abort: AbortController; promise: Promise<void> }
+type Recovery = { conversationId: string; abort: AbortController; promise: Promise<void> }
 const terminal = (status: string) => ['completed', 'failed', 'stopped', 'cancelled'].includes(status)
 
 // A turn can expire before its message snapshot has caught up.
@@ -27,6 +27,7 @@ function pause(signal: AbortSignal) {
 export function useChat(refresh: () => void, report: (error: unknown) => void) {
   const navigate = useNavigate()
   const controller = useRef<AbortController | null>(null)
+  const activeConversation = useRef<string | null>(null)
   const [active, setActive] = useState<Active | null>(null)
   const [cached, setCached] = useState<Record<string, Message[]>>({})
   const [busy, setBusy] = useState(false)
@@ -59,7 +60,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
     const existing = recoveries.current.get(turnId)
     if (existing) return existing
     const abort = new AbortController()
-    const recovery = { abort, promise: Promise.resolve() }
+    const recovery: Recovery = { conversationId, abort, promise: Promise.resolve() }
     recoveries.current.set(turnId, recovery)
     setRecoveryErrors((current) => ({ ...current, [turnId]: false }))
     recovery.promise = (async () => {
@@ -119,6 +120,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
     controller.current = abort
     setBusy(true)
     setPending(null)
+    activeConversation.current = retry?.conversationId ?? request?.body.conversation_id ?? null
     let current: Active | null = null
     let replay = false
     let receivedPhase = false
@@ -144,6 +146,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
 
     function release() {
       if (abort.signal.aborted || controller.current !== abort) return
+      activeConversation.current = null
       controller.current = null
       setBusy(false)
       setActive(null)
@@ -158,6 +161,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
         if (event.type === 'meta') {
           replay = Boolean(event.replay)
           current = { conversationId: event.conversation_id, turnId: event.turn_id, assistantId: event.assistant_message_id, phase: replay ? null : 'working' }
+          activeConversation.current = event.conversation_id
           scope = event.scope
           setActive(current)
           if (request) {
@@ -230,6 +234,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
     const stopping = new AbortController()
     controller.current?.abort()
     controller.current = stopping
+    activeConversation.current = conversationId
     setBusy(true)
     setActive(null)
     try {
@@ -242,6 +247,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
     } finally {
       if (!stopping.signal.aborted) {
         controller.current = null
+        activeConversation.current = null
         setBusy(false)
       }
     }
@@ -249,6 +255,40 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
 
   return {
     active, busy, cached, stop, pending, recover, recoveryErrors,
+    evictConversation: (conversationId: string) => {
+      const evictedTurns: string[] = []
+      for (const [turnId, recovery] of recoveries.current.entries()) {
+        if (recovery.conversationId === conversationId) {
+          recovery.abort.abort()
+          recoveries.current.delete(turnId)
+          evictedTurns.push(turnId)
+        }
+      }
+      if (activeConversation.current === conversationId) {
+        controller.current?.abort()
+        controller.current = null
+        activeConversation.current = null
+        activeConversation.current = null
+        setBusy(false)
+        setActive(null)
+      } else {
+        setActive((curr) => (curr?.conversationId === conversationId ? null : curr))
+      }
+      setPending((curr) => (curr?.body.conversation_id === conversationId ? null : curr))
+      setCached((curr) => {
+        if (!(conversationId in curr)) return curr
+        const next = { ...curr }
+        delete next[conversationId]
+        return next
+      })
+      if (evictedTurns.length > 0) {
+        setRecoveryErrors((curr) => {
+          const next = { ...curr }
+          for (const tid of evictedTurns) delete next[tid]
+          return next
+        })
+      }
+    },
     send: (body: ChatRequest) => run({ body, key: crypto.randomUUID() }),
     resend: () => pending && run(pending),
     retry: (conversationId: string, turnId: string) => run(null, { conversationId, turnId }),

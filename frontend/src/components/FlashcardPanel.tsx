@@ -37,8 +37,18 @@ export function FlashcardPanel({
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (defaultKbId && !kbId) setKbId(defaultKbId)
-  }, [defaultKbId, kbId])
+    if (!knowledgeBases.length) {
+      if (kbId) setKbId('')
+      return
+    }
+    if (!kbId || !knowledgeBases.some((kb) => kb.id === kbId)) {
+      const validDefault =
+        defaultKbId && knowledgeBases.some((kb) => kb.id === defaultKbId)
+          ? defaultKbId
+          : knowledgeBases[0].id
+      setKbId(validDefault)
+    }
+  }, [knowledgeBases, defaultKbId, kbId])
 
   const loadDecks = useCallback(async () => {
     if (!api.studio?.flashcardDecks) return

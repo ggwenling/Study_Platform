@@ -42,7 +42,7 @@ function buildConversationMenuItems(
 }
 
 export function ProjectNavigation() {
-  const { user, libraries, recent, loading, refresh, requireLogin, report, notify } = useWorkspace()
+  const { user, libraries, recent, loading, refresh, requireLogin, report, notify, chat } = useWorkspace()
   const [recentOpen, setRecentOpen] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:recent`, true)
   const [createOpen, setCreateOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -81,7 +81,9 @@ export function ProjectNavigation() {
       target={dialogTarget}
       onClose={() => setDialogTarget(null)}
       onRenamed={() => refresh()}
+      onBeforeDelete={(deletedId) => chat?.evictConversation?.(deletedId)}
       onDeleted={(deletedId) => {
+        chat?.evictConversation?.(deletedId)
         refresh()
         if (pathname === `/chat/${deletedId}`) void navigate('/', { replace: true })
       }}

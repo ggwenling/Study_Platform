@@ -16,6 +16,7 @@ export function ConversationDialogs({
   target,
   onClose,
   onRenamed,
+  onBeforeDelete,
   onDeleted,
   report,
   notify,
@@ -23,6 +24,7 @@ export function ConversationDialogs({
   target: ConversationDialogTarget | null
   onClose: () => void
   onRenamed?: (updated: Conversation) => void
+  onBeforeDelete?: (deletedId: string) => void
   onDeleted?: (deletedId: string) => void
   report: (error: unknown) => void
   notify: (message: string) => void
@@ -62,6 +64,7 @@ export function ConversationDialogs({
     setBusy(true)
     setError('')
     try {
+      onBeforeDelete?.(target.conversation.id)
       await api.deleteConversation(target.conversation.id)
       onDeleted?.(target.conversation.id)
       notify('会话已删除。')

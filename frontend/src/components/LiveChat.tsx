@@ -277,7 +277,8 @@ export default function LiveChat({ id }: { id: string }) {
         target={dialogTarget}
         onClose={() => setDialogTarget(null)}
         onRenamed={(updated) => { setConversation(updated); refresh?.() }}
-        onDeleted={() => { refresh?.(); void navigate('/', { replace: true }) }}
+        onBeforeDelete={(deletedId) => chat?.evictConversation?.(deletedId)}
+        onDeleted={(deletedId) => { chat?.evictConversation?.(deletedId); refresh?.(); void navigate('/', { replace: true }) }}
         report={report}
         notify={notify}
       />

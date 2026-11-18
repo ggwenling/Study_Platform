@@ -204,3 +204,38 @@ it('packages pasted Markdown note with auto-derived filename and formats Markdow
   expect(generated.type).toBe('text/markdown')
   expect(locatorLabel({ heading: '矩阵特征值总结', start_line: 1 })).toBe('矩阵特征值总结 · 第 1 行')
 })
+
+
+it('clears queued and failed upload items on logout or account switch to prevent cross-account uploads', async () => {
+  const inFlight = deferred<UploadResult>()
+  vi.mocked(uploadMaterial)
+    .mockReturnValueOnce(inFlight.promise)
+    .mockResolvedValue({ material_id: 'm-b', version_id: 'v-b', job_id: 'j-b', status: 'queued' })
+
+  await render(<Composer />)
+  const userAFile1 = new File(['secret1'], '用户甲正在传.txt', { type: 'text/plain' })
+  const userAFile2 = new File(['secret2'], '用户甲待传.txt', { type: 'text/plain' })
+  const input = node.querySelector<HTMLInputElement>('input[type=file]')!
+  Object.defineProperty(input, 'files', { value: [userAFile1, userAFile2], configurable: true })
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+
+  expect(uploadMaterial).toHaveBeenCalledTimes(1)
+  const firstSignal = vi.mocked(uploadMaterial).mock.calls[0][3]!
+  expect(node.textContent).toContain('用户甲正在传.txt')
+
+  // Logout (user -> null), then login as user 'two'
+  workspace.value = { ...workspace.value, user: null }
+  await render(<Composer />)
+  expect(firstSignal.aborted).toBe(true)
+  expect(node.textContent).not.toContain('用户甲正在传.txt')
+  expect(node.textContent).not.toContain('用户甲待传.txt')
+
+  workspace.value = { ...workspace.value, user: { id: 'two' }, libraries: [library('B')] }
+  await render(<Composer />)
+  const userBFile = new File(['hello-b'], '用户乙新文件.txt', { type: 'text/plain' })
+  Object.defineProperty(input, 'files', { value: [userBFile], configurable: true })
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+
+  expect(uploadMaterial).toHaveBeenCalledTimes(2)
+  expect(uploadMaterial).toHaveBeenNthCalledWith(2, 'B', userBFile, undefined, expect.any(AbortSignal))
+})

@@ -115,8 +115,20 @@ export function Learning({ knowledgeBases, notify }: Props) {
   }, [notify])
 
   useEffect(() => {
-    if (knowledgeBases.length && !kbId) setKbId(knowledgeBases[0].id)
+    if (!knowledgeBases.length) {
+      if (kbId) setKbId('')
+      return
+    }
+    if (!kbId || !knowledgeBases.some((kb) => kb.id === kbId)) {
+      setKbId(knowledgeBases[0].id)
+    }
   }, [knowledgeBases, kbId])
+
+  useEffect(() => {
+    if (wrongKbFilter !== 'all' && !knowledgeBases.some((kb) => kb.id === wrongKbFilter)) {
+      setWrongKbFilter('all')
+    }
+  }, [knowledgeBases, wrongKbFilter])
 
   useEffect(() => {
     void refreshWrongs()
@@ -268,6 +280,20 @@ export function Learning({ knowledgeBases, notify }: Props) {
       notify('已开启错题重练')
     } catch (error) {
       notify(error instanceof ApiError ? errorMessage(error) : '无法创建错题重练')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function markMastered(wrongId: string) {
+    if (busy) return
+    setBusy(true)
+    try {
+      await api.learning.masterWrong(wrongId)
+      await refreshWrongs()
+      notify('已标记为掌握')
+    } catch (error) {
+      notify(error instanceof ApiError ? errorMessage(error) : '操作失败')
     } finally {
       setBusy(false)
     }
@@ -767,7 +793,7 @@ export function Learning({ knowledgeBases, notify }: Props) {
                       size="sm"
                       variant="secondary"
                       disabled={busy}
-                      onClick={() => void startWrongRetry([row.id], row.knowledge_base_id)}
+                      onClick={() => void startWrongRetry([row.id])}
                     >
                       <RotateCcw size={14} aria-hidden /> 重练此题
                     </Button>
@@ -792,7 +818,7 @@ export function Learning({ knowledgeBases, notify }: Props) {
                       size="sm"
                       variant="ghost"
                       disabled={busy}
-                      onClick={() => void api.learning.masterWrong(row.id).then(refreshWrongs)}
+                      onClick={() => void markMastered(row.id)}
                     >
                       已掌握
                     </Button>

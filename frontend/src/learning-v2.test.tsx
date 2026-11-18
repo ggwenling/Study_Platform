@@ -215,7 +215,41 @@ describe('Learning 2.0 workflow', () => {
     }))
 
     await act(async () => findButtonContaining('重练此题')!.click())
-    expect(api.learning.retryWrong).toHaveBeenCalledWith({ wrong_ids: ['wrong-1'], knowledge_base_id: 'kb-1' })
+    expect(api.learning.retryWrong).toHaveBeenCalledWith({ wrong_ids: ['wrong-1'], knowledge_base_id: undefined })
     expect(node.textContent).toContain('错题重练')
+  })
+
+  it('falls back to remaining valid kbId when selected KB is deleted and catches masterWrong errors cleanly', async () => {
+    const notify = vi.fn()
+    vi.mocked(api.learning.masterWrong).mockRejectedValueOnce(new Error('network failure'))
+
+    await render(
+      <Learning
+        knowledgeBases={[
+          { id: 'kb-deleted', name: '将被删库', description: null, created_at: '', updated_at: '' },
+          { id: 'kb-alive', name: '保留库', description: null, created_at: '', updated_at: '' },
+        ]}
+        notify={notify}
+      />,
+    )
+    await act(async () => { await Promise.resolve() })
+    const kbSelect = node.querySelector<HTMLSelectElement>('select[aria-label="选择知识库"]')!
+    expect(kbSelect.value).toBe('kb-deleted')
+
+    await render(
+      <Learning
+        knowledgeBases={[
+          { id: 'kb-alive', name: '保留库', description: null, created_at: '', updated_at: '' },
+        ]}
+        notify={notify}
+      />,
+    )
+    await act(async () => { await Promise.resolve() })
+    expect(node.querySelector<HTMLSelectElement>('select[aria-label="选择知识库"]')!.value).toBe('kb-alive')
+
+    await act(async () => findButtonContaining('错题本')!.click())
+    await act(async () => findButtonContaining('已掌握')!.click())
+    expect(api.learning.masterWrong).toHaveBeenCalledWith('wrong-1')
+    expect(notify).toHaveBeenCalledWith('操作失败')
   })
 })

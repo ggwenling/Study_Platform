@@ -127,7 +127,20 @@ afterEach(async () => {
 
 describe('RAG Workshop: Hybrid Hit-Testing & Fragment Editor', () => {
   it('runs hybrid hit-testing, displays vector/lexical/RRF diagnostics, and patches a recalled chunk', async () => {
-    vi.mocked(api.workshop.hitTest).mockResolvedValue(sampleHitResponse)
+    vi.mocked(api.workshop.hitTest)
+      .mockResolvedValueOnce(sampleHitResponse)
+      .mockResolvedValueOnce({
+        ...sampleHitResponse,
+        items: [
+          {
+            ...sampleHitResponse.items[0],
+            text: '拉格朗日乘子法与KKT条件核心推导。',
+            vector_rank: 1,
+            vector_similarity: 0.918,
+            rrf_score: 0.0412,
+          },
+        ],
+      })
     vi.mocked(api.workshop.updateFragment).mockResolvedValue({
       ...sampleFragment,
       text: '拉格朗日乘子法与KKT条件核心推导。',
@@ -186,7 +199,10 @@ describe('RAG Workshop: Hybrid Hit-Testing & Fragment Editor', () => {
       '拉格朗日乘子法与KKT条件核心推导。',
     )
     expect(onUpdated).toHaveBeenCalledOnce()
+    expect(api.workshop.hitTest).toHaveBeenCalledTimes(2)
     expect(node.textContent).toContain('拉格朗日乘子法与KKT条件核心推导。')
+    expect(node.textContent).toContain('RRF 0.0412')
+    expect(node.textContent).toContain('向量 0.918 (#1)')
   })
 
   it('edits fragment text directly from LibraryFragments row menu and updates table in-place', async () => {

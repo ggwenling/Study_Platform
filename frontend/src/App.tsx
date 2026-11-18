@@ -300,7 +300,7 @@ const historyWhen = new Intl.DateTimeFormat('zh-CN', {
 })
 
 function HistoryPage() {
-  const { user, revision, refresh, notify, report, requireLogin } = useWorkspace()
+  const { user, revision, refresh, notify, report, requireLogin, chat } = useWorkspace()
   const [items, setItems] = useState<Conversation[] | null>(null)
   const [error, setError] = useState('')
   const [dialogTarget, setDialogTarget] = useState<ConversationDialogTarget | null>(null)
@@ -351,7 +351,9 @@ function HistoryPage() {
       setItems((current) => current ? current.map((item) => item.id === updated.id ? updated : item) : current)
       refresh()
     }}
+    onBeforeDelete={(deletedId) => chat?.evictConversation?.(deletedId)}
     onDeleted={(deletedId) => {
+      chat?.evictConversation?.(deletedId)
       setItems((current) => current ? current.filter((item) => item.id !== deletedId) : current)
       refresh()
     }}

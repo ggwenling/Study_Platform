@@ -61,13 +61,22 @@ export function useUploadQueue({
   const itemsRef = useRef<UploadQueueItem[]>([])
   itemsRef.current = items
   const activeController = useRef<{ id: string; controller: AbortController } | null>(null)
+  const prevUserId = useRef(userId)
   const callbacks = useRef({ refresh, notify, report, onUploadedToLibrary })
   callbacks.current = { refresh, notify, report, onUploadedToLibrary }
+
+  useEffect(() => {
+    if (prevUserId.current === userId) return
+    prevUserId.current = userId
+    activeController.current?.controller.abort()
+    activeController.current = null
+    setItems([])
+  }, [userId])
 
   useEffect(() => () => {
     activeController.current?.controller.abort()
     activeController.current = null
-  }, [userId])
+  }, [])
 
   useEffect(() => {
     if (activeController.current) return
