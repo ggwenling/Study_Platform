@@ -151,3 +151,48 @@ export interface ModelConnections {
 export interface ModelConnectionInput {
   name: string; kind: 'llm' | 'embedding'; base_url: string; model: string; api_key?: string
 }
+
+export type StudioArtifactKind = 'study_guide' | 'mindmap' | 'formula_sheet'
+
+export interface StudyNote {
+  id: string
+  knowledge_base_id: string
+  knowledge_base_name: string | null
+  title: string
+  note_type: 'summary' | 'chapter_summary' | 'formula_sheet' | 'exam_guide'
+  artifact_kind: string
+  content_md: string
+  edit_revision: number
+  status: string
+  ingested_material_id: string | null
+  citations: Citation[]
+  created_at: string
+  updated_at: string
+}
+
+export interface FlashcardItem {
+  id: string
+  deck_id: string
+  front: string
+  back: string
+  ease_factor: number
+  interval_days: number
+  repetition_count: number
+  due_at: string
+  is_due: boolean
+  sources: { title: string; availability: 'available' | 'unavailable' }[]
+}
+
+export interface FlashcardDeckSummary {
+  id: string
+  knowledge_base_id: string
+  knowledge_base_name: string | null
+  title: string
+  card_count: number
+  due_count: number
+  created_at: string
+}
+
+export interface FlashcardDeckDetail extends FlashcardDeckSummary {
+  cards: FlashcardItem[]
+}

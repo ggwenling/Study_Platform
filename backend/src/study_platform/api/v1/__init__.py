@@ -10,6 +10,7 @@ from study_platform.api.v1 import (
     model_connections,
     model_usage,
     resources,
+    studio,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -22,3 +23,4 @@ router.include_router(chat.router, tags=["chat"])
 router.include_router(learning.router)
 router.include_router(model_usage.router, tags=["account"])
 router.include_router(model_connections.router)
+router.include_router(studio.router)

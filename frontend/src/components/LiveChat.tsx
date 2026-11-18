@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useDisclosurePreference } from '../useDisclosurePreference'
-import { Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
+import { BookmarkPlus, Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import type { Citation, Conversation, Message } from '@/api/types'
@@ -33,6 +33,7 @@ export default function LiveChat({ id }: { id: string }) {
   const [sourceId, setSourceId] = useState<string | null>(null)
   const [source, setSource] = useState<Citation | null>(null)
   const [sourceError, setSourceError] = useState('')
+  const [savingNoteId, setSavingNoteId] = useState<string | null>(null)
   const scroll = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
   const live = chat.cached[id] ?? []
@@ -189,6 +190,35 @@ export default function LiveChat({ id }: { id: string }) {
                         {message.content && <Button className="icon-button" variant="ghost" aria-label="复制回答" onClick={async () => {
                           try { await navigator.clipboard.writeText(message.content); notify('已复制回答。') } catch { notify('无法访问剪贴板。') }
                         }}><Copy size={16} /></Button>}
+                        {message.status === 'completed' && message.content && message.scope && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            loading={savingNoteId === message.id}
+                            disabled={savingNoteId !== null}
+                            onClick={async () => {
+                              if (!message.scope || savingNoteId) return
+                              setSavingNoteId(message.id)
+                              const promptRow = messages.find((m) => m.role === 'user' && m.turn_id === message.turn_id)
+                              const noteTitle = (promptRow?.content.slice(0, 60) || displayTitle || '问答沉淀笔记').trim()
+                              try {
+                                await api.studio.createNote(message.scope.knowledge_base_id, {
+                                  title: noteTitle,
+                                  content_md: message.content,
+                                  note_type: 'summary',
+                                  message_id: message.id,
+                                })
+                                notify(`已保存至「${message.scope.knowledge_base_name}」研究笔记。`)
+                              } catch (failure) {
+                                report(failure)
+                              } finally {
+                                setSavingNoteId(null)
+                              }
+                            }}
+                          >
+                            <BookmarkPlus size={15} />存为笔记
+                          </Button>
+                        )}
                         {message === latest && message.turn_id && stopped && <Button size="sm" variant="secondary" disabled={chat.busy} onClick={() => void chat.retry(id, message.turn_id!)}>重试本轮</Button>}
                         {message === latest && message.turn_id && message.status === 'streaming' && !activeHere && <Button size="sm" variant="secondary" onClick={() => void chat.stop(id, message.turn_id!)}>停止生成</Button>}
                       </div>

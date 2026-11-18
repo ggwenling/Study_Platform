@@ -1,5 +1,5 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
-import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, Turn, UploadResult, User, WrongQuestionItem } from './types'
+import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
@@ -255,6 +255,41 @@ export const api = {
       request<LearningAttempt>('/learning/wrong-questions/retry', json('POST', body)),
     masterWrong: (id: string) =>
       request<{ id: string; status: string }>(`/learning/wrong-questions/${pathId(id)}/mastered`, json('POST')),
+  },
+  studio: {
+    notes: (knowledgeBaseId: string) =>
+      request<{ items: StudyNote[] }>(`/knowledge-bases/${pathId(knowledgeBaseId)}/notes`),
+    createNote: (
+      knowledgeBaseId: string,
+      body: { title: string; content_md: string; note_type?: StudyNote['note_type']; message_id?: string | null },
+    ) =>
+      request<StudyNote>(`/knowledge-bases/${pathId(knowledgeBaseId)}/notes`, json('POST', body)),
+    generateNote: (
+      knowledgeBaseId: string,
+      body: { kind: StudioArtifactKind; material_ids?: string[] | null; title?: string | null },
+    ) =>
+      request<StudyNote>(`/knowledge-bases/${pathId(knowledgeBaseId)}/notes/generate`, json('POST', body)),
+    note: (noteId: string) => request<StudyNote>(`/notes/${pathId(noteId)}`),
+    updateNote: (noteId: string, body: { title?: string; content_md?: string }) =>
+      request<StudyNote>(`/notes/${pathId(noteId)}`, json('PATCH', body)),
+    deleteNote: (noteId: string) => request<void>(`/notes/${pathId(noteId)}`, json('DELETE')),
+    ingestNote: (noteId: string) => request<UploadResult>(`/notes/${pathId(noteId)}/ingest`, json('POST')),
+    flashcardDecks: (knowledgeBaseId?: string) =>
+      request<{ items: FlashcardDeckSummary[] }>(
+        '/flashcard-decks' + query({ knowledge_base_id: knowledgeBaseId }),
+      ),
+    generateFlashcards: (
+      knowledgeBaseId: string,
+      body: { count?: number; material_ids?: string[] | null; title?: string | null } = {},
+    ) =>
+      request<FlashcardDeckDetail>(
+        `/knowledge-bases/${pathId(knowledgeBaseId)}/flashcard-decks/generate`,
+        json('POST', body),
+      ),
+    flashcardDeck: (deckId: string) => request<FlashcardDeckDetail>(`/flashcard-decks/${pathId(deckId)}`),
+    deleteFlashcardDeck: (deckId: string) => request<void>(`/flashcard-decks/${pathId(deckId)}`, json('DELETE')),
+    reviewFlashcard: (cardId: string, rating: 0 | 1 | 2 | 3) =>
+      request<FlashcardItem>(`/flashcards/${pathId(cardId)}/review`, json('POST', { rating })),
   },
 }
 function turnPath(conversationId: string, turnId: string) { return `/conversations/${pathId(conversationId)}/turns/${pathId(turnId)}` }

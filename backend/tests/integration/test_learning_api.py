@@ -233,3 +233,60 @@ def test_learning_v2_mcq_text_answer_history_and_wrong_retry(learning_env):
     updated_wrongs = learning.list_wrong_questions(db, owner, knowledge_base_id=kb_id)
     assert len(updated_wrongs) == 1
     assert updated_wrongs[0]["status"] == "reviewing"
+
+
+def test_studio_notes_artifacts_ingest_and_flashcard_sm2_review(learning_env):
+    from types import SimpleNamespace
+
+    from study_platform.services import studio
+
+    _, db, owner, kb_id = learning_env
+    user = SimpleNamespace(id=owner)
+
+    note = studio.create_note(
+        db,
+        owner_user_id=owner,
+        knowledge_base_id=kb_id,
+        title="线性变换总结",
+        content_md="线性变换保持加法与数乘。",
+    )
+    assert note["edit_revision"] == 0
+
+    updated = studio.update_note(
+        db,
+        owner_user_id=owner,
+        note_id=UUID(note["id"]),
+        title="线性变换核心总结",
+        content_md="线性变换保持向量加法与标量乘法。",
+    )
+    assert updated["edit_revision"] == 1
+    assert updated["title"] == "线性变换核心总结"
+
+    ingest_res = studio.ingest_note_to_library(db, user=user, note_id=UUID(note["id"]))
+    assert ingest_res["status"] == "queued"
+    reloaded = studio.get_note(db, owner, UUID(note["id"]))
+    assert reloaded["ingested_material_id"] == ingest_res["material_id"]
+
+    guide = studio.generate_studio_artifact(
+        db, owner_user_id=owner, knowledge_base_id=kb_id, kind="study_guide"
+    )
+    mindmap = studio.generate_studio_artifact(
+        db, owner_user_id=owner, knowledge_base_id=kb_id, kind="mindmap"
+    )
+    assert guide["artifact_kind"] == "study_guide" and guide["citations"]
+    assert "## 知识层级树" in mindmap["content_md"]
+
+    deck = studio.generate_flashcard_deck(
+        db, owner_user_id=owner, knowledge_base_id=kb_id, count=3
+    )
+    assert deck["card_count"] >= 1
+    card_id = UUID(deck["cards"][0]["id"])
+
+    reviewed_good = studio.review_flashcard(db, owner_user_id=owner, card_id=card_id, rating=3)
+    assert reviewed_good["repetition_count"] == 1
+    assert reviewed_good["interval_days"] >= 2
+    assert reviewed_good["ease_factor"] == 2.65
+
+    reviewed_again = studio.review_flashcard(db, owner_user_id=owner, card_id=card_id, rating=0)
+    assert reviewed_again["repetition_count"] == 0
+    assert reviewed_again["interval_days"] == 0

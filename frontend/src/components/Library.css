@@ -106,6 +106,17 @@ button.library-aside-row:hover { background: color-mix(in srgb, var(--ink) 4%, t
 .library-empty { padding: 12px 4px; font-size: var(--text-caption); }
 .library-dialog-stack { display: grid; gap: 12px; }
 .library-file-list { max-height: 54dvh; overflow: auto; }
+.studio-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.studio-note-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 11px; }
+.studio-note-card { width: 100%; display: grid; gap: 7px; text-align: left; padding: 13px 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); transition: border-color 140ms ease, background 140ms ease; }
+.studio-note-card:hover { border-color: var(--border-strong); background: var(--hover); }
+.studio-note-head { display: flex; flex-wrap: wrap; gap: 6px; }
+.studio-note-card strong { font-size: var(--text-sm); font-weight: 600; overflow-wrap: anywhere; }
+.studio-note-card p { font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.studio-note-viewer { display: grid; gap: 14px; }
+.studio-note-body { max-height: 52dvh; overflow-y: auto; padding-left: 0; border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; }
+.studio-note-citations { display: grid; gap: 6px; }
+.studio-note-citations > small { display: inline-flex; align-items: center; gap: 5px; }
 
 @media (max-width: 1120px) {
   .library-detail { grid-template-columns: minmax(0, 1fr); padding-inline: 16px; }

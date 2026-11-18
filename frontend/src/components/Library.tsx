@@ -20,6 +20,7 @@ import type { TreeNode } from '@/components/arc/tree-view/tree-view'
 import { useWorkspace } from '../WorkspaceData'
 import { LibraryClassification } from './LibraryClassification'
 import { LibraryFragments, locatorLabel, number } from './LibraryFragments'
+import { LibraryStudio } from './LibraryStudio'
 import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
 import './Library.css'
 
@@ -364,6 +365,20 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
         {heading(<Layers size={22} />, '索引流程', '知识库的索引构建与处理状态')}
         <LibraryProgress overview={overview} />
       </section>
+      <LibraryStudio
+        kbId={id}
+        kbName={library.name}
+        readyCount={overview?.ready_count ?? 0}
+        revision={fragmentRevision}
+        onIngested={reloadData}
+        onOpenSource={(cit) => {
+          if (cit.availability === 'available') {
+            void openSource(cit.material_version_id, cit.title, cit.locator)
+          } else {
+            notify('此来源已不可访问。')
+          }
+        }}
+      />
       <section className="library-panel library-fragment-panel" ref={fragmentPanel}>
         {heading(<FileText size={22} />, '片段浏览', '检索与管理已生成的内容片段')}
         <LibraryFragments id={id} tags={overview?.tags ?? []} day={day} setDay={setDay} scope={scope}

@@ -26,6 +26,7 @@ import {
   labelWrongQuestionStatus,
 } from '@/learningUi'
 import { MarkdownContent } from './MarkdownContent'
+import { FlashcardPanel } from './FlashcardPanel'
 
 type Props = {
   knowledgeBases: KnowledgeBase[]
@@ -74,20 +75,26 @@ function SourceList({ sources }: { sources?: LearningSource[] }) {
 
 export function Learning({ knowledgeBases, notify }: Props) {
   const navigate = useNavigate()
-  const [kbId, setKbId] = useState<string>('')
+  const historyState = (typeof window !== 'undefined' ? window.history.state?.usr : null) as {
+    tab?: 'practice' | 'history' | 'wrong' | 'flashcards'
+    deckId?: string
+    kbId?: string
+  } | null
+  const [kbId, setKbId] = useState<string>(historyState?.kbId ?? '')
   const [quizMode, setQuizMode] = useState<'short_answer' | 'mcq' | 'mixed'>('mixed')
   const [quizCount, setQuizCount] = useState('5')
   const [materials, setMaterials] = useState<Material[]>([])
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([])
   const [attempt, setAttempt] = useState<LearningAttempt | null>(null)
   const [attempts, setAttempts] = useState<LearningAttemptSummary[]>([])
+  const [deckCount, setDeckCount] = useState(0)
   const [index, setIndex] = useState(0)
   const [textDrafts, setTextDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [wrongs, setWrongs] = useState<WrongQuestionItem[]>([])
   const [wrongKbFilter, setWrongKbFilter] = useState<string>('all')
   const [expandedWrongIds, setExpandedWrongIds] = useState<string[]>([])
-  const [tab, setTab] = useState<'practice' | 'history' | 'wrong'>('practice')
+  const [tab, setTab] = useState<'practice' | 'flashcards' | 'history' | 'wrong'>(historyState?.tab ?? 'practice')
 
   const refreshWrongs = useCallback(async () => {
     try {
@@ -332,6 +339,17 @@ export function Learning({ knowledgeBases, notify }: Props) {
           onClick={() => setTab('practice')}
         >
           练习
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="learning-tab-flashcards"
+          aria-selected={tab === 'flashcards'}
+          aria-controls="learning-panel-flashcards"
+          className={tab === 'flashcards' ? 'active' : ''}
+          onClick={() => setTab('flashcards')}
+        >
+          闪卡复习{deckCount > 0 ? ` (${deckCount})` : ''}
         </button>
         <button
           type="button"
@@ -616,6 +634,22 @@ export function Learning({ knowledgeBases, notify }: Props) {
             </div>
           </article>
         ) : null}
+      </section>
+
+      <section
+        id="learning-panel-flashcards"
+        className="learning-panel"
+        role="tabpanel"
+        aria-labelledby="learning-tab-flashcards"
+        hidden={tab !== 'flashcards'}
+      >
+        <FlashcardPanel
+          knowledgeBases={knowledgeBases}
+          defaultKbId={kbId}
+          initialDeckId={historyState?.deckId}
+          notify={notify}
+          onDeckCountChange={setDeckCount}
+        />
       </section>
 
       <section

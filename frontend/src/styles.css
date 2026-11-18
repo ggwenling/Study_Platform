@@ -448,6 +448,12 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 .learning-wrong-detail { display: grid; gap: 8px; padding-top: 6px; border-top: 1px solid var(--border-subtle); }
 .learning-wrong-meta { font-size: .85rem; color: var(--muted); }
 .learning-wrong-meta time { font-variant-numeric: tabular-nums; }
+.flashcard-workspace { display: grid; gap: 16px; }
+.flashcard-box { min-height: 190px; padding: 22px 20px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface-muted); display: grid; align-content: center; gap: 10px; cursor: pointer; transition: background 150ms ease, border-color 150ms ease; }
+.flashcard-box:hover { background: var(--hover); }
+.flashcard-side-label { font-size: var(--text-xs); color: var(--muted); }
+.flashcard-content { font-size: 1.05rem; line-height: 1.65; overflow-wrap: anywhere; }
+.flashcard-ratings { display: flex; flex-wrap: wrap; gap: 8px; }
 .learning-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .home-onboarding { margin: 0 0 10px; font-size: var(--text-caption); line-height: 1.45; color: var(--text-muted); }
 .home-onboarding a { text-decoration: underline; text-underline-offset: 3px; }
