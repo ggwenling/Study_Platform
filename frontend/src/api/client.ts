@@ -174,6 +174,8 @@ export const api = {
   documentLocations: (id: string, material: string) => request<DocumentLocation[]>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/locations`),
   fragments: (id: string, filters: Record<string, string | undefined>, signal?: AbortSignal) =>
     request<FragmentPage>(`/knowledge-bases/${pathId(id)}/fragments` + query(filters), { signal }),
+  fragment: (id: string, fragmentId: string) =>
+    request<Fragment>(`/knowledge-bases/${pathId(id)}/fragments/${pathId(fragmentId)}`),
   setFragmentRetrieval: (id: string, ids: string[], enabled: boolean) =>
     request<void>(`/knowledge-bases/${pathId(id)}/fragments/retrieval`, json('PATCH', { ids, enabled })),
   classification: (id: string, material: string) =>
@@ -199,7 +201,9 @@ export const api = {
   deleteConversation: (id: string) => request<void>(`/conversations/${pathId(id)}`, json('DELETE')),
   messages: (id: string, cursor?: string) => request<Page<Message>>(`/conversations/${pathId(id)}/messages` + query({ cursor })),
   overview: () => request<Dashboard>('/dashboard/overview'),
-  search: (q: string, cursor?: string) => request<Page<SearchItem>>('/search' + query({ q, cursor })),
+  search: (q: string, cursor?: string, includeContent = false) => request<Page<SearchItem>>(
+    '/search' + query({ q, cursor, include_content: includeContent ? 'true' : undefined }),
+  ),
   capabilities: () => request<Capabilities>('/capabilities'),
   turn: (conversationId: string, turnId: string, signal?: AbortSignal) => request<Turn>(turnPath(conversationId, turnId), { signal }),
   cancelTurn: (conversationId: string, turnId: string) => request<Turn>(turnPath(conversationId, turnId) + '/cancel', json('POST')),

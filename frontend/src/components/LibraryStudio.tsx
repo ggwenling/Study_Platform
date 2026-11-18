@@ -3,7 +3,9 @@ import type { FormEvent } from 'react'
 import { BookMarked, BrainCircuit, Download, FilePlus2, GitBranch, Layers, Pencil, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { api } from '@/api/client'
+import { ApiError } from '@/api/stream'
 import type { Citation, StudioArtifactKind, StudyNote } from '@/api/types'
+import { errorMessage } from '@/api/ui'
 import { downloadMarkdownFile, sanitizeMarkdownFilename } from '@/conversationActions'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
@@ -27,6 +29,8 @@ export function LibraryStudio({
   revision,
   onIngested,
   onOpenSource,
+  linkedNoteId,
+  closeLinkedNote,
 }: {
   kbId: string
   kbName: string
@@ -34,6 +38,8 @@ export function LibraryStudio({
   revision: number
   onIngested: () => void
   onOpenSource?: (citation: Citation) => void
+  linkedNoteId?: string | null
+  closeLinkedNote?: () => void
 }) {
   const { notify, report, refresh } = useWorkspace()
   const navigate = useNavigate()
@@ -44,6 +50,24 @@ export function LibraryStudio({
   const [editing, setEditing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [linkedNoteFailure, setLinkedNoteFailure] = useState('')
+
+  useEffect(() => {
+    if (!linkedNoteId) return
+    let live = true
+    void api.studio.note(linkedNoteId).then(
+      (note) => {
+        if (!live) return
+        if (note.knowledge_base_id === kbId && note.knowledge_base_name !== null) setActiveNote(note)
+        else setLinkedNoteFailure('内容已不可用')
+      },
+      (error: unknown) => {
+        if (!live) return
+        setLinkedNoteFailure(error instanceof ApiError && [404, 422].includes(error.status ?? 0) ? '内容已不可用' : errorMessage(error))
+      },
+    )
+    return () => { live = false }
+  }, [kbId, linkedNoteId])
 
   const loadNotes = useCallback(async () => {
     if (!api.studio?.notes) return
@@ -170,6 +194,7 @@ export function LibraryStudio({
       setNotes((prev) => prev.filter((row) => row.id !== activeNote.id))
       setActiveNote(null)
       setConfirmDelete(false)
+      if (linkedNoteId) closeLinkedNote?.()
       notify('笔记已删除。')
     } catch (error) {
       report(error)
@@ -283,15 +308,19 @@ export function LibraryStudio({
       </Dialog>
 
       <Dialog
-        open={Boolean(activeNote)}
+        open={Boolean(activeNote || linkedNoteId)}
         onOpenChange={(open) => {
           if (!open && !busy) {
+            if (linkedNoteId) closeLinkedNote?.()
             setActiveNote(null)
             setEditing(false)
             setConfirmDelete(false)
           }
         }}
       >
+        {linkedNoteId && !activeNote && <DialogContent title="研究笔记" description="查看搜索命中的笔记。" closeLabel="关闭笔记详情">
+          {linkedNoteFailure ? <p className="error-text" role="alert">{linkedNoteFailure}</p> : <p role="status">正在读取笔记…</p>}
+        </DialogContent>}
         {activeNote && (
           <DialogContent
             title={confirmDelete ? '删除笔记' : editing ? '编辑笔记' : activeNote.title}

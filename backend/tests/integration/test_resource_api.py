@@ -2,6 +2,7 @@
 
 import os
 from collections import defaultdict
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -12,12 +13,22 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from study_platform.api.v1.auth import router as auth_router
+from study_platform.api.v1.library_detail import router as library_router
 from study_platform.api.v1.resources import router
+from study_platform.api.v1.studio import router as studio_router
 from study_platform.core.config import Settings
 from study_platform.core.errors import ApiError, api_error_handler
 from study_platform.persistence.database import get_db
-from study_platform.persistence.models import AiWorkflowRun, Message
+from study_platform.persistence.models import (
+    AiWorkflowRun,
+    IndexVersion,
+    Material,
+    MaterialChunk,
+    MaterialVersion,
+    Message,
+)
 from study_platform.services import auth_limits
+from study_platform.services.chat import chunk_query
 
 pytestmark = pytest.mark.integration
 
@@ -37,9 +48,14 @@ def resource_client(monkeypatch):
         tx = connection.begin()
         db = Session(connection, join_transaction_mode="create_savepoint")
         app = FastAPI()
-        app.state.settings = Settings(_env_file=None, auth_jwt_secret="resource-test-key" * 3)
+        app.state.settings = Settings(
+            _env_file=None, auth_jwt_secret="resource-test-key" * 3,
+            deepseek_api_key="", embedding_api_key="",
+        )
         app.include_router(auth_router)
         app.include_router(router)
+        app.include_router(library_router)
+        app.include_router(studio_router)
         app.add_exception_handler(ApiError, api_error_handler)
         app.dependency_overrides[get_db] = lambda: db
         with TestClient(app, headers={"Origin": "http://localhost:5173"}) as http:
@@ -144,3 +160,106 @@ def test_resources_ownership_pagination_and_tombstones(resource_client):
     assert http.get(f"/knowledge-bases/{b['id']}").status_code == 404
     assert http.get("/knowledge-bases").json()["items"] == []
     assert http.get("/dashboard/overview").json()["knowledge_base_count"] == 0
+
+
+def test_content_search_uses_current_owned_fragments_and_notes_without_models(resource_client):
+    http, db = resource_client
+
+    def library(name):
+        return http.post("/knowledge-bases", json={"name": name}).json()["id"]
+
+    def note(kb, title, body):
+        response = http.post(f"/knowledge-bases/{kb}/notes", json={"title": title, "content_md": body})
+        assert response.status_code == 201
+        return response.json()["id"]
+
+    def fragment(material, *, current=True, active=True, enabled=True):
+        version = MaterialVersion(
+            id=uuid4(), material_id=material.id, version_no=1 if current else 2, is_current=current,
+            source_mime="application/pdf", object_key=str(uuid4()), parse_status="ready",
+            source_sha256="a" * 64, byte_size=1,
+        )
+        db.add(version)
+        db.flush()
+        index = IndexVersion(
+            id=uuid4(), material_version_id=version.id, generation=1, status="ready", is_active=active,
+            pipeline_profile="test", embedding_profile="test:1024", chunk_count=1, ready_at=datetime.now(UTC),
+        )
+        db.add(index)
+        db.flush()
+        chunk = MaterialChunk(
+            id=uuid4(), material_version_id=version.id, index_version_id=index.id, ordinal=0,
+            text=body, text_sha256="b" * 64, retrieval_enabled=enabled, locator={"page": 7, "ocr": []},
+        )
+        db.add(chunk)
+        db.commit()
+        return chunk
+
+    def material(owner, kb, title):
+        row = Material(id=uuid4(), owner_user_id=owner, knowledge_base_id=UUID(kb), title=title, kind="other")
+        db.add(row)
+        db.flush()
+        return row
+
+    def search(query, **params):
+        response = http.get("/search", params={"q": query, "include_content": "true", **params})
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    body = "文档说明。" * 25 + "拉格朗日乘子法 Newton REF_2026%" + "补充背景。" * 25
+    owner = signup(http)
+    owner_headers = dict(http.headers)
+    kb = library("分析原件")
+    notes_kb = library("研究日志")
+    document = material(owner, kb, "计算讲义.pdf")
+    hit = fragment(document, enabled=False)
+    archived = fragment(document, current=False)
+    inactive = fragment(material(owner, kb, "未发布.pdf"), active=False)
+    note_id = note(notes_kb, "实验结果", body)
+    note(notes_kb, "搜索用反例", "REFX2026X")
+    title_note = note(notes_kb, "只出现在标题里的词", "其他内容")
+
+    another_user = signup(http)
+    private_kb = library("另一个用户")
+    private_hit = fragment(material(another_user, private_kb, "私有.pdf"))
+    private_note = note(private_kb, "私有笔记", body)
+    assert {row["id"] for row in search("Newton")["items"]} == {
+        str(private_hit.id), private_note,
+    }
+    assert http.get(f"/knowledge-bases/{kb}/fragments/{hit.id}").status_code == 404
+    assert http.get(f"/notes/{note_id}").status_code == 404
+
+    http.headers.update(owner_headers)
+    for query in ("拉格朗日乘子法", "newton", "REF_2026%"):
+        items = search(query)["items"]
+        assert {row["id"] for row in items} == {str(hit.id), note_id}
+        assert all(query.lower() in row["excerpt"].lower() and len(row["excerpt"]) < len(body) for row in items)
+    page = search("newton", limit=1)
+    last = search("newton", limit=1, cursor=page["next_cursor"])
+    assert last["next_cursor"] is None
+    hits = {row["type"]: row for row in page["items"] + last["items"]}
+    assert hits["fragment"]["locator"] == {"page": 7}
+    assert hits["fragment"]["retrieval_enabled"] is False
+    assert hits["note"]["knowledge_base_id"] == notes_kb
+    assert search("只出现在标题里的词")["items"][0]["id"] == title_note
+    assert http.get("/search", params={"q": "newton"}).json()["items"] == []
+    assert http.get("/search", params={"q": "计算讲义"}).json()["items"] == [
+        {"id": str(document.id), "type": "material", "title": "计算讲义.pdf", "knowledge_base_id": kb},
+    ]
+
+    fragment_url = f"/knowledge-bases/{kb}/fragments/{hit.id}"
+    assert http.get(fragment_url).json()["text"] == body
+    assert http.get(f"/knowledge-bases/{kb}/fragments/{archived.id}").status_code == 404
+    assert http.get(f"/knowledge-bases/{kb}/fragments/{inactive.id}").status_code == 404
+    assert http.get(f"/knowledge-bases/{notes_kb}/fragments/{hit.id}").status_code == 404
+    assert http.get(f"/notes/{note_id}").json()["content_md"] == body
+    assert db.scalars(chunk_query([hit.index_version_id], owner)).all() == []
+
+    assert http.delete(f"/notes/{note_id}").status_code == 204
+    assert http.get(f"/notes/{note_id}").status_code == 404
+    document.deleted_at = datetime.now(UTC)
+    db.commit()
+    assert http.get(fragment_url).status_code == 404
+    assert search("newton")["items"] == []
+    assert http.delete(f"/knowledge-bases/{notes_kb}").status_code == 204
+    assert search("只出现在标题里的词")["items"] == []

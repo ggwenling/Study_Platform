@@ -218,6 +218,26 @@ def estimated_tokens(text):
     return len(text) - ascii_count + (ascii_count + 3) // 4
 
 
+def fragment_query(kb):
+    phase = (sa.select(AiJob.status).where(AiJob.job_type == "ingest",
+                                          AiJob.resource_id == MaterialVersion.id)
+             .order_by(AiJob.created_at.desc(), AiJob.id.desc()).limit(1).scalar_subquery())
+    return active_chunks(sa.select(
+        MaterialChunk, Material.id.label("material_id"), Material.title, MaterialVersion.source_mime,
+        IndexVersion.ready_at, sa.func.coalesce(phase, "succeeded").label("processing_status"),
+    )).where(*library_files(kb))
+
+
+def fragment_dto(row):
+    chunk, source_id, title, mime, ready_at, state = row
+    return {
+        "id": chunk.id, "text": chunk.text, "material_id": source_id, "title": title,
+        "mime_type": mime, "version_id": chunk.material_version_id,
+        "locator": public_locator(chunk.locator), "estimated_tokens": estimated_tokens(chunk.text),
+        "retrieval_enabled": chunk.retrieval_enabled, "status": state, "ready_at": ready_at,
+    }
+
+
 @router.get("/fragments", response_model=FragmentPage)
 def fragments(
     kb_id: UUID, q: str = Query("", max_length=200), file_type: str | None = None,
@@ -226,14 +246,7 @@ def fragments(
     page: int = Query(1, ge=1), db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     kb = owned_kb(db, user, kb_id)
-    phase = (sa.select(AiJob.status).where(AiJob.job_type == "ingest",
-                                          AiJob.resource_id == MaterialVersion.id)
-             .order_by(AiJob.created_at.desc(), AiJob.id.desc()).limit(1).scalar_subquery())
-    processing_status = sa.func.coalesce(phase, "succeeded")
-    stmt = active_chunks(sa.select(
-        MaterialChunk, Material.id.label("material_id"), Material.title, MaterialVersion.source_mime,
-        IndexVersion.ready_at, processing_status,
-    )).where(*library_files(kb))
+    stmt = fragment_query(kb)
     if q.strip():
         pattern = "%" + q.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         tags = sa.func.jsonb_array_elements_text(Material.tags).column_valued("tag_name")
@@ -242,7 +255,7 @@ def fragments(
     if file_type:
         stmt = stmt.where(MaterialVersion.source_mime.startswith(file_type, autoescape=True))
     if status:
-        stmt = stmt.where(processing_status == status)
+        stmt = stmt.where(stmt.selected_columns.processing_status == status)
     if tag:
         stmt = stmt.where(Material.tags.contains(sa.cast(sa.literal([tag], type_=JSONB), JSONB)))
     if day:
@@ -256,12 +269,7 @@ def fragments(
                       .offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all()
     return {
         "total": total, "page_size": PAGE_SIZE,
-        "items": [{
-            "id": chunk.id, "text": chunk.text, "material_id": source_id, "title": title,
-            "mime_type": mime, "version_id": chunk.material_version_id,
-            "locator": public_locator(chunk.locator), "estimated_tokens": estimated_tokens(chunk.text),
-            "retrieval_enabled": chunk.retrieval_enabled, "status": state, "ready_at": ready_at,
-        } for chunk, source_id, title, mime, ready_at, state in rows],
+        "items": [fragment_dto(row) for row in rows],
     }
 
 
@@ -396,6 +404,17 @@ def edit_fragment(
     return rag_workshop.edit_fragment_text(
         db, user=user, kb_id=kb_id, chunk_id=chunk_id, text=body.text
     )
+
+
+@router.get("/fragments/{chunk_id}", response_model=Fragment)
+def get_fragment(kb_id: UUID, chunk_id: UUID, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    kb = owned_kb(db, user, kb_id)
+    row = db.execute(fragment_query(kb).where(
+        MaterialChunk.id == chunk_id, MaterialVersion.parse_status == "ready",
+    )).one_or_none()
+    if row is None:
+        raise missing()
+    return fragment_dto(row)
 
 
 @router.post("/hit-test", response_model=HitTestResponse)

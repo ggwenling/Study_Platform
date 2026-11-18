@@ -6,7 +6,7 @@ import { api, uploadMaterial } from './api/client'
 import type { Material, UploadResult } from './api/types'
 import { CurrentMaterials } from './components/CurrentMaterials'
 import { Composer } from './components/Composer'
-import { locatorLabel } from './components/LibraryFragments'
+import { locatorLabel } from './api/ui'
 import { PasteTextDialog } from './components/PasteTextDialog'
 import { ThemeProvider } from './Theme'
 

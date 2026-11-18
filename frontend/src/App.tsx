@@ -16,8 +16,8 @@ import { WorkspaceData, useWorkspace } from './WorkspaceData'
 import { useTheme } from './Theme'
 import { api } from './api/client'
 import { ApiError } from './api/stream'
-import type { SearchItem, User, Conversation } from './api/types'
-import { allPages, errorMessage } from './api/ui'
+import type { Page, SearchItem, User, Conversation } from './api/types'
+import { allPages, errorMessage, locatorLabel } from './api/ui'
 
 const Home = lazy(() => import('./components/Home').then((m) => ({ default: m.Home })))
 const Account = lazy(() => import('./components/Account').then((m) => ({ default: m.Account })))
@@ -261,7 +261,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             </div>}
             {!isChat && (
               <DialogTrigger asChild>
-                <Button variant="secondary" className="search-button"><Search size={17} /><span>搜索知识库、资料或对话…</span><kbd>Ctrl K</kbd></Button>
+                <Button variant="secondary" className="search-button"><Search size={17} /><span>搜索资料、笔记或对话…</span><kbd>Ctrl K</kbd></Button>
               </DialogTrigger>
             )}
           </header>
@@ -283,7 +283,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
         </main>
       </div>
     </div>
-    <DialogContent title="搜索" description="搜索知识库、资料或对话。">
+    <DialogContent title="搜索" description="查找资料正文、研究笔记、知识库或对话标题。" closeLabel="关闭搜索">
       {searchOpen && <SearchPanel onSelect={() => setSearchOpen(false)} />}
     </DialogContent>
     </Dialog>
@@ -364,26 +364,62 @@ function HistoryPage() {
 }
 
 function SearchPanel({ onSelect }: { onSelect: () => void }) {
-  const { user, requireLogin, report } = useWorkspace()
+  const { user, libraries, requireLogin, report } = useWorkspace()
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<SearchItem[] | null>(null)
+  const [results, setResults] = useState<(Page<SearchItem> & { query: string }) | null>(null)
   const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState('')
 
-  if (!user) return <EmptyState title="登录后搜索" description="搜索你的知识库、资料或对话。" action={<Button onClick={() => { onSelect(); requireLogin() }}>登录</Button>} />
+  async function load(term: string, cursor?: string) {
+    if (!term || busy) return
+    setBusy(true)
+    setFailure('')
+    if (!cursor) setResults(null)
+    try {
+      const page = await api.search(term, cursor, true)
+      setResults((previous) => ({
+        query: term, next_cursor: page.next_cursor,
+        items: cursor && previous ? [...previous.items, ...page.items] : page.items,
+      }))
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        onSelect()
+        report(error)
+      } else {
+        setFailure(errorMessage(error))
+      }
+    } finally { setBusy(false) }
+  }
+
+  if (!user) return <EmptyState title="登录后搜索" description="搜索你的知识库、资料、笔记或对话。" action={<Button onClick={() => { onSelect(); requireLogin() }}>登录</Button>} />
 
   return <div className="search-panel">
-    <form className="stack-form" onSubmit={async (event) => {
+    <form className="stack-form" onSubmit={(event) => {
       event.preventDefault()
-      if (!query.trim() || busy) return
-      setBusy(true)
-      setResults(null)
-      try { setResults(await allPages((cursor) => api.search(query.trim(), cursor))) } catch (error) { report(error) } finally { setBusy(false) }
+      void load(query.trim())
     }}>
-      <Input label="关键词" value={query} maxLength={200} onChange={(event) => setQuery(event.target.value)} placeholder="知识库、资料或对话标题" />
+      <Input label="关键词" value={query} maxLength={200} onChange={(event) => setQuery(event.target.value)} placeholder="例如：术语、编号或笔记标题" autoFocus />
       <Button type="submit" loading={busy}>搜索</Button>
     </form>
-    {results?.length ? <ul className="resource-list">
-      {results.map((item) => <li key={`${item.type}-${item.id}`}><Link to={item.type === 'conversation' ? `/chat/${item.id}` : `/knowledge?id=${item.knowledge_base_id ?? item.id}`} onClick={onSelect}>{item.title}</Link></li>)}
-    </ul> : results && <p className="muted">暂无匹配结果。</p>}
+    {results?.items.length ? <ul className="resource-list" aria-label="搜索结果">
+      {results.items.map((item) => {
+        const params = new URLSearchParams({ id: item.knowledge_base_id ?? item.id })
+        const content = item.type === 'fragment' || item.type === 'note'
+        if (content) params.set(item.type, item.id)
+        const path = item.type === 'conversation' ? `/chat/${item.id}` : `/knowledge?${params}`
+        return <li key={`${item.type}-${item.id}`}><Link className="search-result" to={path} onClick={onSelect}>
+          <strong>{item.title}</strong>
+          {content && <small className="muted">
+            {[
+              libraries.find((library) => library.id === item.knowledge_base_id)?.name,
+              item.locator ? locatorLabel(item.locator) : '研究笔记',
+              item.retrieval_enabled === false ? '已关闭 AI 检索' : undefined,
+            ].filter(Boolean).join(' · ')}
+          </small>}
+          {item.excerpt && <small>{item.excerpt}</small>}
+        </Link></li>
+      })}
+    </ul> : results && <p className="muted" role="status">暂无匹配结果。</p>}
+    {results?.next_cursor && <Button variant="secondary" disabled={busy} onClick={() => void load(results.query, results.next_cursor ?? undefined)}>加载更多</Button>}
   </div>
 }

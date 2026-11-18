@@ -18,7 +18,15 @@ export interface UploadResult { material_id: string; version_id: string; job_id:
 export interface KnowledgeBase { id: string; name: string; description: string | null; created_at: string; updated_at: string; embedding_connection_id?: string | null; embedding_binding?: { model: string; base_url: string; dimensions: number } | null }
 export interface KnowledgeBaseInput { name: string; description?: string | null }
 export interface Conversation { id: string; project_knowledge_base_id: string | null; title: string | null; created_at: string; updated_at: string }
-export interface SearchItem { id: string; type: 'knowledge_base' | 'material' | 'conversation'; title: string; knowledge_base_id: string | null }
+export interface SearchItem {
+  id: string
+  type: 'knowledge_base' | 'material' | 'conversation' | 'fragment' | 'note'
+  title: string
+  knowledge_base_id: string | null
+  excerpt?: string
+  locator?: Record<string, unknown>
+  retrieval_enabled?: boolean
+}
 export interface Dashboard { knowledge_base_count: number; material_count: number; conversation_count: number; completed_qa_count: number; activity: { date: string; count: number }[] }
 export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
 export interface ModelUsageBucket { key: string; label?: string | null; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }

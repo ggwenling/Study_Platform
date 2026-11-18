@@ -498,6 +498,7 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 .resource-list li > a:hover { background: var(--surface-muted); border-radius: inherit; }
 .search-panel, .source-detail { display: grid; gap: 14px; }
 .search-panel .resource-list, .source-detail { max-height: 55vh; overflow: auto; }
+.search-result { display: grid; gap: 4px; }
 .source-detail p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .source-detail a { justify-self: start; }
 .source-image { display: block; max-width: 100%; }

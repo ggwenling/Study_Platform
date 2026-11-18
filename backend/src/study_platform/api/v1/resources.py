@@ -1,5 +1,6 @@
 """Authenticated personal knowledge library and conversation resources."""
 
+import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 from uuid import UUID
@@ -8,9 +9,11 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from study_platform.api.v1.auth import get_current_user
+from study_platform.api.v1.library_detail import active_chunks, public_locator
 from study_platform.api.v1.materials import owned_kb
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
@@ -23,9 +26,11 @@ from study_platform.persistence.models import (
     IndexVersion,
     KnowledgeBase,
     Material,
+    MaterialChunk,
     MaterialVersion,
     Message,
     MessageCitation,
+    Note,
 )
 from study_platform.services.citations import citation_dto, message_dto
 
@@ -402,9 +407,12 @@ def list_messages(
 
 class SearchItem(BaseModel):
     id: UUID
-    type: Literal["knowledge_base", "material", "conversation"]
+    type: Literal["knowledge_base", "material", "conversation", "fragment", "note"]
     title: str
     knowledge_base_id: UUID | None = None
+    excerpt: str | None = None
+    locator: dict | None = None
+    retrieval_enabled: bool | None = None
 
 
 class SearchPage(BaseModel):
@@ -412,11 +420,19 @@ class SearchPage(BaseModel):
     next_cursor: UUID | None
 
 
-@router.get("/search", response_model=SearchPage)
+def search_excerpt(text: str, query: str) -> str:
+    match = re.search(re.escape(query), text, re.IGNORECASE)
+    start = max(0, match.start() - 60) if match else 0
+    end = min(len(text), match.end() + 60) if match else min(len(text), 120)
+    return ("…" if start else "") + text[start:end].strip() + ("…" if end < len(text) else "")
+
+
+@router.get("/search", response_model=SearchPage, response_model_exclude_unset=True)
 def search(
     q: str = Query(min_length=1, max_length=200),
     limit: int = Query(20, ge=1, le=100),
     cursor: UUID | None = None,
+    include_content: bool = False,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -448,13 +464,52 @@ def search(
         Conversation.deleted_at.is_(None),
         Conversation.title.ilike(term, escape="\\"),
     )
-    combined = sa.union_all(kb, materials, conversations).subquery()
+    queries = [kb, materials, conversations]
+    if include_content:
+        no_text = sa.cast(sa.null(), sa.Text).label("match_text")
+        no_locator = sa.cast(sa.null(), JSONB).label("locator")
+        no_retrieval_flag = sa.cast(sa.null(), sa.Boolean).label("retrieval_enabled")
+        queries = [query.add_columns(no_text, no_locator, no_retrieval_flag) for query in queries]
+        fragment_matches = active_chunks(sa.select(
+            MaterialChunk.id, sa.literal("fragment"), Material.title, Material.knowledge_base_id,
+            MaterialChunk.text, MaterialChunk.locator, MaterialChunk.retrieval_enabled,
+        )).join(KnowledgeBase, KnowledgeBase.id == Material.knowledge_base_id).where(
+            KnowledgeBase.owner_user_id == user.id,
+            KnowledgeBase.deleted_at.is_(None),
+            Material.owner_user_id == user.id,
+            Material.deleted_at.is_(None),
+            Material.status == "active",
+            MaterialVersion.parse_status == "ready",
+            MaterialChunk.text.ilike(term, escape="\\"),
+        )
+        note_body_matches = Note.content_md.ilike(term, escape="\\")
+        note_matches = sa.select(
+            Note.id, sa.literal("note"), Note.title, KnowledgeBase.id,
+            sa.case((note_body_matches, Note.content_md)), no_locator, no_retrieval_flag,
+        ).select_from(Note).join(KnowledgeBase, KnowledgeBase.id == Note.course_id).where(
+            KnowledgeBase.owner_user_id == user.id,
+            KnowledgeBase.deleted_at.is_(None),
+            Note.owner_user_id == user.id,
+            Note.deleted_at.is_(None),
+            sa.or_(Note.title.ilike(term, escape="\\"), note_body_matches),
+        )
+        queries.extend((fragment_matches, note_matches))
+    combined = sa.union_all(*queries).subquery()
     stmt = sa.select(combined)
     if cursor:
         stmt = stmt.where(combined.c.id > cursor)
     rows = db.execute(stmt.order_by(combined.c.id).limit(limit + 1)).mappings().all()
+    items = []
+    for row in rows[:limit]:
+        item = {key: row[key] for key in ("id", "type", "title", "knowledge_base_id")}
+        if row.get("match_text") is not None:
+            item["excerpt"] = search_excerpt(row["match_text"], q)
+        if row["type"] == "fragment":
+            item["locator"] = public_locator(row["locator"])
+            item["retrieval_enabled"] = row["retrieval_enabled"]
+        items.append(item)
     return {
-        "items": [dict(r) for r in rows[:limit]],
+        "items": items,
         "next_cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
     }
 

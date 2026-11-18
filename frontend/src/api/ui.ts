@@ -22,3 +22,20 @@ export function errorMessage(error: unknown) {
   }
   return '请求失败，请检查连接后重试。'
 }
+
+export function locatorLabel(locator: Record<string, unknown>) {
+  if (typeof locator.heading === 'string' && locator.heading) {
+    return typeof locator.start_line === 'number' ? `${locator.heading} · 第 ${locator.start_line} 行` : locator.heading
+  }
+  if (typeof locator.page === 'number') return `第 ${locator.page} 页`
+  if (typeof locator.image === 'number') return `图片 ${locator.image}`
+  if (typeof locator.paragraph === 'number') return `段落 ${locator.paragraph}`
+  if (Array.isArray(locator.table_path) && locator.table_path.length) {
+    const cells = locator.table_path.map(({ table, row, column }) => `表 ${table} · ${row} 行 ${column} 列`)
+    return cells.join(' / ')
+  }
+  if (typeof locator.start_line === 'number') return `第 ${locator.start_line} 行`
+  if (typeof locator.line_start === 'number') return `第 ${locator.line_start} 行`
+  if (typeof locator.line === 'number') return `第 ${locator.line} 行`
+  return '—'
+}

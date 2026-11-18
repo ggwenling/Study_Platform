@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DragEvent, FormEvent, ReactNode } from 'react'
 import { ChevronRight, CircleDashed, Ellipsis, FilePlus2, FileText, Folder, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, Trash2, TriangleAlert, Upload } from 'lucide-react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { api } from '@/api/client'
 import type { DocumentLocation, Fragment, KnowledgeBase, LibraryOverview, Material, MaterialPreview } from '@/api/types'
-import { allPages, errorMessage } from '@/api/ui'
+import { allPages, errorMessage, locatorLabel } from '@/api/ui'
+import { ApiError } from '@/api/stream'
 import { useUploadQueue } from '../useUploadQueue'
 import { PasteTextDialog } from './PasteTextDialog'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
@@ -19,7 +20,7 @@ import { TreeView } from '@/components/arc/tree-view/tree-view'
 import type { TreeNode } from '@/components/arc/tree-view/tree-view'
 import { useWorkspace } from '../WorkspaceData'
 import { LibraryClassification } from './LibraryClassification'
-import { LibraryFragments, locatorLabel, number } from './LibraryFragments'
+import { LibraryFragments, number } from './LibraryFragments'
 import { LibraryStudio } from './LibraryStudio'
 import { LibraryHitTest } from './LibraryHitTest'
 import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
@@ -33,6 +34,11 @@ const phases: Record<string, string> = {
 type Panel = 'create' | 'edit' | 'deleteKb' | 'topics' | 'tags' | 'files' | 'ocr' | 'ocrQueue' | 'failed' | 'activity' | 'preview'
 type DocumentScope = { material_id?: string; section_id?: string; label?: string }
 type Preview = { title: string; version: string; text?: string; source?: MaterialPreview; locator?: string; imagePage?: number }
+type LinkedFragment = { id: string; preview?: Preview; failure?: string }
+
+function fragmentPreview(fragment: Fragment): Preview {
+  return { title: fragment.title, version: fragment.version_id, text: fragment.text, locator: locatorLabel(fragment.locator) }
+}
 
 function heading(icon: ReactNode, title: string, note: string) {
   return <header className="library-section-heading">{icon}<h2>{title}</h2><p>{note}</p></header>
@@ -41,12 +47,16 @@ function heading(icon: ReactNode, title: string, note: string) {
 export default function Library({ preferredId }: { preferredId?: string }) {
   const { user, libraries, loading, refresh, notify, report, requireLogin } = useWorkspace()
   const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+  const fragmentId = params.get('fragment')
+  const noteId = fragmentId ? null : params.get('note')
   const [created, setCreated] = useState<KnowledgeBase>()
   const [creating, setCreating] = useState(false)
   const [createBusy, setCreateBusy] = useState(false)
   const options = created && !libraries.some((item) => item.id === created.id) ? [created, ...libraries] : libraries
   const library = preferredId ? options.find((item) => item.id === preferredId) : options[0]
   const select = (id: string) => void navigate(`/knowledge?id=${encodeURIComponent(id)}`)
+  const closeSearchResult = () => { if (library) setParams({ id: library.id }, { replace: true }) }
 
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -67,13 +77,14 @@ export default function Library({ preferredId }: { preferredId?: string }) {
 
   if (!user) return <div className="placeholder-page"><EmptyState title="登录后管理知识库" description="在个人空间创建知识库并导入资料。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
   return <>
-    {library ? <LibraryDetail key={library.id} library={library} libraries={options} select={select} create={() => setCreating(true)} onDeleted={() => {
+    {library ? <LibraryDetail key={library.id} library={library} libraries={options} select={select} create={() => setCreating(true)}
+      fragmentId={fragmentId} noteId={noteId} closeSearchResult={closeSearchResult} onDeleted={() => {
       if (created?.id === library.id) setCreated(undefined)
       const next = options.find((item) => item.id !== library.id)
       void navigate(next ? `/knowledge?id=${encodeURIComponent(next.id)}` : '/knowledge', { replace: true })
     }} />
       : <div className="placeholder-page">
-        {loading ? <p role="status">正在读取知识库…</p> : <EmptyState title={preferredId ? '知识库不可用' : '暂无知识库'}
+        {loading ? <p role="status">正在读取知识库…</p> : <EmptyState title={fragmentId || noteId ? '内容已不可用' : preferredId ? '知识库不可用' : '暂无知识库'}
           description={preferredId ? '请切换到可访问的知识库。' : '创建第一个知识库，开始整理个人资料。'}
           action={options.length ? <Button onClick={() => select(options[0]!.id)}>切换知识库</Button> : <Button onClick={() => setCreating(true)}>创建知识库</Button>} />}
       </div>}
@@ -95,8 +106,9 @@ function LibraryForm({ library, onSubmit, busy, submit }: {
   </form>
 }
 
-function LibraryDetail({ library, libraries, select, create, onDeleted }: {
+function LibraryDetail({ library, libraries, select, create, onDeleted, fragmentId, noteId, closeSearchResult }: {
   library: KnowledgeBase; libraries: KnowledgeBase[]; select: (id: string) => void; create: () => void; onDeleted: () => void;
+  fragmentId: string | null; noteId: string | null; closeSearchResult: () => void;
 }) {
   const { user, revision, capabilities, refresh, notify, report } = useWorkspace()
   const id = library.id
@@ -113,6 +125,22 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
   const [scope, setScope] = useState<DocumentScope>({})
   const [day, setDay] = useState<string>()
   const [preview, setPreview] = useState<Preview>()
+  const [linkedFragment, setLinkedFragment] = useState<LinkedFragment>()
+  const fragmentResult = linkedFragment?.id === fragmentId ? linkedFragment : undefined
+  const visiblePreview = fragmentId ? fragmentResult?.preview : preview
+  useEffect(() => {
+    if (!fragmentId) return
+    let live = true
+    void api.fragment(id, fragmentId).then(
+      (fragment) => { if (live) setLinkedFragment({ id: fragmentId, preview: fragmentPreview(fragment) }) },
+      (error: unknown) => {
+        if (!live) return
+        const failure = error instanceof ApiError && [404, 422].includes(error.status ?? 0) ? '内容已不可用' : errorMessage(error)
+        setLinkedFragment({ id: fragmentId, failure })
+      },
+    )
+    return () => { live = false; setLinkedFragment(undefined) }
+  }, [id, fragmentId])
   const fileInput = useRef<HTMLInputElement>(null)
   const fragmentPanel = useRef<HTMLElement>(null)
   const [expanded, setExpanded] = useState([id])
@@ -260,7 +288,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
   }
 
   function showFragment(fragment: Fragment) {
-    setPreview({ title: fragment.title, version: fragment.version_id, text: fragment.text, locator: locatorLabel(fragment.locator) })
+    setPreview(fragmentPreview(fragment))
     setPanel('preview')
   }
 
@@ -367,10 +395,13 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
         <LibraryProgress overview={overview} />
       </section>
       <LibraryStudio
+        key={noteId ?? 'studio'}
         kbId={id}
         kbName={library.name}
         readyCount={overview?.ready_count ?? 0}
         revision={fragmentRevision}
+        linkedNoteId={noteId}
+        closeLinkedNote={closeSearchResult}
         onIngested={reloadData}
         onOpenSource={(cit) => {
           if (cit.availability === 'available') {
@@ -414,7 +445,13 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
         </div>
       </div>
     </aside>
-    <Dialog open={Boolean(panel)} onOpenChange={(open) => { if (!open && !busy) { setConfirmMaterial(null); setPanel(undefined) } }}>
+    <Dialog open={Boolean(panel || fragmentId)} onOpenChange={(open) => {
+      if (!open && !busy) {
+        if (fragmentId) closeSearchResult()
+        setConfirmMaterial(null)
+        setPanel(undefined)
+      }
+    }}>
       {panel === 'edit' && <DialogContent title="编辑知识库" closeLabel="关闭">
         <LibraryForm library={library} onSubmit={save} busy={busy === 'edit'} submit="保存" />
       </DialogContent>}
@@ -436,15 +473,15 @@ function LibraryDetail({ library, libraries, select, create, onDeleted }: {
         <LibraryClassification id={id} materials={materials} labels={overview?.[panel] ?? []} onChange={reloadData} />
       </DialogContent>}
       {panel === 'activity' && <DialogContent title="近 12 周索引活动" closeLabel="关闭">{heatmap()}</DialogContent>}
-      {panel === 'preview' && preview && <DialogContent title={preview.title} description={preview.locator ?? '查看原件中提取的文字。'} closeLabel="关闭">
-        <div className="source-detail">
-          <DownloadMaterial version={preview.version} title={preview.title} />
-          {preview.imagePage && <MaterialPage version={preview.version} page={preview.imagePage} title={preview.title} />}
-          {preview.text && <p>{preview.text}</p>}
-          {preview.source?.sections.map((section, index) => <p key={index}>
+      {(panel === 'preview' || fragmentId) && <DialogContent title={visiblePreview?.title ?? '资料片段'} description={visiblePreview?.locator ?? '查看原件中提取的文字。'} closeLabel="关闭">
+        {visiblePreview ? <div className="source-detail">
+          <DownloadMaterial version={visiblePreview.version} title={visiblePreview.title} />
+          {visiblePreview.imagePage && <MaterialPage version={visiblePreview.version} page={visiblePreview.imagePage} title={visiblePreview.title} />}
+          {visiblePreview.text && <p>{visiblePreview.text}</p>}
+          {visiblePreview.source?.sections.map((section, index) => <p key={index}>
             <small>{locatorLabel(section.locator)}</small><br />{section.text}
           </p>)}
-        </div>
+        </div> : fragmentResult?.failure ? <p role="alert" className="error-text">{fragmentResult.failure}</p> : <p role="status">正在读取资料片段…</p>}
       </DialogContent>}
       {(panel === 'files' || panel === 'failed' || panel === 'ocr' || panel === 'ocrQueue') && <DialogContent
         title={confirmMaterial ? '删除资料' : panel === 'files' ? '资料列表' : panel === 'failed' ? '处理失败的资料' : panel === 'ocrQueue' ? 'OCR 队列' : '已识别的资料'} closeLabel="关闭">

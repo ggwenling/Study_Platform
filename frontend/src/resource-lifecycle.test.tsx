@@ -15,6 +15,7 @@ const workspace = vi.hoisted(() => ({ value: {} as Record<string, any> }))
 
 vi.mock('react-router', () => ({
   useNavigate: () => navigateMock,
+  useSearchParams: () => [new URLSearchParams(), vi.fn()],
   Link: ({ children }: { children: ReactNode }) => <span>{children}</span>,
 }))
 vi.mock('./WorkspaceData', () => ({ useWorkspace: () => workspace.value }))

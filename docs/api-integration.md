@@ -90,10 +90,17 @@ for await (const event of streamChat({
 | POST | `/sync` | 刷新统计并写 `last_synced_at` |
 | GET | `/documents/{material_id}/locations` | 按原文段落/页聚合的片段位置 |
 | GET | `/fragments` | 分页列出可检索片段（`q`、`tag`、`day`、`material_id`、`section_id` 等筛选） |
+| GET | `/fragments/{chunk_id}` | 读取当前已就绪版本中的指定片段。片段失效或无访问权限时返回 `404` |
 | PATCH | `/fragments/retrieval` | JSON `{"ids":["UUID",…],"enabled":true\|false}` 批量开关片段是否参与检索 |
 | GET/POST/PATCH | `/documents/{material_id}/classification` | 主题/标签建议与确认 |
 
 片段 `retrieval_enabled=false` 时不进入向量检索与摘要汇总，但不影响历史消息展示；关闭后仍会参与同 scope 的对话历史（仅作表达参考，不作事实依据）。
+
+## 工作区搜索
+
+`GET /search` 使用 Bearer 认证。默认按知识库名、资料标题和会话标题匹配。传 `include_content=true` 后也匹配当前已就绪的资料片段以及研究笔记的标题和正文。用 `next_cursor` 作为下一页的 `cursor`，并沿用原关键词和 `include_content`。
+
+正文命中返回 `excerpt`。`fragment` 结果的 `id` 是片段 ID，附带 `locator` 和 `retrieval_enabled`。手动搜索也能找到已关闭 AI 检索的片段。`note` 结果的 `id` 可用于 `GET /notes/{note_id}`。
 
 ## 认证强化说明
 
