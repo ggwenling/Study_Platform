@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { useDisclosurePreference } from '../useDisclosurePreference'
-import { Copy, FileText, Folder, PanelRight } from 'lucide-react'
-import { Link } from 'react-router'
+import { Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
+import { Link, useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import type { Citation, Conversation, Message } from '@/api/types'
 import { allPages, errorMessage } from '@/api/ui'
+import { downloadMarkdownFile, formatConversationMarkdown, sanitizeMarkdownFilename, scopeSummaryText } from '@/conversationActions'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
+import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { useWorkspace } from '../WorkspaceData'
 import { Composer } from './Composer'
+import { ConversationDialogs, type ConversationDialogTarget } from './ConversationDialogs'
 import { MarkdownContent } from './MarkdownContent'
 import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
 import { AssistantActivity, activityLabels } from './AssistantActivity'
@@ -18,10 +21,12 @@ const time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digi
 const statusText = { pending: '等待生成…', streaming: '正在生成…', stopped: '已停止', failed: '回答失败', completed: '' }
 
 export default function LiveChat({ id }: { id: string }) {
-  const { user, chat, revision, notify, report, requireLogin } = useWorkspace()
+  const { user, chat, revision, refresh, notify, report, requireLogin } = useWorkspace()
+  const navigate = useNavigate()
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [saved, setSaved] = useState<Message[]>([])
   const [error, setError] = useState('')
+  const [dialogTarget, setDialogTarget] = useState<ConversationDialogTarget | null>(null)
   const sourcesDefault = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 769px)').matches : true
   const [panel, setPanel] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:chat-sources`, sourcesDefault)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -100,6 +105,8 @@ export default function LiveChat({ id }: { id: string }) {
     setSourceId(citation.id)
   }
 
+  const displayTitle = conversation?.title || live.find((item) => item.role === 'user')?.content.slice(0, 80) || '对话'
+
   if (!user || (error && !conversation && !live.length)) {
     return (
       <div className="placeholder-page">
@@ -113,8 +120,25 @@ export default function LiveChat({ id }: { id: string }) {
     <div className="chat live-chat" data-sources={panel}>
       <section className="chat-main" aria-label="会话">
         <header className="chat-header">
-          <h1>{conversation?.title || live.find((item) => item.role === 'user')?.content.slice(0, 80) || '对话'}</h1>
+          <h1>{displayTitle}</h1>
           <span className="pill">仅限个人使用</span>
+          <DropdownMenu
+            label="会话操作"
+            icon={<Ellipsis size={18} />}
+            iconOnly
+            items={[
+              { label: '重命名会话', icon: <Pencil size={15} />, disabled: !conversation, onSelect: () => {
+                if (conversation) setDialogTarget({ mode: 'rename', conversation })
+              } },
+              { label: '导出 Markdown', icon: <Download size={15} />, disabled: !messages.length, onSelect: () => {
+                downloadMarkdownFile(sanitizeMarkdownFilename(displayTitle), formatConversationMarkdown(displayTitle, messages))
+                notify('已导出 Markdown 文件。')
+              } },
+              { label: '删除会话', icon: <Trash2 size={15} />, destructive: true, separatorBefore: true, onSelect: () => {
+                setDialogTarget({ mode: 'delete', conversation: conversation ?? { id, title: displayTitle } })
+              } },
+            ]}
+          />
           <Button variant="ghost" className="icon-button" aria-label={panel ? '收起引用与来源' : '展开引用与来源'} aria-expanded={panel} aria-controls="live-sources" onClick={() => setPanel(!panel)}><PanelRight size={18} /></Button>
         </header>
         <div className="conversation" ref={scroll} tabIndex={0} aria-label="消息" onScroll={(event) => {
@@ -136,7 +160,7 @@ export default function LiveChat({ id }: { id: string }) {
                     {isUser ? <span className="message-avatar">你</span> : <AssistantActivity phase={phase} />}
                     <span>{isUser ? '你' : '知循'}</span><time dateTime={message.created_at}>{time.format(new Date(message.created_at))}</time>
                   </div>
-                  {message.scope && <span className="pill"><Folder size={13} />{message.scope.knowledge_base_name} · {message.scope.answer_mode === 'with_general' ? '通用知识补充' : '仅知识库'}</span>}
+                  {message.scope && <span className="pill"><Folder size={13} />{scopeSummaryText(message.scope)}</span>}
                   {isUser ? <div className="user-bubble">{message.content}</div> : (
                     <>
                       <div className="answer">
@@ -196,6 +220,14 @@ export default function LiveChat({ id }: { id: string }) {
               : <p role="status">正在核实来源…</p>}
         </DialogContent>
       </Dialog>
+      <ConversationDialogs
+        target={dialogTarget}
+        onClose={() => setDialogTarget(null)}
+        onRenamed={(updated) => { setConversation(updated); refresh?.() }}
+        onDeleted={() => { refresh?.(); void navigate('/', { replace: true }) }}
+        report={report}
+        notify={notify}
+      />
     </div>
   )
 }

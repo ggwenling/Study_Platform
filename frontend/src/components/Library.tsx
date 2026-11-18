@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import { ChevronRight, CircleDashed, Ellipsis, FileText, Folder, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, TriangleAlert, Upload } from 'lucide-react'
+import { ChevronRight, CircleDashed, Ellipsis, FileText, Folder, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, Trash2, TriangleAlert, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { api, uploadMaterial } from '@/api/client'
 import type { DocumentLocation, Fragment, KnowledgeBase, LibraryOverview, Material, MaterialPreview } from '@/api/types'
@@ -26,7 +26,7 @@ const phases: Record<string, string> = {
   ready: '已完成', failed: '处理失败', cancelled: '已取消',
 }
 
-type Panel = 'create' | 'edit' | 'topics' | 'tags' | 'files' | 'ocr' | 'ocrQueue' | 'failed' | 'activity' | 'preview'
+type Panel = 'create' | 'edit' | 'deleteKb' | 'topics' | 'tags' | 'files' | 'ocr' | 'ocrQueue' | 'failed' | 'activity' | 'preview'
 type DocumentScope = { material_id?: string; section_id?: string; label?: string }
 type Preview = { title: string; version: string; text?: string; source?: MaterialPreview; locator?: string; imagePage?: number }
 
@@ -63,7 +63,11 @@ export default function Library({ preferredId }: { preferredId?: string }) {
 
   if (!user) return <div className="placeholder-page"><EmptyState title="登录后管理知识库" description="在个人空间创建知识库并导入资料。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
   return <>
-    {library ? <LibraryDetail key={library.id} library={library} libraries={options} select={select} create={() => setCreating(true)} />
+    {library ? <LibraryDetail key={library.id} library={library} libraries={options} select={select} create={() => setCreating(true)} onDeleted={() => {
+      if (created?.id === library.id) setCreated(undefined)
+      const next = options.find((item) => item.id !== library.id)
+      void navigate(next ? `/knowledge?id=${encodeURIComponent(next.id)}` : '/knowledge', { replace: true })
+    }} />
       : <div className="placeholder-page">
         {loading ? <p role="status">正在读取知识库…</p> : <EmptyState title={preferredId ? '知识库不可用' : '暂无知识库'}
           description={preferredId ? '请切换到可访问的知识库。' : '创建第一个知识库，开始整理个人资料。'}
@@ -87,8 +91,8 @@ function LibraryForm({ library, onSubmit, busy, submit }: {
   </form>
 }
 
-function LibraryDetail({ library, libraries, select, create }: {
-  library: KnowledgeBase; libraries: KnowledgeBase[]; select: (id: string) => void; create: () => void;
+function LibraryDetail({ library, libraries, select, create, onDeleted }: {
+  library: KnowledgeBase; libraries: KnowledgeBase[]; select: (id: string) => void; create: () => void; onDeleted: () => void;
 }) {
   const { revision, capabilities, refresh, notify, report } = useWorkspace()
   const id = library.id
@@ -99,6 +103,7 @@ function LibraryDetail({ library, libraries, select, create }: {
   const [fragmentRevision, setFragmentRevision] = useState(0)
   const [busy, setBusy] = useState<string>()
   const [panel, setPanel] = useState<Panel>()
+  const [confirmMaterial, setConfirmMaterial] = useState<Material | null>(null)
   const [scope, setScope] = useState<DocumentScope>({})
   const [day, setDay] = useState<string>()
   const [preview, setPreview] = useState<Preview>()
@@ -185,6 +190,43 @@ function LibraryDetail({ library, libraries, select, create }: {
     catch (error) { report(error) } finally { setBusy(undefined) }
   }
 
+  async function cancelJob(material: Material) {
+    if (busy || !material.job_id) return
+    setBusy(`cancel:${material.id}`)
+    try {
+      await api.cancelJob(material.job_id)
+      reloadData()
+      refresh()
+      notify('已取消资料处理。')
+    } catch (error) { report(error) } finally { setBusy(undefined) }
+  }
+
+  async function removeMaterial(material: Material) {
+    if (busy) return
+    setBusy(`delete:${material.id}`)
+    try {
+      await api.deleteMaterial(material.id)
+      if (scope.material_id === material.id) setScope({})
+      setLocations((current) => { const next = { ...current }; delete next[material.id]; return next })
+      setConfirmMaterial(null)
+      reloadData()
+      refresh()
+      notify('资料已删除。')
+    } catch (error) { report(error) } finally { setBusy(undefined) }
+  }
+
+  async function removeLibrary() {
+    if (busy) return
+    setBusy('deleteKb')
+    try {
+      await api.deleteKnowledgeBase(id)
+      setPanel(undefined)
+      refresh()
+      notify('知识库已删除。')
+      onDeleted()
+    } catch (error) { report(error) } finally { setBusy(undefined) }
+  }
+
   async function openSource(version: string, title: string, locator?: Record<string, unknown>) {
     try {
       const source = await api.preview(version)
@@ -243,8 +285,10 @@ function LibraryDetail({ library, libraries, select, create }: {
           <Button size="sm" variant="secondary" loading={busy === 'sync'} disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步</Button>
           <DropdownMenu label="知识库操作" icon={<Ellipsis size={17} />} iconOnly disabled={Boolean(busy)} items={[
             { label: '导入资料', icon: <Upload size={16} />, onSelect: () => fileInput.current?.click() },
+            { label: '管理资料', icon: <FileText size={16} />, onSelect: () => { setConfirmMaterial(null); setPanel('files') } },
             { label: '新建知识库', icon: <Plus size={16} />, onSelect: create },
             ...libraries.filter((item) => item.id !== id).map((item, index) => ({ label: item.name, icon: <Folder size={16} />, separatorBefore: index === 0, onSelect: () => select(item.id) })),
+            { label: '删除知识库', icon: <Trash2 size={16} />, destructive: true, separatorBefore: true, onSelect: () => setPanel('deleteKb') },
           ]} />
         </div>
         <input ref={fileInput} type="file" hidden accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" disabled={Boolean(busy)} onChange={(event) => {
@@ -265,7 +309,11 @@ function LibraryDetail({ library, libraries, select, create }: {
         {heading(<Layers size={22} />, '知识结构', '从文档、主题、标签到片段的结构化视图')}
         <div className="library-structure">
           <div className="library-documents">
-            <h3><Folder size={18} />文档层级</h3>
+            <h3>
+              <Folder size={18} />
+              <span>文档层级</span>
+              {materials.length > 0 && <Button size="sm" variant="ghost" onClick={() => { setConfirmMaterial(null); setPanel('files') }}>管理资料</Button>}
+            </h3>
             {materials.length ? <TreeView density="compact" nodes={roots} expandedIds={expanded} onExpandedChange={setExpanded} onSelect={chooseNode} aria-label="文档层级" />
               : <p className="muted library-empty">{overview ? '暂无资料。可从页头菜单导入。' : '正在读取资料…'}</p>}
           </div>
@@ -312,9 +360,23 @@ function LibraryDetail({ library, libraries, select, create }: {
         </div>
       </div>
     </aside>
-    <Dialog open={Boolean(panel)} onOpenChange={(open) => { if (!open) setPanel(undefined) }}>
+    <Dialog open={Boolean(panel)} onOpenChange={(open) => { if (!open && !busy) { setConfirmMaterial(null); setPanel(undefined) } }}>
       {panel === 'edit' && <DialogContent title="编辑知识库" closeLabel="关闭">
         <LibraryForm library={library} onSubmit={save} busy={busy === 'edit'} submit="保存" />
+      </DialogContent>}
+      {panel === 'deleteKb' && <DialogContent
+        title="删除知识库"
+        description="删除后该知识库内的资料与索引将被停用。"
+        closeLabel="关闭删除知识库"
+      >
+        <div className="stack-form">
+          <p>即将删除知识库「{library.name}」（共 {number.format(overview?.file_count ?? materials.length)} 份资料）。</p>
+          <p className="muted">删除后：库内资料与向量索引立即停用，处理中的任务自动取消，关联的项目会话解除绑定，历史问答中的对应引用将显示为「来源已不可用」。</p>
+          <div className="form-actions">
+            <Button type="button" variant="danger" loading={busy === 'deleteKb'} onClick={() => void removeLibrary()}>确认删除知识库</Button>
+            <Button type="button" variant="ghost" disabled={Boolean(busy)} onClick={() => setPanel(undefined)}>取消</Button>
+          </div>
+        </div>
       </DialogContent>}
       {(panel === 'topics' || panel === 'tags') && <DialogContent title={panel === 'topics' ? '主题管理' : '标签管理'} closeLabel="关闭">
         <LibraryClassification id={id} materials={materials} labels={overview?.[panel] ?? []} onChange={reloadData} />
@@ -331,16 +393,33 @@ function LibraryDetail({ library, libraries, select, create }: {
         </div>
       </DialogContent>}
       {(panel === 'files' || panel === 'failed' || panel === 'ocr' || panel === 'ocrQueue') && <DialogContent
-        title={panel === 'files' ? '资料列表' : panel === 'failed' ? '处理失败的资料' : panel === 'ocrQueue' ? 'OCR 队列' : '已识别的资料'} closeLabel="关闭">
-        <ul className="resource-list library-file-list">
-          {panelMaterials.map((item) => <li key={item.id}>
-            <div><strong>{item.title}</strong><p className="muted">{phases[item.status] ?? item.status}</p>
-              {item.error_message && <p className="error-text">{item.error_message}</p>}</div>
-            {item.status === 'ready' && item.version_id && <Button size="sm" variant="secondary" onClick={() => void openSource(item.version_id!, item.title)}>查看文字</Button>}
-            {['failed', 'cancelled'].includes(item.status) && <Button size="sm" variant="secondary" loading={busy === item.id} disabled={Boolean(busy)} onClick={() => void retry(item)}>重试处理</Button>}
-          </li>)}
-        </ul>
-        {panelMaterials.length === 0 && <p className="muted">暂无符合条件的资料。</p>}
+        title={confirmMaterial ? '删除资料' : panel === 'files' ? '资料列表' : panel === 'failed' ? '处理失败的资料' : panel === 'ocrQueue' ? 'OCR 队列' : '已识别的资料'} closeLabel="关闭">
+        {confirmMaterial ? (
+          <div className="stack-form">
+            <p>确认删除资料「{confirmMaterial.title}」吗？删除后该资料不再参与检索，历史引用将显示为不可用。</p>
+            <div className="form-actions">
+              <Button type="button" variant="danger" loading={busy === `delete:${confirmMaterial.id}`} disabled={Boolean(busy) && busy !== `delete:${confirmMaterial.id}`} onClick={() => void removeMaterial(confirmMaterial)}>确认删除</Button>
+              <Button type="button" variant="ghost" disabled={Boolean(busy)} onClick={() => setConfirmMaterial(null)}>返回列表</Button>
+            </div>
+          </div>
+        ) : <>
+          <ul className="resource-list library-file-list">
+            {panelMaterials.map((item) => {
+              const inProgress = !['ready', 'failed', 'cancelled'].includes(item.status)
+              return <li key={item.id}>
+                <div><strong>{item.title}</strong><p className="muted">{phases[item.status] ?? item.status}</p>
+                  {item.error_message && <p className="error-text">{item.error_message}</p>}</div>
+                <div className="library-dialog-actions">
+                  {item.status === 'ready' && item.version_id && <Button size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void openSource(item.version_id!, item.title)}>查看文字</Button>}
+                  {inProgress && item.job_id && <Button size="sm" variant="secondary" loading={busy === `cancel:${item.id}`} disabled={Boolean(busy)} onClick={() => void cancelJob(item)}>取消处理</Button>}
+                  {['failed', 'cancelled'].includes(item.status) && <Button size="sm" variant="secondary" loading={busy === item.id} disabled={Boolean(busy)} onClick={() => void retry(item)}>重试处理</Button>}
+                  <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => setConfirmMaterial(item)}>删除</Button>
+                </div>
+              </li>
+            })}
+          </ul>
+          {panelMaterials.length === 0 && <p className="muted">暂无符合条件的资料。</p>}
+        </>}
       </DialogContent>}
     </Dialog>
   </section>

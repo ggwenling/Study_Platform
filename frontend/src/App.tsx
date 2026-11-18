@@ -1,13 +1,16 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { BookOpen, ChevronRight, GraduationCap, History, Layers, MessageCircle, PanelLeft, Search, Settings } from 'lucide-react'
+import { BookOpen, ChevronRight, Download, Ellipsis, GraduationCap, History, Layers, MessageCircle, PanelLeft, Pencil, Search, Settings, Trash2 } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent, DialogTrigger } from '@/components/arc/dialog/dialog'
+import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { Input } from '@/components/arc/input/input'
 import { UserMenu } from '@/components/arc/user-menu/user-menu'
+import { ConversationDialogs, type ConversationDialogTarget } from './components/ConversationDialogs'
 import { ProjectNavigation } from './components/ProjectNavigation'
+import { exportConversationMarkdown } from './conversationActions'
 import type { AccountMode } from './components/Account'
 import { WorkspaceData, useWorkspace } from './WorkspaceData'
 import { useTheme } from './Theme'
@@ -297,9 +300,10 @@ const historyWhen = new Intl.DateTimeFormat('zh-CN', {
 })
 
 function HistoryPage() {
-  const { user, revision, report, requireLogin } = useWorkspace()
+  const { user, revision, refresh, notify, report, requireLogin } = useWorkspace()
   const [items, setItems] = useState<Conversation[] | null>(null)
   const [error, setError] = useState('')
+  const [dialogTarget, setDialogTarget] = useState<ConversationDialogTarget | null>(null)
   useEffect(() => {
     if (!user) return
     let active = true
@@ -323,8 +327,38 @@ function HistoryPage() {
     {items.map((row) => <li key={row.id}>
       <Link to={`/chat/${row.id}`}>{row.title || '未命名对话'}</Link>
       <time className="history-meta" dateTime={row.updated_at}>{historyWhen.format(new Date(row.updated_at))}</time>
+      <DropdownMenu
+        label={`会话操作：${row.title || '未命名对话'}`}
+        icon={<Ellipsis size={16} />}
+        iconOnly
+        items={[
+          { label: '重命名会话', icon: <Pencil size={15} />, onSelect: () => setDialogTarget({ mode: 'rename', conversation: row }) },
+          { label: '导出 Markdown', icon: <Download size={15} />, onSelect: async () => {
+            try {
+              await exportConversationMarkdown(row.id, { conversation: row })
+              notify('已导出 Markdown 文件。')
+            } catch (failure) { report(failure) }
+          } },
+          { label: '删除会话', icon: <Trash2 size={15} />, destructive: true, separatorBefore: true, onSelect: () => setDialogTarget({ mode: 'delete', conversation: row }) },
+        ]}
+      />
     </li>)}
-  </ul></section>
+  </ul>
+  <ConversationDialogs
+    target={dialogTarget}
+    onClose={() => setDialogTarget(null)}
+    onRenamed={(updated) => {
+      setItems((current) => current ? current.map((item) => item.id === updated.id ? updated : item) : current)
+      refresh()
+    }}
+    onDeleted={(deletedId) => {
+      setItems((current) => current ? current.filter((item) => item.id !== deletedId) : current)
+      refresh()
+    }}
+    report={report}
+    notify={notify}
+  />
+  </section>
 }
 
 function SearchPanel({ onSelect }: { onSelect: () => void }) {

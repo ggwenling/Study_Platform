@@ -43,6 +43,7 @@
 
 .library-documents { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 9px 12px; min-width: 0; }
 .library-documents h3 { display: flex; align-items: center; gap: 9px; font-size: 15px; padding: 1px 5px 6px; }
+.library-documents h3 > button { margin-left: auto; }
 .library-documents [role="tree"] { max-height: 180px; overflow: auto; scrollbar-width: thin; background: transparent; border: 0; padding: 0; }
 .library-documents [role="treeitem"] { min-height: 23px; height: 23px; font-size: var(--text-caption); }
 .library-documents [role="treeitem"] > span:last-child { text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
