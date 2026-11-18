@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useDisclosurePreference } from '../useDisclosurePreference'
 import { BookmarkPlus, Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
@@ -20,7 +20,7 @@ import { AssistantActivity, activityLabels } from './AssistantActivity'
 const time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const statusText = { pending: '等待生成…', streaming: '正在生成…', stopped: '已停止', failed: '回答失败', completed: '' }
 
-export default function LiveChat({ id }: { id: string }) {
+export default function LiveChat({ id, searchButton }: { id: string; searchButton?: ReactNode }) {
   const { user, chat, revision, refresh, notify, report, requireLogin } = useWorkspace()
   const navigate = useNavigate()
   const [conversation, setConversation] = useState<Conversation | null>(null)
@@ -91,6 +91,17 @@ export default function LiveChat({ id }: { id: string }) {
   }, [messages.length, latest?.content, latest?.status])
 
   useEffect(() => {
+    const node = scroll.current
+    if (!node || typeof ResizeObserver === 'undefined') return
+    // The animated materials panel changes the message viewport height on every frame.
+    const observer = new ResizeObserver(() => {
+      if (follow.current) node.scrollTop = node.scrollHeight
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [user, error])
+
+  useEffect(() => {
     if (!sourceId) return
     let mounted = true
     void api.source(sourceId).then(
@@ -123,6 +134,7 @@ export default function LiveChat({ id }: { id: string }) {
         <header className="chat-header">
           <h1>{displayTitle}</h1>
           <span className="pill">仅限个人使用</span>
+          {searchButton}
           <DropdownMenu
             label="会话操作"
             icon={<Ellipsis size={18} />}
@@ -144,7 +156,7 @@ export default function LiveChat({ id }: { id: string }) {
         </header>
         <div className="conversation" ref={scroll} tabIndex={0} aria-label="消息" onScroll={(event) => {
           const node = event.currentTarget
-          follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < 100
+          follow.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 8
         }}>
           <div className="conversation-inner">
             {!messages.length && <p className="muted">{conversation ? '还没有消息。选好知识库后开始提问。' : '正在读取会话…'}</p>}
@@ -228,8 +240,8 @@ export default function LiveChat({ id }: { id: string }) {
               )
             })}
           </div>
-          <div className="chat-footer"><Composer conversationId={id} preferredLibrary={latest?.scope?.knowledge_base_id ?? conversation?.project_knowledge_base_id ?? undefined} /></div>
         </div>
+        <div className="chat-footer"><Composer conversationId={id} preferredLibrary={latest?.scope?.knowledge_base_id ?? conversation?.project_knowledge_base_id ?? undefined} /></div>
       </section>
       <aside className="source-panel" id="live-sources" aria-label="引用与来源" inert={!panel} aria-hidden={!panel}>
         <div className="source-panel-inner">

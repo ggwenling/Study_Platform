@@ -201,8 +201,8 @@ export const api = {
   deleteConversation: (id: string) => request<void>(`/conversations/${pathId(id)}`, json('DELETE')),
   messages: (id: string, cursor?: string) => request<Page<Message>>(`/conversations/${pathId(id)}/messages` + query({ cursor })),
   overview: () => request<Dashboard>('/dashboard/overview'),
-  search: (q: string, cursor?: string, includeContent = false) => request<Page<SearchItem>>(
-    '/search' + query({ q, cursor, include_content: includeContent ? 'true' : undefined }),
+  search: (q: string, cursor?: string, includeContent = false, signal?: AbortSignal) => request<Page<SearchItem>>(
+    '/search' + query({ q, cursor, include_content: includeContent ? 'true' : undefined }), { signal },
   ),
   capabilities: () => request<Capabilities>('/capabilities'),
   turn: (conversationId: string, turnId: string, signal?: AbortSignal) => request<Turn>(turnPath(conversationId, turnId), { signal }),

@@ -1,6 +1,4 @@
-.app-shell[data-library] { --nav-width: clamp(208px, 14.6vw, 250px); }
 .app-shell[data-library] .topbar { height: 58px; gap: 12px; padding-inline: 19px 22px; }
-.app-shell[data-library] .search-button { min-height: 36px; }
 .library-breadcrumb { min-width: 0; display: flex; align-items: center; gap: 8px; margin-right: auto; font-size: var(--text-sm); }
 .library-breadcrumb a { flex: none; color: var(--text-secondary); }
 .library-breadcrumb strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -123,7 +121,6 @@ button.library-aside-row:hover { background: color-mix(in srgb, var(--ink) 4%, t
   .library-aside { margin-block: 0; }
 }
 @media (max-width: 760px) {
-  .app-shell[data-library] { --nav-width: 158px; }
   .app-shell[data-library] .topbar { padding-inline: 10px; }
   .library-detail { padding: 10px 10px 25px; }
   .library-header { flex-wrap: wrap; gap: 9px; padding-inline: 2px; }

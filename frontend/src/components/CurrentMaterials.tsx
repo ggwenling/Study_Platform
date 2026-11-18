@@ -18,12 +18,14 @@ export function CurrentMaterials({
   libraryId,
   name,
   reveal = 0,
+  summaryMode = false,
   selectedIds = [],
   onSelectedChange,
 }: {
   libraryId: string
   name: string
   reveal?: number
+  summaryMode?: boolean
   selectedIds?: string[]
   onSelectedChange?: (ids: string[]) => void
 }) {
@@ -68,8 +70,12 @@ export function CurrentMaterials({
   const statusSummary = error
     ? '状态读取失败'
     : rows
-      ? `${ready} 份可问答${selectedIds.length ? ` · 已勾选 ${selectedIds.length} 份` : ''}${pending ? ` · ${pending} 份处理中` : ''}${failed ? ` · ${failed} 份需处理` : ''}`
+      ? `${ready} 份可问答${pending ? ` · ${pending} 份处理中` : ''}${failed ? ` · ${failed} 份需处理` : ''}`
       : '正在读取…'
+
+  const scopeSummary = selectedIds.length
+    ? `本轮${summaryMode ? '摘要' : '提问'}已限定 ${selectedIds.length} 份资料`
+    : summaryMode ? '摘要模式 · 请至少勾选 1 份资料' : statusSummary
 
   function toggleMaterial(id: string, checked: boolean) {
     if (!onSelectedChange) return
@@ -82,7 +88,9 @@ export function CurrentMaterials({
 
   return <section className="current-materials" aria-label={`当前知识库资料：${name}`}>
     <Accordion openIndex={open} onOpenChange={setOpen} items={[{
-      title: <span className="current-materials-title">当前库资料 · {name}<small role="status">{statusSummary}</small></span>,
+      title: <span className="current-materials-title"><span>当前库资料 · {name}</span><small role="status" title={scopeSummary}>{scopeSummary}</small></span>,
+      headerAction: selectedIds.length > 0 && <Button type="button" size="sm" variant="ghost" className="clear-material-scope"
+        onClick={() => onSelectedChange?.([])}>清除限定</Button>,
       content: <div className="current-materials-body">
         {error ? <div role="alert"><p>{error}</p>{rows && <p className="muted">下方保留上次读取结果，当前状态尚未确认。</p>}<Button type="button" size="sm" variant="secondary" onClick={() => setAttempt((value) => value + 1)}>重新读取状态</Button></div>
           : rows === null ? <p role="status">正在读取资料…</p>

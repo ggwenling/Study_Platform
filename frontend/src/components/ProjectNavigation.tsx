@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Copy, Download, ExternalLink, Folder, MessageCircle, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Copy, Download, ExternalLink, Folder, MessageCircle, Pencil, Plus, SquarePen, Trash2 } from 'lucide-react'
 import { NavLink, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import type { Conversation, KnowledgeBase, Page } from '@/api/types'
@@ -10,6 +10,7 @@ import { Button } from '@/components/arc/button/button'
 import { ContextMenu, type ContextMenuItem } from '@/components/arc/context-menu/context-menu'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { Input } from '@/components/arc/input/input'
+import { Tooltip } from '@/components/arc/tooltip/tooltip'
 import { useWorkspace } from '../WorkspaceData'
 import { useDisclosurePreference } from '../useDisclosurePreference'
 import { ConversationDialogs, type ConversationDialogTarget } from './ConversationDialogs'
@@ -99,6 +100,8 @@ function ProjectFolder({ kb, openDialog }: { kb: KnowledgeBase; openDialog: (tar
   const [page, setPage] = useState<Page<Conversation> | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const createPending = useRef(false)
   const [attempt, setAttempt] = useState(0)
   const navigate = useNavigate()
   const { pathname } = useLocation()
@@ -109,12 +112,28 @@ function ProjectFolder({ kb, openDialog }: { kb: KnowledgeBase; openDialog: (tar
     void api.conversations(undefined, kb.id).then((value) => { if (current) setPage(value) }, (failure) => { if (current) { setError(errorMessage(failure)); report(failure) } })
     return () => { current = false }
   }, [open, kb.id, revision, attempt])
+  async function createConversation() {
+    if (createPending.current) return
+    createPending.current = true
+    setCreating(true)
+    try {
+      const row = await api.createConversation({ project_knowledge_base_id: kb.id })
+      setOpen(true)
+      refresh()
+      void navigate(`/chat/${row.id}`)
+    } catch (failure) {
+      report(failure)
+    } finally {
+      createPending.current = false
+      setCreating(false)
+    }
+  }
+
   return <div className="project-folder"><Accordion openIndex={open ? 0 : -1} onOpenChange={(index) => setOpen(index === 0)} items={[{
-    title: <span className="project-name"><Folder size={17} /><span>{kb.name}</span></span>, content: <div className="project-conversations">
-      <Button variant="ghost" size="sm" loading={busy} onClick={async () => {
-        setBusy(true)
-        try { const row = await api.createConversation({ project_knowledge_base_id: kb.id }); refresh(); void navigate(`/chat/${row.id}`) } catch (failure) { report(failure) } finally { setBusy(false) }
-      }}><Plus size={14} />新对话</Button>
+    title: <span className="project-name"><Folder size={17} /><span>{kb.name}</span></span>,
+    headerAction: <Tooltip content="新建项目对话"><Button variant="ghost" size="sm" className="project-compose" loading={creating}
+      aria-label={`在「${kb.name}」中新建对话`} onClick={() => void createConversation()}><SquarePen size={15} /></Button></Tooltip>,
+    content: <div className="project-conversations">
       {error ? <><p className="error-text" role="alert">{error}</p><Button variant="ghost" size="sm" onClick={() => setAttempt((value) => value + 1)}>重试</Button></> : !page ? <p role="status">正在读取…</p> : <>
         {page.items.map((row) => <ContextMenu
           key={row.id}

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ArrowUpRight, BookOpen, Copy, FileText, Folder, PanelRight } from 'lucide-react'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
 import { Button } from '@/components/arc/button/button'
@@ -29,7 +29,7 @@ const demoDays = Array.from({ length: 147 }, (_, index) => ({
   count: index % 47 === 0 ? 8 : index % 13 === 0 ? 4 : index % 5 === 0 ? 1 : 0,
 }))
 
-export default function DemoChat({ notify }: { notify: (message: string) => void }) {
+export default function DemoChat({ notify, searchButton }: { notify: (message: string) => void; searchButton?: ReactNode }) {
   const { user, requireLogin } = useWorkspace()
   const [sourcesOpen, setSourcesOpen] = useState(true)
   const sourceNotice = () => user ? notify('此引用来自示例会话。') : requireLogin()
@@ -50,6 +50,7 @@ export default function DemoChat({ notify }: { notify: (message: string) => void
         <header className="chat-header">
           <h1>产品需求讨论</h1>
           <span className="pill">示例会话</span>
+          {searchButton}
           <Tooltip content={sourcesOpen ? '收起引用与来源' : '展开引用与来源'}>
             <Button variant="ghost" className="icon-button" aria-label={sourcesOpen ? '收起引用与来源' : '展开引用与来源'} aria-expanded={sourcesOpen} aria-controls={sourcesOpen ? 'chat-sources' : undefined} onClick={() => setSourcesOpen(!sourcesOpen)}>
               <PanelRight size={18} />
@@ -79,8 +80,8 @@ export default function DemoChat({ notify }: { notify: (message: string) => void
               </Tooltip>
             </article>
           </div>
-          <div className="chat-footer"><Composer demo /></div>
         </div>
+        <div className="chat-footer"><Composer demo /></div>
       </section>
       <aside className="source-panel" id="chat-sources" aria-label="引用与来源" inert={!sourcesOpen} aria-hidden={!sourcesOpen}>
         <div className="source-panel-inner">

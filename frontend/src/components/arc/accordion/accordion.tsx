@@ -9,7 +9,7 @@ import type { TargetAndTransition, Variants } from "motion/react";
 import { motionTokens } from "../lib/motion-tokens";
 import styles from "./accordion.module.css";
 
-export interface AccordionItem { title: ReactNode; content: ReactNode; }
+export interface AccordionItem { title: ReactNode; content: ReactNode; headerAction?: ReactNode; }
 export interface AccordionProps {
   items: AccordionItem[];
   defaultOpen?: number;
@@ -44,11 +44,11 @@ export function Accordion({ items, defaultOpen = 0, openIndex, onOpenChange, siz
   const reduced = useReducedMotion();
   return <AccordionPrimitive.Root className={[styles.accordion, size === "lg" ? styles.lg : ""].filter(Boolean).join(" ")} type="single" collapsible value={openValue} onValueChange={(value) => { setOpenValue(value); onOpenChange?.(value === "" ? -1 : Number(value)); }}>
     {items.map((item, index) => { const open = openValue === String(index); return <AccordionPrimitive.Item className={styles.item} value={String(index)} key={index}>
-      <AccordionPrimitive.Header className={styles.header}>
+      <div className={styles.headingRow}><AccordionPrimitive.Header className={styles.header}>
         <AccordionPrimitive.Trigger className={styles.trigger}>
           <span>{item.title}</span><motion.span className={styles.icon} initial={false} animate={{ rotate: open ? 180 : 0 }} transition={reduced ? { duration: 0 } : motionTokens.spring.snappy}><ChevronDown width={17} height={17} aria-hidden="true" /></motion.span>
         </AccordionPrimitive.Trigger>
-      </AccordionPrimitive.Header>
+      </AccordionPrimitive.Header>{item.headerAction}</div>
       {/* Radix keeps semantics and ids; motion owns the height so a toggle mid-flight retargets instead of restarting. */}
       <AccordionPrimitive.Content forceMount asChild>
         <motion.div className={styles.panel} inert={!open} aria-hidden={!open} initial={false} animate={open ? "open" : "closed"} variants={reduced ? panelStill : panelMotion}>

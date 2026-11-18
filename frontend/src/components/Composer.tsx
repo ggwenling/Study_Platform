@@ -183,18 +183,6 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
       {!demo && requestedLibrary && !libraryId && libraries.length > 0 && <p className="composer-hint">原知识库不可用，请重新选择。</p>}
       {!demo && modelReady === false && <p className="composer-hint">当前模型不可用，请在设置的「模型连接」中配置或测试连接。</p>}
       {dragging && <p className="composer-hint" role="status">松开鼠标，将文件导入当前知识库</p>}
-      {!demo && (selectedMaterialIds.length > 0 || summaryMode) && (
-        <div className="composer-scope-bar">
-          <span className="composer-hint">
-            {selectedMaterialIds.length > 0
-              ? `本轮${summaryMode ? '摘要' : '提问'}已限定 ${selectedMaterialIds.length} 份资料`
-              : '摘要模式：请在下方「当前库资料」中勾选至少 1 份可问答资料'}
-          </span>
-          {selectedMaterialIds.length > 0 && (
-            <Button type="button" size="sm" variant="ghost" onClick={() => setSelectedMaterialIds([])}>清除限定</Button>
-          )}
-        </div>
-      )}
       <div className="composer-field">
         <FadingTextarea
           label="提问"
@@ -302,6 +290,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
         libraryId={libraryId}
         name={libraries.find((library) => library.id === libraryId)!.name}
         reveal={uploadTarget?.id === libraryId ? uploadTarget.at : 0}
+        summaryMode={summaryMode}
         selectedIds={selectedMaterialIds}
         onSelectedChange={setSelectedMaterialIds}
       />

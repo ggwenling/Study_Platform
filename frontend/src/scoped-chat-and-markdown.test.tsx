@@ -30,9 +30,6 @@ vi.mock('./components/arc/select/select', () => ({
     </select>
   ),
 }))
-vi.mock('./components/arc/accordion/accordion', () => ({
-  Accordion: ({ items }: any) => <>{items.map((item: any, index: number) => <section key={index}>{item.title}{item.content}</section>)}</>,
-}))
 
 let root: Root
 let node: HTMLDivElement
@@ -96,6 +93,8 @@ describe('scoped material selection & in-conversation summary toggle', () => {
     await render(<Composer conversationId="conv-1" />)
     await act(async () => { await Promise.resolve() })
 
+    const materialsTrigger = node.querySelector<HTMLButtonElement>('.current-materials button[aria-expanded]')!
+    await act(async () => materialsTrigger.click())
     const checkboxes = node.querySelectorAll<HTMLInputElement>('input[type=checkbox]')
     expect(checkboxes).toHaveLength(2)
     await act(async () => {
@@ -103,6 +102,8 @@ describe('scoped material selection & in-conversation summary toggle', () => {
       checkboxes[1].click()
     })
     expect(node.textContent).toContain('本轮提问已限定 2 份资料')
+    expect(node.querySelector('.current-materials [role=status]')?.textContent).toContain('本轮提问已限定 2 份资料')
+    expect(node.querySelector('form.composer')?.textContent).not.toContain('已限定')
 
     const textarea = node.querySelector('textarea')!
     await act(async () => {
@@ -139,6 +140,12 @@ describe('scoped material selection & in-conversation summary toggle', () => {
       material_ids: ['m1', 'm2'],
       content: '提炼核心要点',
     })
+
+    await act(async () => materialsTrigger.click())
+    const clear = [...node.querySelectorAll<HTMLButtonElement>('.current-materials button')].find((button) => button.textContent === '清除限定')!
+    await act(async () => clear.click())
+    expect(materialsTrigger.getAttribute('aria-expanded')).toBe('false')
+    expect(node.querySelector('.current-materials [role=status]')?.textContent).toContain('请至少勾选 1 份资料')
 
     const select = node.querySelector('select')!
     await act(async () => {
