@@ -60,7 +60,7 @@ def run_hit_test(
         raise ApiError(422, "validation_error", "测试提问不能为空")
 
     owned_kb(db, user, kb_id)
-    with model_connections.task(user.id, kb_id=kb_id):
+    with model_connections.task(user.id, llm={"id": None, "kind": "llm"}, kb_id=kb_id):
         index_ids = visible_indices(db, user.id, kb_id, material_ids)
         terms = lexical_query_terms(cleaned_query)
         settings = get_settings()
@@ -264,7 +264,40 @@ def edit_fragment_text(
     if not exists_in_kb:
         raise missing()
 
-    with model_connections.task(user.id, kb_id=kb_id):
+    with model_connections.task(user.id, llm={"id": None, "kind": "llm"}, kb_id=kb_id):
+        expected_profile = model_connections.embedding_profile(user.id, kb_id, db)
+        pre_idx_profile = db.scalar(
+            sa.select(IndexVersion.embedding_profile)
+            .select_from(Material)
+            .join(
+                MaterialVersion,
+                sa.and_(
+                    MaterialVersion.material_id == Material.id,
+                    MaterialVersion.is_current.is_(True),
+                ),
+            )
+            .join(
+                IndexVersion,
+                sa.and_(
+                    IndexVersion.material_version_id == MaterialVersion.id,
+                    IndexVersion.is_active.is_(True),
+                    IndexVersion.status == "ready",
+                ),
+            )
+            .join(MaterialChunk, MaterialChunk.index_version_id == IndexVersion.id)
+            .where(
+                Material.knowledge_base_id == kb_id,
+                Material.owner_user_id == user.id,
+                Material.deleted_at.is_(None),
+                Material.status == "active",
+                MaterialChunk.id == chunk_id,
+            )
+        )
+        if pre_idx_profile is None:
+            raise ApiError(409, "index_changed", "片段索引已更新，请刷新后重试。")
+        if pre_idx_profile != expected_profile:
+            raise ApiError(409, "embedding_profile_mismatch", "资料向量配置已变更，请重新索引")
+
         vectors = embed_texts(
             [cleaned],
             context=ModelUsageContext(user.id, "embedding"),
@@ -288,6 +321,7 @@ def edit_fragment_text(
                 Material.title,
                 MaterialVersion.source_mime,
                 IndexVersion.ready_at,
+                IndexVersion.embedding_profile,
                 sa.func.coalesce(phase, "succeeded"),
             )
             .select_from(Material)
@@ -319,8 +353,10 @@ def edit_fragment_text(
         if row is None:
             raise ApiError(409, "index_changed", "片段索引已更新，请刷新后重试。")
 
-        chunk, mat_id, title, mime, ready_at, proc_status = row
+        chunk, mat_id, title, mime, ready_at, idx_profile, proc_status = row
         profile = model_connections.embedding_profile(user.id, kb_id, db)
+        if idx_profile != profile:
+            raise ApiError(409, "embedding_profile_mismatch", "资料向量配置已变更，请重新索引")
         digest = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
         db.execute(
             sa.update(MaterialChunk)

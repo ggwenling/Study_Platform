@@ -159,14 +159,14 @@ def workshop_env(tmp_path, monkeypatch):
             base_url="http://testserver/api/v1",
             headers={"Origin": "http://testserver"},
         ) as http:
-            yield http, kb.id, chunk_ids
+            yield http, db, kb.id, chunk_ids
         db.close()
         tx.rollback()
     engine.dispose()
 
 
 def test_hit_test_hybrid_weights_and_fragment_reembedding(workshop_env):
-    http, kb_id, chunk_ids = workshop_env
+    http, _db, kb_id, chunk_ids = workshop_env
     c1, c2, c3 = [str(cid) for cid in chunk_ids]
 
     # 1. Pure vector mode (lexical_weight=0): c1 (#1), c2 (#2), c3 (below threshold, rrf=0)
@@ -215,3 +215,62 @@ def test_hit_test_hybrid_weights_and_fragment_reembedding(workshop_env):
     assert top_hit["vector_similarity"] == pytest.approx(1.0, abs=1e-3)
     assert top_hit["lexical_rank"] == 1
     assert len(top_hit["matched_terms"]) >= 1
+
+
+
+def test_rag_workshop_decouples_untested_llm_and_enforces_embedding_profile(workshop_env):
+    from study_platform.persistence.models import ModelConnection, ModelConnectionLease
+
+    http, db, kb_id, chunk_ids = workshop_env
+    kb = db.get(KnowledgeBase, kb_id)
+    target_chunk_id = str(chunk_ids[0])
+
+    # 1. User has a default LLM connection in status='draft' (untested)
+    draft_llm = ModelConnection(
+        id=uuid4(),
+        owner_user_id=kb.owner_user_id,
+        kind="llm",
+        name="UntestedLLM",
+        revision=1,
+        versions={"1": {"base_url": "https://api.example.test/v1", "model": "m1", "key": "enc"}},
+        is_default=True,
+        status="draft",
+    )
+    db.add(draft_llm)
+    db.commit()
+
+    # Both hit-test and fragment edit are pure embedding operations -> must succeed (200), zero LLM leases
+    hit_res = http.post(
+        f"/knowledge-bases/{kb_id}/hit-test",
+        json={"query": "拉格朗日乘子", "top_k": 3, "lexical_weight": 0.4},
+    )
+    assert hit_res.status_code == 200
+
+    patch_ok = http.patch(
+        f"/knowledge-bases/{kb_id}/fragments/{target_chunk_id}",
+        json={"text": "泛函极值与对偶空间修正版"},
+    )
+    assert patch_ok.status_code == 200
+    lease_count = db.scalar(
+        sa.select(sa.func.count())
+        .select_from(ModelConnectionLease)
+        .where(ModelConnectionLease.connection_id == draft_llm.id)
+    )
+    assert lease_count == 0
+
+    # 2. Switch KB embedding_binding profile without re-indexing -> fragment edit must reject with 409
+    kb.embedding_binding = {
+        "base_url": "https://api.example.test/v1",
+        "model": "custom-embed-v2",
+        "dimensions": 1024,
+        "profile": "custom-embed-v2:1024",
+    }
+    db.commit()
+
+    mismatch_res = http.patch(
+        f"/knowledge-bases/{kb_id}/fragments/{target_chunk_id}",
+        json={"text": "不应写入的配置冲突文本"},
+    )
+    assert mismatch_res.status_code == 409
+    assert mismatch_res.json()["code"] == "embedding_profile_mismatch"
+    assert db.get(MaterialChunk, chunk_ids[0]).text == "泛函极值与对偶空间修正版"
