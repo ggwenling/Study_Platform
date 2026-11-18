@@ -171,6 +171,8 @@ h1, h2, h3, p { margin: 0; }
 .current-materials-list strong { display: block; font-weight: 500; }
 .current-materials-list span { display: block; margin-top: 4px; color: var(--text-secondary); }
 .current-materials-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.material-scope-checkbox { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--ink); cursor: pointer; flex: none; }
+.composer-scope-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding-bottom: 4px; }
 .composer .composer-hint { overflow-wrap: anywhere; }
 .composer-login { position: absolute; inset: 0; z-index: 1; border: 0; border-radius: 24px; background: transparent; }
 .composer:focus-within { border-color: var(--border-strong); }
@@ -294,6 +296,33 @@ h1, h2, h3, p { margin: 0; }
 }
 .citation-list { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0 2px 40px; }
 .citation:is(button) { font-size: var(--text-xs); gap: 6px; max-width: 100%; white-space: normal; height: auto; }
+.inline-citation {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: super;
+  margin-inline: 2px;
+  padding: 1px 6px;
+  min-height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 0.72em;
+  font-family: var(--font-mono);
+  line-height: 1.25;
+}
+button.inline-citation:hover {
+  border-color: var(--border-strong);
+  background: var(--hover);
+  color: var(--ink);
+}
+.inline-citation-static { cursor: default; }
+.inline-citation-tooltip { display: grid; gap: 4px; max-width: 280px; text-align: left; white-space: normal; line-height: 1.45; }
+.inline-citation-tooltip strong { font-weight: 600; color: inherit; }
+.inline-citation-tooltip span { opacity: .88; font-size: var(--text-xs); }
+.source-badge { display: inline-flex; align-items: center; padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); flex: none; }
+.answer .katex-display { overflow-x: auto; overflow-y: hidden; padding-block: 4px; }
 .copy-button:is(button) { margin-left: 32px; color: var(--text-secondary); }
 .chat-footer {
   position: sticky;

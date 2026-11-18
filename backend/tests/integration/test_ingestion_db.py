@@ -340,3 +340,26 @@ def test_classification_runs_after_ingestion_without_applying_suggestions(state,
         assert job.result["suggestion"]["topic"] == "Test topic"
         material = db.get(Material, material_id)
         assert material.topic is None and material.tags == []
+
+
+def test_worker_publishes_markdown_headings_and_locations(state):
+    from study_platform.api.v1.library_detail import locations
+
+    factory, _, version_id, material_id, kb_id = state
+    md_text = "# 第一章 导论\n导论正文\n\n## 1.1 背景\n背景细节\n"
+    with factory.begin() as db:
+        version = db.get(MaterialVersion, version_id)
+        version.source_mime = "text/markdown"
+        version.byte_size = len(md_text.encode("utf-8"))
+        version.source_sha256 = hashlib.sha256(md_text.encode("utf-8")).hexdigest()
+        owner_id = db.get(Material, material_id).owner_user_id
+    source_path(version_id).write_text(md_text, encoding="utf-8")
+
+    assert ingestion.run_once()
+    with factory() as db:
+        user = SimpleNamespace(id=owner_id)
+        rows = locations(kb_id, material_id, db=db, user=user)
+        assert [(row["heading"], row["locator"]["start_line"]) for row in rows] == [
+            ("第一章 导论", 1),
+            ("1.1 背景", 4),
+        ]

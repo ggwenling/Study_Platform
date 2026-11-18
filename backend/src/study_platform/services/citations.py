@@ -91,12 +91,15 @@ def message_dto(db, message) -> dict:
     snapshot = run.source_scope if run else {}
     scope = None
     if snapshot.get("knowledge_base_id"):
+        raw_ids = snapshot.get("material_ids")
         scope = {
             "knowledge_base_id": snapshot["knowledge_base_id"],
             "knowledge_base_name": snapshot.get(
                 "knowledge_base_name", snapshot.get("name_snapshot", "")
             ),
             "answer_mode": snapshot.get("answer_mode", "knowledge_only"),
+            "intent": snapshot.get("intent", "qa"),
+            "selected_material_ids": raw_ids if isinstance(raw_ids, list) and raw_ids else None,
             "index_version_ids": snapshot.get("index_version_ids", []),
         }
     citations = db.scalars(

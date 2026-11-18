@@ -5029,6 +5029,30 @@
             ],
             "title": "Answer Mode"
           },
+          "intent": {
+            "type": "string",
+            "enum": [
+              "qa",
+              "summary"
+            ],
+            "title": "Intent",
+            "default": "qa"
+          },
+          "selected_material_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Material Ids"
+          },
           "index_version_ids": {
             "items": {
               "type": "string",

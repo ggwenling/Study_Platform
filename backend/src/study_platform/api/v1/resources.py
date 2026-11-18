@@ -87,6 +87,8 @@ class ScopeDTO(BaseModel):
     knowledge_base_id: UUID
     knowledge_base_name: str
     answer_mode: Literal["knowledge_only", "with_general"]
+    intent: Literal["qa", "summary"] = "qa"
+    selected_material_ids: list[UUID] | None = None
     index_version_ids: list[UUID]
 
 

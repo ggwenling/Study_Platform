@@ -164,7 +164,18 @@ export default function LiveChat({ id }: { id: string }) {
                   {isUser ? <div className="user-bubble">{message.content}</div> : (
                     <>
                       <div className="answer">
-                        {message.content && <MarkdownContent>{message.content}</MarkdownContent>}
+                        {message.content && (
+                          <MarkdownContent
+                            citations={message.citations}
+                            onSelectCitation={(citation) => {
+                              setSelectedId(message.id)
+                              setPanel(true)
+                              openSource(citation)
+                            }}
+                          >
+                            {message.content}
+                          </MarkdownContent>
+                        )}
                         {message.turn_id && chat.recoveryErrors[message.turn_id] && ['pending', 'streaming'].includes(message.status)
                           ? <p className="muted" role="status">暂时无法确认生成状态。<Button size="sm" variant="secondary" onClick={() => chat.recover(id, message.turn_id!)}>重新查询状态</Button></p>
                           : <p className="muted activity-status" role="status" aria-live="polite">{status}</p>}
@@ -193,13 +204,25 @@ export default function LiveChat({ id }: { id: string }) {
       <aside className="source-panel" id="live-sources" aria-label="引用与来源" inert={!panel} aria-hidden={!panel}>
         <div className="source-panel-inner">
           <h2>引用与来源</h2>
-          {focused?.scope && <section className="source-section"><span className="muted">本轮回答范围</span><h3>{focused.scope.knowledge_base_name}</h3><p>{focused.scope.answer_mode === 'with_general' ? '含通用知识补充' : '仅知识库'}</p></section>}
+          {focused?.scope && (
+            <section className="source-section">
+              <span className="muted">本轮回答范围</span>
+              <h3>{focused.scope.knowledge_base_name}</h3>
+              <p>
+                {[
+                  focused.scope.intent === 'summary' ? '摘要提炼' : null,
+                  focused.scope.selected_material_ids?.length ? `限定 ${focused.scope.selected_material_ids.length} 份资料` : null,
+                  focused.scope.answer_mode === 'with_general' ? '含通用知识补充' : '仅知识库',
+                ].filter(Boolean).join(' · ')}
+              </p>
+            </section>
+          )}
           <section className="source-section">
             <h3>已使用的资料</h3>
             {focused?.citations.length ? <div className="source-cards">
               {focused.citations.map((citation) => <Button key={citation.id} variant="secondary" className="source-card" onClick={() => openSource(citation)}>
                 <span className="source-card-content">
-                  <span className="source-card-title"><FileText size={16} /><span>{citation.title}</span></span>
+                  <span className="source-card-title"><span className="source-badge">{citation.source_label}</span><FileText size={16} /><span>{citation.title}</span></span>
                   {citation.availability === 'available' && <span className="source-excerpt">{citation.quote}</span>}
                   <small>{citation.availability === 'available' ? citation.location_label : '来源已不可用'}</small>
                 </span>

@@ -53,7 +53,9 @@ export function Home() {
                 if (!user) return requireLogin()
                 if (index === 2) composer.current?.chooseImage()
                 else {
-                  setSummary(index === 1)
+                  const nextSummary = index === 1
+                  setSummary(nextSummary)
+                  composer.current?.setSummaryMode(nextSummary)
                   composer.current?.focus()
                 }
               }}>

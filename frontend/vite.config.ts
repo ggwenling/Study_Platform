@@ -14,6 +14,7 @@ export default defineConfig({
             { name: 'vendor-three', test: /node_modules[\\/](three|thinking-orbs)/ },
             { name: 'vendor-metal', test: /node_modules[\\/]metal-fx/ },
             { name: 'vendor-highlight', test: /node_modules[\\/](highlight\.js|rehype-highlight)/ },
+            { name: 'vendor-katex', test: /node_modules[\\/](katex|rehype-katex)/ },
             {
               name: 'vendor-markdown',
               test: /node_modules[\\/](react-markdown|remark-|rehype-|unified|micromark|mdast|vfile|bail|trough)/,

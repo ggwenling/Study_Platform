@@ -125,9 +125,13 @@ def test_message_snapshot_scope_only_exposes_public_fields():
         "knowledge_base_id",
         "knowledge_base_name",
         "answer_mode",
+        "intent",
+        "selected_material_ids",
         "index_version_ids",
     }
     assert dto["scope"]["knowledge_base_name"] == "Original name"
+    assert dto["scope"]["intent"] == "qa"
+    assert dto["scope"]["selected_material_ids"] is None
 
 
 def test_activity_uses_shanghai_midnight_and_twenty_one_weeks():

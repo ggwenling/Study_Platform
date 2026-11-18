@@ -88,4 +88,7 @@ it('publishes the fields consumed by the frontend', () => {
   expect(contract.components.schemas.ChatRequest.properties).toEqual(expect.objectContaining({
     conversation_id: expect.any(Object), answer_mode: expect.any(Object), intent: expect.any(Object), material_ids: expect.any(Object),
   }))
+  expect(contract.components.schemas.ScopeDTO.properties).toEqual(expect.objectContaining({
+    intent: expect.any(Object), selected_material_ids: expect.any(Object),
+  }))
 })

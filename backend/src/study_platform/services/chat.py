@@ -57,9 +57,15 @@ def owned_conversation(db, owner, conversation_id, *, lock=False):
 
 
 def scope_dto(run):
-    return {key: run.source_scope[key] for key in (
-        "knowledge_base_id", "knowledge_base_name", "answer_mode", "index_version_ids"
-    )}
+    raw_ids = run.source_scope.get("material_ids")
+    return {
+        "knowledge_base_id": run.source_scope["knowledge_base_id"],
+        "knowledge_base_name": run.source_scope["knowledge_base_name"],
+        "answer_mode": run.source_scope["answer_mode"],
+        "intent": run.source_scope.get("intent", "qa"),
+        "selected_material_ids": raw_ids if isinstance(raw_ids, list) and raw_ids else None,
+        "index_version_ids": run.source_scope["index_version_ids"],
+    }
 
 
 def visible_indices(db, owner, kb_id, material_ids=None, *, index_ids=None):

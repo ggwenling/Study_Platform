@@ -1,13 +1,12 @@
 import { lazy, Suspense, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { DragEvent, Ref } from 'react'
-import { ArrowUp, FileText, Globe, Image, Paperclip, Plus, Square } from 'lucide-react'
+import { ArrowUp, FileSpreadsheet, FileText, Globe, Image, Paperclip, Plus, Square } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
 const ComposerMetalSend = lazy(() =>
   import('./ComposerMetalSend').then((m) => ({ default: m.ComposerMetalSend })),
 )
 import { api } from '@/api/client'
-import { allPages, errorMessage } from '@/api/ui'
-import type { Material } from '@/api/types'
+import { errorMessage } from '@/api/ui'
 import { clipboardImageFiles, useUploadQueue } from '../useUploadQueue'
 import { useWorkspace } from '../WorkspaceData'
 import { Button } from '@/components/arc/button/button'
@@ -27,7 +26,11 @@ function shortLibraryName(name: string) {
   return Array.from(name.replace(/^【演示】\s*/, '') || name).slice(0, 4).join('')
 }
 
-export type ComposerHandle = { focus: () => void; chooseImage: () => void }
+export type ComposerHandle = {
+  focus: () => void
+  chooseImage: () => void
+  setSummaryMode: (enabled: boolean) => void
+}
 
 export function Composer({ demo = false, conversationId, preferredLibrary, summary = false, ref }: {
   demo?: boolean
@@ -36,12 +39,12 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   summary?: boolean
   ref?: Ref<ComposerHandle>
 }) {
-  const { user, libraries, capabilities, chat, notify, report, requireLogin, refresh, revision } = useWorkspace()
+  const { user, libraries, capabilities, chat, notify, report, requireLogin, refresh } = useWorkspace()
   const [draft, setDraft] = useState('')
   const [supplement, setSupplement] = useState(false)
+  const [summaryMode, setSummaryMode] = useState(summary)
   const [selected, setSelected] = useState('')
-  const [ready, setReady] = useState<Material[]>([])
-  const [materialId, setMaterialId] = useState('')
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([])
   const [uploadTarget, setUploadTarget] = useState<{ id: string; at: number } | null>(null)
   const [pasteOpen, setPasteOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -71,20 +74,23 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   })
 
   useEffect(() => {
+    setSummaryMode(summary)
+  }, [summary])
+
+  useEffect(() => {
+    setSelectedMaterialIds([])
+  }, [libraryId])
+
+  useEffect(() => {
     if (!reducedMotion) void import('./ComposerMetalSend')
   }, [reducedMotion])
 
-  useEffect(() => {
-    if (demo || !summary || !libraryId) return
-    let active = true
-    setReady([])
-    setMaterialId('')
-    void allPages((cursor) => api.materials(libraryId, cursor)).then(
-      (materials) => { if (active) setReady(materials.filter((item) => item.status === 'ready')) },
-      (error) => { if (active) report(error) },
-    )
-    return () => { active = false }
-  }, [libraryId, summary, demo, revision])
+  function applySummaryMode(enabled: boolean) {
+    setSummaryMode(enabled)
+    if (enabled && libraryId && !selectedMaterialIds.length) {
+      setUploadTarget({ id: libraryId, at: Date.now() })
+    }
+  }
 
   async function submit() {
     const content = draft.trim()
@@ -93,14 +99,17 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
     if (!user) return requireLogin()
     if (!libraryId) return notify('请先创建或选择知识库。')
     if (modelReady === false) return notify('当前模型不可用，请在设置的「模型连接」中配置或测试连接。')
-    if (summary && !ready.some((material) => material.id === materialId && material.knowledge_base_id === libraryId)) return notify('请先选择一份已就绪的资料。')
+    if (summaryMode && selectedMaterialIds.length === 0) {
+      setUploadTarget({ id: libraryId, at: Date.now() })
+      return notify('请先在下方「当前库资料」中勾选要提炼的已就绪资料。')
+    }
     if (pending) return notify('请先重发上次请求，确认发送结果。')
     if (await chat.send({
       conversation_id: conversationId,
       knowledge_base_id: libraryId,
       answer_mode: supplement ? 'with_general' : 'knowledge_only',
-      intent: summary ? 'summary' : 'qa',
-      material_ids: summary ? [materialId] : null,
+      intent: summaryMode ? 'summary' : 'qa',
+      material_ids: selectedMaterialIds.length > 0 ? selectedMaterialIds : null,
       content,
     })) setDraft((current) => current.trim() === content ? '' : current)
   }
@@ -126,6 +135,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
   useImperativeHandle(ref, () => ({
     focus: () => form.current?.querySelector('textarea')?.focus(),
     chooseImage: () => chooseFile(true),
+    setSummaryMode: applySummaryMode,
   }))
 
   function onDragOver(event: DragEvent<HTMLFormElement>) {
@@ -168,12 +178,23 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
       {!demo && requestedLibrary && !libraryId && libraries.length > 0 && <p className="composer-hint">原知识库不可用，请重新选择。</p>}
       {!demo && modelReady === false && <p className="composer-hint">当前模型不可用，请在设置的「模型连接」中配置或测试连接。</p>}
       {dragging && <p className="composer-hint" role="status">松开鼠标，将文件导入当前知识库</p>}
-      {summary && <Select label="摘要资料" value={materialId} onValueChange={setMaterialId} options={ready.map(({ id, title }) => ({ value: id, label: title }))} placeholder="选择已就绪资料" />}
+      {!demo && (selectedMaterialIds.length > 0 || summaryMode) && (
+        <div className="composer-scope-bar">
+          <span className="composer-hint">
+            {selectedMaterialIds.length > 0
+              ? `本轮${summaryMode ? '摘要' : '提问'}已限定 ${selectedMaterialIds.length} 份资料`
+              : '摘要模式：请在下方「当前库资料」中勾选至少 1 份可问答资料'}
+          </span>
+          {selectedMaterialIds.length > 0 && (
+            <Button type="button" size="sm" variant="ghost" onClick={() => setSelectedMaterialIds([])}>清除限定</Button>
+          )}
+        </div>
+      )}
       <div className="composer-field">
         <FadingTextarea
           label="提问"
           className="composer-input"
-          placeholder={summary ? '你希望提炼哪些内容？' : demo || conversationId ? '向你的知识库提问…' : '向你的资料提问…'}
+          placeholder={summaryMode ? '你希望提炼哪些内容？' : demo || conversationId ? '向你的知识库提问…' : '向你的资料提问…'}
           rows={1}
           maxLength={8000}
           value={draft}
@@ -211,6 +232,20 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
           }} />
         ))}
         <div className="composer-options">
+          {!demo && (
+            <Tooltip content={summaryMode ? '已开启摘要提炼模式，点击切回普通问答' : '当前为普通问答，点击切换为摘要提炼模式'}>
+              <Button
+                type="button"
+                variant="secondary"
+                className="composer-supplement"
+                aria-label="摘要模式"
+                aria-pressed={summaryMode}
+                onClick={() => applySummaryMode(!summaryMode)}
+              >
+                <FileSpreadsheet size={17} aria-hidden="true" />
+              </Button>
+            </Tooltip>
+          )}
           <Tooltip content={supplement ? '已开启通用知识补充' : '当前仅使用知识库，点击开启通用知识补充'}>
             <Button type="button" variant="secondary" className="composer-supplement" aria-label="通用知识补充" aria-pressed={supplement} onClick={() => setSupplement((on) => !on)}>
               <Globe size={18} aria-hidden="true" />
@@ -256,7 +291,16 @@ export function Composer({ demo = false, conversationId, preferredLibrary, summa
       )}
       {pending && <Button type="button" variant="secondary" size="sm" onClick={async () => { if (await chat.resend()) setDraft('') }}>重发上次请求</Button>}
     </form>
-    {!demo && user && libraryId && <CurrentMaterials key={`${user.id}:${libraryId}`} libraryId={libraryId} name={libraries.find((library) => library.id === libraryId)!.name} reveal={uploadTarget?.id === libraryId ? uploadTarget.at : 0} />}
+    {!demo && user && libraryId && (
+      <CurrentMaterials
+        key={`${user.id}:${libraryId}`}
+        libraryId={libraryId}
+        name={libraries.find((library) => library.id === libraryId)!.name}
+        reveal={uploadTarget?.id === libraryId ? uploadTarget.at : 0}
+        selectedIds={selectedMaterialIds}
+        onSelectedChange={setSelectedMaterialIds}
+      />
+    )}
     <PasteTextDialog
       open={pasteOpen}
       onOpenChange={setPasteOpen}
