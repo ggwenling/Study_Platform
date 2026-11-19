@@ -51,7 +51,7 @@ export function ProjectNavigation() {
   const [dialogTarget, setDialogTarget] = useState<ConversationDialogTarget | null>(null)
   const navigate = useNavigate()
   const { pathname } = useLocation()
-  return <div className="sidebar-sections">
+  return <div className="sidebar-sections" role="region" aria-label="最近对话与项目" tabIndex={0}>
     <section className="recent">
       <Accordion openIndex={recentOpen ? 0 : -1} onOpenChange={(index) => setRecentOpen(index === 0)} items={[{ title: '最近对话', content: <>
         {!recent.length && <p>{loading ? '正在读取…' : user ? '暂无最近对话' : '登录后查看最近对话'}</p>}

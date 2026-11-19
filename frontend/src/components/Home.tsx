@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronRight, FileText, HelpCircle, Image, Layers, MessageCircle, PanelRight } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
+import { animate } from 'motion/mini'
 import { Link, useLocation } from 'react-router'
 import { Button } from '@/components/arc/button/button'
 import { Composer } from './Composer'
@@ -14,6 +15,44 @@ const shortcuts = [
   { label: '总结与提炼', description: '整理重点，提炼要点', icon: FileText },
   { label: '上传图片并识别', description: '提取图片中的文字', icon: Image },
 ]
+
+function HomeOrbit() {
+  const orbit = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const node = orbit.current!
+    const canAnimate = window.matchMedia('(min-width: 761px) and (prefers-reduced-motion: no-preference)')
+    let visible = false
+    let animation: ReturnType<typeof animate> | undefined
+
+    function sync() {
+      if (!canAnimate.matches) {
+        animation?.cancel()
+        animation = undefined
+      } else if (visible && document.visibilityState === 'visible') {
+        animation ??= animate(node, {
+          transform: ['perspective(1100px) rotateY(-4deg)', 'perspective(1100px) rotateY(4deg)'],
+        }, { duration: 14, repeat: Infinity, repeatType: 'reverse', ease: 'easeInOut' })
+        animation.play()
+      } else {
+        animation?.pause()
+      }
+    }
+
+    const observer = new IntersectionObserver(([entry]) => { visible = entry.isIntersecting; sync() })
+    observer.observe(node)
+    canAnimate.addEventListener('change', sync)
+    document.addEventListener('visibilitychange', sync)
+    return () => {
+      observer.disconnect()
+      canAnimate.removeEventListener('change', sync)
+      document.removeEventListener('visibilitychange', sync)
+      animation?.cancel()
+    }
+  }, [])
+
+  return <div ref={orbit} className="orbit-light home-orbit" aria-hidden="true" />
+}
 
 export function Home() {
   const reduced = useReducedMotion()
@@ -37,12 +76,7 @@ export function Home() {
   return (
     <div className="home" data-overview={panelOpen}>
       <div className="home-hero">
-        <motion.div
-          aria-hidden="true"
-          className="orbit-light"
-          animate={reduced ? { opacity: .8, x: 0, y: 0 } : { opacity: [.78, 1, .78], x: [0, 15, 0], y: [0, -8, 0] }}
-          transition={reduced ? { duration: 0 } : { duration: 18, repeat: Infinity, ease: 'easeInOut' }}
-        />
+        <HomeOrbit />
         <div className="home-content">
           <header className="welcome">
             <h1>欢迎使用 知循</h1>

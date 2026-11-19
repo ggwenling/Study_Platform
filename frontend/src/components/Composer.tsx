@@ -22,8 +22,8 @@ import { Input } from '@/components/arc/input/input'
 const demoLibrary = [{ value: 'product', label: '产品资料库' }]
 const emptyLibrary = [{ value: 'empty', label: '暂无可用知识库', disabled: true }]
 
-function shortLibraryName(name: string) {
-  return Array.from(name.replace(/^【演示】\s*/, '') || name).slice(0, 4).join('')
+function libraryButtonLabel(name: string) {
+  return name.replace(/^【(?:演示|模拟)】\s*/, '') || name
 }
 
 export type ComposerHandle = {
@@ -248,7 +248,8 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
             ref={libraryControl}
             label="知识库"
             className="composer-select"
-            formatValue={shortLibraryName}
+            formatValue={libraryButtonLabel}
+            valueAlign="center"
             options={demo ? demoLibrary : libraries.length ? libraries.map(({ id, name }) => ({ value: id, label: name })) : emptyLibrary}
             value={demo ? 'product' : libraryId ?? ''}
             onValueChange={setSelected}

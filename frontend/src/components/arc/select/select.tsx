@@ -16,6 +16,7 @@ export interface SelectProps extends Omit<ComponentPropsWithoutRef<typeof Select
   id?: string;
   className?: string;
   formatValue?: (label: string) => string;
+  valueAlign?: "center";
   options: { value: string; label: string; disabled?: boolean }[];
 }
 
@@ -29,7 +30,7 @@ const valueRoll: Variants = {
 const valueFade: Variants = { enter: { opacity: 0 }, center: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: motionTokens.duration.instant } }, exit: { opacity: 0, transition: { duration: motionTokens.duration.instant } } };
 
 export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select(
-  { label, description, placeholder = "Select an option", options, id, className, formatValue, disabled, onValueChange, ...rootProps },
+  { label, description, placeholder = "Select an option", options, id, className, formatValue, valueAlign, disabled, onValueChange, ...rootProps },
   ref,
 ) {
   const generatedId = useId();
@@ -53,7 +54,8 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
           ref={ref}
           id={controlId}
           aria-describedby={hintId}
-          title={display !== shown ? shown : undefined}
+          title={shown && currentValue && (valueAlign || display !== shown) ? shown : undefined}
+          data-value-align={valueAlign}
           className={[styles.trigger, className].filter(Boolean).join(" ")}
         >
           {/* Radix keeps the real value for assistive tech; the visible copy below animates between values. */}

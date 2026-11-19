@@ -1,12 +1,13 @@
 import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { BookOpen, ChevronRight, Download, Ellipsis, GraduationCap, History, Layers, MessageCircle, PanelLeft, Pencil, Search, Settings, Trash2 } from 'lucide-react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent, DialogTrigger } from '@/components/arc/dialog/dialog'
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { UserMenu } from '@/components/arc/user-menu/user-menu'
+import { motionTokens } from '@/components/arc/lib/motion-tokens'
 import { ConversationDialogs, type ConversationDialogTarget } from './components/ConversationDialogs'
 import { ProjectNavigation } from './components/ProjectNavigation'
 import { SearchPanel } from './components/SearchPanel'
@@ -35,14 +36,6 @@ const navigation = [
   { label: '学习', path: '/learning', icon: GraduationCap },
   { label: '设置', path: '/settings', icon: Settings },
 ]
-
-function SettingsRoute({ user, requireLogin }: { user: User | null; requireLogin: () => void }) {
-  return (
-    <Suspense fallback={<div className="placeholder-page" role="status">正在打开设置…</div>}>
-      <SettingsPage user={user} requireLogin={requireLogin} />
-    </Suspense>
-  )
-}
 
 function LearningRoute({ notify }: { notify: (message: string) => void }) {
   const { user, libraries, requireLogin } = useWorkspace()
@@ -184,6 +177,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
 }) {
   const { user, libraries, notify, report, requireLogin } = useWorkspace()
   const { theme, setTheme } = useTheme()
+  const reduced = useReducedMotion()
   const [navOpen, setNavOpen] = useState(() => !window.matchMedia('(max-width: 480px)').matches)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchOrigin, setSearchOrigin] = useState({ top: 12, right: 12, x: 18, y: 18 })
@@ -191,6 +185,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
   const searchFocusReturn = useRef<HTMLElement | null>(null)
   const navigate = useNavigate()
   const { pathname, search } = useLocation()
+  const workspacePage = navigation.find(({ path }) => path === pathname)
   const isChat = pathname.startsWith('/chat/')
   const isLibrary = pathname === '/knowledge'
   const libraryId = new URLSearchParams(search).get('id')
@@ -249,7 +244,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
 
   return (
     <Dialog open={searchOpen} onOpenChange={(open) => { if (open) showSearch(searchTrigger.current); else setSearchOpen(false) }}>
-    <div className="app-shell" data-nav={navOpen} data-chat={isChat} data-library={isLibrary || undefined} onClickCapture={(event) => {
+    <div className="app-shell" data-nav={navOpen} data-chat={isChat} onClickCapture={(event) => {
       if (user || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || !(event.target instanceof Element)) return
       const link = event.target.closest<HTMLAnchorElement>('a[href^="/"]')
       if (!link || ['/', '/chat/demo'].includes(link.pathname)) return
@@ -262,11 +257,17 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
           <Link to="/" className="brand" aria-label="知循首页">
             <BookOpen size={29} strokeWidth={1.8} /><strong>知循</strong><span>KnowLoop</span>
           </Link>
-          <nav className="navigation" aria-label="工作区">
+          <LayoutGroup id="workspace-navigation"><nav className="navigation" aria-label="工作区">
             {navigation.map(({ label, path, icon: Icon }) => (
-              <NavLink key={path} to={path} end><Icon size={21} strokeWidth={1.7} />{label}</NavLink>
+              <NavLink key={path} to={path} end>{({ isActive }) => <>
+                {isActive && (reduced
+                  ? <span className="navigation-selection" aria-hidden="true" />
+                  : <motion.span className="navigation-selection" aria-hidden="true"
+                    layoutId="selection" transition={motionTokens.spring.morph} />)}
+                <Icon size={21} strokeWidth={1.7} />{label}
+              </>}</NavLink>
             ))}
-          </nav>
+          </nav></LayoutGroup>
           <ProjectNavigation />
           <div className="workspace-label">{accountMenu}</div>
         </div>
@@ -283,20 +284,28 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
             {!isChat && searchButton}
           </header>
         <main className="page">
-          {privatePage ? sessionState === 'error'
-            ? <div className="placeholder-page"><EmptyState title="无法恢复登录状态" description="请检查连接后重试。" action={<Button onClick={retrySession}>重试</Button>} /></div>
-            : sessionState === 'loading' ? <div className="placeholder-page" role="status">正在检查登录状态…</div>
-              : <Suspense fallback={<div className="placeholder-page" role="status">正在打开首页…</div>}><Home /></Suspense>
-          : <Routes>
-            <Route path="/" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开首页…</div>}><Home /></Suspense>} />
-            <Route path="/chat/:id" element={<ChatRoute notify={notify} searchButton={searchButton} />} />
-            <Route path="/history" element={<HistoryPage />} />
-            <Route path="/knowledge" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开知识库…</div>}><Library preferredId={libraryId ?? undefined} /></Suspense>} />
-            <Route path="/learning" element={<Suspense fallback={<div className="placeholder-page" role="status">正在打开学习…</div>}><LearningRoute notify={notify} /></Suspense>} />
-            <Route path="/settings" element={<SettingsRoute user={user} requireLogin={requireLogin} />} />
-            <Route path="/__visual/orb" element={<Suspense fallback={<div className="placeholder-page" role="status">正在加载…</div>}><VisualOrbSmoke /></Suspense>} />
-            <Route path="*" element={<Placeholder title="页面不存在" description="请检查访问地址，或返回首页。" />} />
-          </Routes>}
+          <Suspense fallback={<div className="placeholder-page" role="status">正在打开{pathname === '/' ? '首页' : workspacePage?.label ?? '页面'}…</div>}>
+            <AnimatePresence initial={false}>
+              <motion.div key={workspacePage ? pathname : 'other'} className="workspace-page"
+                initial={workspacePage && !privatePage && !reduced ? { opacity: .6, top: 6 } : false}
+                animate={{ opacity: 1, top: 0 }} transition={{ duration: reduced ? 0 : .22, ease: motionTokens.ease.enter }}>
+                {privatePage ? sessionState === 'error'
+                  ? <div className="placeholder-page"><EmptyState title="无法恢复登录状态" description="请检查连接后重试。" action={<Button onClick={retrySession}>重试</Button>} /></div>
+                  : sessionState === 'loading' ? <div className="placeholder-page" role="status">正在检查登录状态…</div>
+                    : <Home />
+                : <Routes>
+                  <Route path="/" element={<Home />} />
+                  <Route path="/chat/:id" element={<ChatRoute notify={notify} searchButton={searchButton} />} />
+                  <Route path="/history" element={<HistoryPage />} />
+                  <Route path="/knowledge" element={<Library preferredId={libraryId ?? undefined} />} />
+                  <Route path="/learning" element={<LearningRoute notify={notify} />} />
+                  <Route path="/settings" element={<SettingsPage user={user} requireLogin={requireLogin} />} />
+                  <Route path="/__visual/orb" element={<Suspense fallback={<div className="placeholder-page" role="status">正在加载…</div>}><VisualOrbSmoke /></Suspense>} />
+                  <Route path="*" element={<Placeholder title="页面不存在" description="请检查访问地址，或返回首页。" />} />
+                </Routes>}
+              </motion.div>
+            </AnimatePresence>
+          </Suspense>
         </main>
       </div>
     </div>
@@ -358,6 +367,7 @@ function HistoryPage() {
         label={`会话操作：${row.title || '未命名对话'}`}
         icon={<Ellipsis size={16} />}
         iconOnly
+        modal={false}
         items={[
           { label: '重命名会话', icon: <Pencil size={15} />, onSelect: () => setDialogTarget({ mode: 'rename', conversation: row }) },
           { label: '导出 Markdown', icon: <Download size={15} />, onSelect: async () => {

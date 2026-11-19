@@ -9,7 +9,7 @@ import { motionTokens } from "../lib/motion-tokens";
 import styles from "./dropdown-menu.module.css";
 
 export interface DropdownItem { label: string; onSelect?: () => void; disabled?: boolean; icon?: ReactNode; destructive?: boolean; separatorBefore?: boolean; }
-export interface DropdownMenuProps { label: string; items: DropdownItem[]; icon?: ReactNode; iconOnly?: boolean; disabled?: boolean; className?: string; }
+export interface DropdownMenuProps { label: string; items: DropdownItem[]; icon?: ReactNode; iconOnly?: boolean; disabled?: boolean; className?: string; modal?: boolean; }
 
 type Highlight = { top: number; height: number; danger: boolean; glide: boolean };
 
@@ -41,7 +41,7 @@ function TriggerLabel({ text }: { text: string }) {
   </motion.span>;
 }
 
-export function DropdownMenu({ label, items, icon, iconOnly, disabled, className }: DropdownMenuProps) {
+export function DropdownMenu({ label, items, icon, iconOnly, disabled, className, modal }: DropdownMenuProps) {
   const reduced = useReducedMotion();
   const [highlight, setHighlight] = useState<Highlight | null>(null);
   const pointer = useRef(false);
@@ -60,7 +60,7 @@ export function DropdownMenu({ label, items, icon, iconOnly, disabled, className
     const glide = pointer.current;
     setHighlight(current => ({ ...next, glide: glide && current !== null }));
   }
-  return <DropdownPrimitive.Root onOpenChange={open => { if (open) { window.clearTimeout(clearTimer.current); setHighlight(null); } }}>
+  return <DropdownPrimitive.Root modal={modal} onOpenChange={open => { if (open) { window.clearTimeout(clearTimer.current); setHighlight(null); } }}>
     <DropdownPrimitive.Trigger className={[styles.trigger, className].filter(Boolean).join(" ")} type="button" disabled={disabled} aria-label={iconOnly ? label : undefined}>{icon && <span className={styles.triggerIcon} aria-hidden="true">{icon}</span>}{!iconOnly && <><TriggerLabel text={label}/><ChevronDown className={styles.chevron} size={15} strokeWidth={1.8} aria-hidden="true"/></>}</DropdownPrimitive.Trigger>
     <DropdownPrimitive.Portal><DropdownPrimitive.Content className={styles.menu} sideOffset={6} align={iconOnly ? "start" : "end"} collisionPadding={12} loop onFocus={onMenuFocus} onPointerMoveCapture={() => { pointer.current = true; }} onKeyDownCapture={() => { pointer.current = false; }}>
       {/* One highlight glides between items for the pointer and jumps instantly for the keyboard. */}

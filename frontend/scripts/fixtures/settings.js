@@ -42,7 +42,7 @@
       if (row && method === 'DELETE' && !row.is_default && !row.libraries.length) { preview.connections = preview.connections.filter(item => item !== row); return reply(null, 204); }
     }
     if (method !== 'GET') return reply({ code: 'preview_blocked', message: '预览不支持该操作', retryable: false }, 405);
-    if (path === '/knowledge-bases') return reply({ items: [library], next_cursor: null });
+    if (path === '/knowledge-bases') return reply({ items: [{ ...library, name: preview.libraryName ?? library.name }], next_cursor: null });
     if (path === '/conversations') return reply({ items: Array.from({ length: 8 }, (_, index) => ({
       id: `22222222-2222-4222-8222-${String(index).padStart(12, '0')}`, title: `项目讨论 ${index + 1}`, project_knowledge_base_id: library.id, created_at: date, updated_at: date,
     })), next_cursor: null });
