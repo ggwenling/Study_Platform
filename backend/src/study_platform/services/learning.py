@@ -27,6 +27,7 @@ from study_platform.persistence.models import (
     QuizResponse,
     WrongQuestion,
 )
+from study_platform.services import model_connections
 from study_platform.services.chat import chunk_dto, chunk_query, retrieve, visible_indices
 from study_platform.services.learning_anchor import ensure_course_anchor
 from study_platform.services.learning_grade import (
@@ -36,6 +37,7 @@ from study_platform.services.learning_grade import (
     ocr_answer_bytes,
 )
 from study_platform.services.learning_llm import (
+    fragment_excerpt,
     generate_questions_with_llm,
     index_to_fragment,
     map_fragment_hits,
@@ -110,7 +112,11 @@ def _load_sources_by_item(
             and index.status in ("ready", "retired")
         )
         loc = (src.locator or {}) if available else {}
-        reveal_quote = available and (include_quotes is None or src.quiz_item_id in include_quotes)
+        revealed = include_quotes is None or src.quiz_item_id in include_quotes
+        reveal_quote = available and revealed
+        quote_status = ("verified" if src.quote_text is not None else "unverified") if reveal_quote else (
+            "unavailable" if revealed and not available else None
+        )
         grouped.setdefault(src.quiz_item_id, []).append(
             {
                 "chunk_id": str(chunk.id),
@@ -119,7 +125,8 @@ def _load_sources_by_item(
                 "title": material.title,
                 "location_label": _locator_label(loc) if available else "来源已不可用",
                 "availability": "available" if available else "unavailable",
-                "quote": chunk.text if reveal_quote else None,
+                "quote": (src.quote_text if src.quote_text is not None else chunk.text) if reveal_quote else None,
+                "quote_status": quote_status,
             }
         )
     return grouped
@@ -225,10 +232,14 @@ def generate_learning_quiz(
         for question in generated:
             if ordinal >= count:
                 break
+            if question.item_type not in ("mcq", "short_answer") or (
+                mode != "mixed" and question.item_type != mode
+            ):
+                continue
             source_refs = [by_index[idx] for idx in question.source_indices if idx in by_index]
             if not source_refs:
                 continue
-            item_type = question.item_type if mode != "short_answer" else "short_answer"
+            item_type = question.item_type
             options_list = list(question.options) if item_type == "mcq" else []
             choice = (
                 resolve_mcq_choice(question.reference_answer, options_list)
@@ -262,6 +273,7 @@ def generate_learning_quiz(
                         material_version_id=ref.material_version_id,
                         index_version_id=ref.index_version_id,
                         locator=ref.locator,
+                        quote_text=fragment_excerpt(ref.text),
                     )
                 )
             ordinal += 1
@@ -275,10 +287,9 @@ def generate_learning_quiz(
             if chunk_id in used_chunks:
                 continue
             used_chunks.add(chunk_id)
-            chunk = db.get(MaterialChunk, chunk_id)
-            if chunk is None or not chunk.text.strip():
+            excerpt = hit["text"].strip()
+            if not excerpt:
                 continue
-            excerpt = chunk.text.strip()
             stem, ref = _stem_from_chunk(excerpt)
             if not ref:
                 continue
@@ -312,10 +323,11 @@ def generate_learning_quiz(
             db.add(
                 QuizItemSource(
                     quiz_item_id=item.id,
-                    chunk_id=chunk.id,
-                    material_version_id=chunk.material_version_id,
-                    index_version_id=chunk.index_version_id,
-                    locator=chunk.locator if isinstance(chunk.locator, dict) else {},
+                    chunk_id=chunk_id,
+                    material_version_id=hit["material_version_id"],
+                    index_version_id=hit["index_version_id"],
+                    locator=hit["locator"] if isinstance(hit["locator"], dict) else {},
+                    quote_text=excerpt,
                 )
             )
             ordinal += 1
@@ -433,9 +445,8 @@ def _previous_answer_image_path(row: QuizResponse) -> Path | None:
 def _grade_mcq_choice(item: QuizItem, student_text: str) -> tuple[str, float, str, str, str]:
     answer_key = item.answer_key if isinstance(item.answer_key, dict) else {"text": str(item.answer_key)}
     raw_options = list(item.options or [])
-    expected_choice = (
-        resolve_mcq_choice(str(answer_key.get("choice") or ""), raw_options)
-        or resolve_mcq_choice(str(answer_key.get("text") or ""), raw_options)
+    expected_choice = resolve_mcq_choice(str(answer_key.get("choice") or "")) or resolve_mcq_choice(
+        str(answer_key.get("text") or ""), raw_options
     )
     reference = _reference_from_answer_key(item.answer_key)
     student_choice = resolve_mcq_choice(student_text, raw_options)
@@ -454,7 +465,18 @@ def _grade_mcq_choice(item: QuizItem, student_text: str) -> tuple[str, float, st
     return verdict, 1.0, base_fb, "learning_mcq_v1", reference
 
 
-@learning_task
+def _lock_answer(db: Session, owner_user_id: UUID, response_id: UUID) -> QuizResponse | None:
+    attempt_id = db.scalar(
+        sa.select(QuizAttempt.id)
+        .join(QuizResponse, QuizResponse.attempt_id == QuizAttempt.id)
+        .where(QuizResponse.id == response_id, QuizAttempt.owner_user_id == owner_user_id)
+        .with_for_update(of=QuizAttempt)
+    )
+    if attempt_id is None:
+        return None
+    return db.scalar(sa.select(QuizResponse).where(QuizResponse.id == response_id).with_for_update())
+
+
 def submit_text_answer(
     db: Session,
     *,
@@ -465,19 +487,7 @@ def submit_text_answer(
     cleaned = (answer_text or "").strip()
     if not cleaned:
         raise ApiError(422, "empty_answer", "请输入作答内容")
-    row = (
-        db.execute(
-            sa.select(QuizResponse)
-            .join(QuizAttempt, QuizAttempt.id == QuizResponse.attempt_id)
-            .where(
-                QuizResponse.id == response_id,
-                QuizAttempt.owner_user_id == owner_user_id,
-            )
-            .with_for_update(of=QuizResponse)
-        )
-        .scalars()
-        .first()
-    )
+    row = _lock_answer(db, owner_user_id, response_id)
     if row is None:
         raise ApiError(404, "response_not_found", "作答记录不存在")
     row._previous_image_path = _previous_answer_image_path(row)
@@ -488,9 +498,10 @@ def submit_text_answer(
         verdict, conf, feedback, grader_profile, reference = _grade_mcq_choice(item, cleaned)
     else:
         reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
-        verdict, conf, feedback, grader_profile = grade_text_answer(
-            cleaned, reference, 1.0, stem=item.stem, owner_user_id=owner_user_id
-        )
+        with model_connections.task(owner_user_id):
+            verdict, conf, feedback, grader_profile = grade_text_answer(
+                cleaned, reference, 1.0, stem=item.stem, owner_user_id=owner_user_id
+            )
         if item.explanation and item.explanation not in feedback:
             feedback = f"{feedback} {item.explanation}".strip()
     row.answer = {"type": "text", "text": cleaned}
@@ -510,7 +521,6 @@ def submit_text_answer(
     return row
 
 
-@learning_task
 def submit_image_answer(
     db: Session,
     *,
@@ -518,19 +528,7 @@ def submit_image_answer(
     response_id: UUID,
     image_bytes: bytes,
 ) -> QuizResponse:
-    row = (
-        db.execute(
-            sa.select(QuizResponse)
-            .join(QuizAttempt, QuizAttempt.id == QuizResponse.attempt_id)
-            .where(
-                QuizResponse.id == response_id,
-                QuizAttempt.owner_user_id == owner_user_id,
-            )
-            .with_for_update(of=QuizResponse)
-        )
-        .scalars()
-        .first()
-    )
+    row = _lock_answer(db, owner_user_id, response_id)
     if row is None:
         raise ApiError(404, "response_not_found", "作答记录不存在")
     row._previous_image_path = _previous_answer_image_path(row)
@@ -554,9 +552,10 @@ def submit_image_answer(
             )
     else:
         reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
-        verdict, conf, feedback, grader_profile = grade_text_answer(
-            ocr_text, reference, ocr_conf, stem=item.stem, owner_user_id=owner_user_id
-        )
+        with model_connections.task(owner_user_id):
+            verdict, conf, feedback, grader_profile = grade_text_answer(
+                ocr_text, reference, ocr_conf, stem=item.stem, owner_user_id=owner_user_id
+            )
         if item.explanation and item.explanation not in feedback:
             feedback = f"{feedback} {item.explanation}".strip()
     path = _answer_storage_path(row.id)
@@ -597,18 +596,7 @@ def override_verdict(
 ) -> QuizResponse:
     if verdict not in {"correct", "incorrect", "pending"}:
         raise ApiError(400, "invalid_verdict", "判题结果无效")
-    row = (
-        db.execute(
-            sa.select(QuizResponse)
-            .join(QuizAttempt, QuizAttempt.id == QuizResponse.attempt_id)
-            .where(
-                QuizResponse.id == response_id,
-                QuizAttempt.owner_user_id == owner_user_id,
-            )
-        )
-        .scalars()
-        .first()
-    )
+    row = _lock_answer(db, owner_user_id, response_id)
     if row is None:
         raise ApiError(404, "response_not_found", "作答记录不存在")
     item = db.get(QuizItem, row.quiz_item_id)
@@ -917,6 +905,7 @@ def retry_wrong_questions(
                     material_version_id=src.material_version_id,
                     index_version_id=src.index_version_id,
                     locator=src.locator,
+                    quote_text=src.quote_text,
                 )
             )
     db.flush()
@@ -972,6 +961,28 @@ def attempt_payload(db: Session, attempt_id: UUID, owner_user_id: UUID) -> dict:
     item_ids = [item.id for _, item in responses]
     revealed_ids = {item.id for resp, item in responses if _reference_revealed(resp)}
     sources_map = _load_sources_by_item(db, item_ids, include_quotes=revealed_ids)
+    origin_ids = []
+    for _, item in responses:
+        origin = (item.rubric or {}).get("origin_wrong_id")
+        if origin:
+            try:
+                origin_ids.append(UUID(str(origin)))
+            except ValueError:
+                pass
+    origin_libraries = {
+        str(wrong_id): str(kb_id) for wrong_id, kb_id in db.execute(
+            sa.select(WrongQuestion.id, Quiz.course_id)
+            .join(QuizItem, QuizItem.id == WrongQuestion.quiz_item_id)
+            .join(Quiz, Quiz.id == QuizItem.quiz_id)
+            .join(KnowledgeBase, KnowledgeBase.id == Quiz.course_id)
+            .where(
+                WrongQuestion.owner_user_id == owner_user_id,
+                WrongQuestion.id.in_(origin_ids),
+                KnowledgeBase.owner_user_id == owner_user_id,
+                KnowledgeBase.deleted_at.is_(None),
+            )
+        ).all()
+    } if origin_ids else {}
     items = []
     for resp, item in responses:
         ref = resp.reference_answer_effective or _reference_from_answer_key(item.answer_key)
@@ -980,6 +991,11 @@ def attempt_payload(db: Session, attempt_id: UUID, owner_user_id: UUID) -> dict:
         row = {
             "response_id": str(resp.id),
             "quiz_item_id": str(item.id),
+            "knowledge_base_id": (
+                origin_libraries.get(str(item.rubric["origin_wrong_id"]))
+                if (item.rubric or {}).get("origin_wrong_id")
+                else str(quiz.course_id) if quiz else None
+            ),
             "ordinal": item.ordinal,
             "stem": item.stem,
             "item_type": item.item_type,

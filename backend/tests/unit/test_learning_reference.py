@@ -40,6 +40,7 @@ def test_attempt_payload_omits_reference_for_unanswered_items():
         stem="题干",
         item_type="short_answer",
         answer_key={"text": "secret ref"},
+        rubric={},
     )
     attempt = SimpleNamespace(id=attempt_id, quiz_id=quiz_id, status="in_progress")
     quiz = SimpleNamespace(course_id=uuid4())

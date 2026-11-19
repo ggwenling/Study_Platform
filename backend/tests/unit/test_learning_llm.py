@@ -248,3 +248,37 @@ def test_parse_mcq_normalizes_unprefixed_options_and_text_or_wrapped_reference()
         assert _grade_mcq_choice(item, "非零向量")[0] == "correct"
         assert _grade_mcq_choice(item, "B")[0] == "correct"
         assert _grade_mcq_choice(item, "A. 零向量")[0] == "incorrect"
+
+
+def test_mcq_full_option_body_takes_precedence_over_letter():
+    from study_platform.services.learning_llm import resolve_mcq_choice
+
+    options = ["A. 常规方案", "B. A 方案适用", "C. 答案是 A"]
+    assert resolve_mcq_choice("A 方案适用", options) == "B"
+    assert resolve_mcq_choice("答案是 A", options) == "C"
+    assert resolve_mcq_choice("A", options) == "A"
+    assert resolve_mcq_choice("B. A 方案适用", options) == "B"
+    assert resolve_mcq_choice("A. 常规方案", ["A. 常规方案", "B. A. 常规方案"]) == "A"
+
+
+def test_generated_types_respect_requested_mode_and_retry(monkeypatch):
+    monkeypatch.setattr(
+        "study_platform.services.learning_llm.get_settings",
+        lambda: Settings(_env_file=None, learning_llm_max_retries=1),
+    )
+    short = {"item_type": "short_answer", "stem": "简答", "reference_answer": "答案", "source_indices": [1]}
+    mcq = {"item_type": "mcq", "stem": "单选", "reference_answer": "A", "options": ["一", "二"], "source_indices": [1]}
+    invalid = {**short, "item_type": "unknown"}
+    mislabeled = {**mcq, "item_type": "short_answer"}
+    for mode, wrong, correct in [("mcq", short, mcq), ("short_answer", mcq, short)]:
+        calls = []
+        def invoker(_system, _user, *, retry_hint=""):
+            calls.append(retry_hint)
+            return json.dumps({"questions": [wrong, invalid, mislabeled] if len(calls) == 1 else [correct]})
+        questions, _ = generate_questions_with_llm(_frag(), 1, mode=mode, invoker=invoker)
+        assert [q.item_type for q in questions] == [mode]
+        assert len(calls) == 2
+    questions, _ = generate_questions_with_llm(
+        _frag(), 3, mode="mixed", invoker=lambda *_args, **_kwargs: json.dumps({"questions": [mcq, short, invalid]})
+    )
+    assert [q.item_type for q in questions] == ["mcq", "short_answer"]

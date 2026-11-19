@@ -505,3 +505,172 @@ def test_learning_regressions_mcq_image_override_cleanup_deleted_kb_and_retry_fe
         assert len(retry_deleted_kb.json()["items"]) == 1
     finally:
         http.app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_local_mcq_ignores_unready_model_and_quote_snapshot(learning_env, monkeypatch):
+    from contextlib import contextmanager
+
+    from study_platform.core.errors import ApiError
+    from study_platform.persistence.models import QuizItemSource
+
+    _, db, owner, kb_id = learning_env
+    quiz = learning.generate_learning_quiz(db, owner_user_id=owner, knowledge_base_id=kb_id, count=1, mode="mcq")
+    attempt = learning.start_attempt(db, owner_user_id=owner, quiz_id=quiz.id)
+    item = learning.attempt_payload(db, attempt.id, owner)["items"][0]
+    assert item["sources"][0]["quote"] is None
+    assert item["sources"][0]["quote_status"] is None
+    source = db.scalar(sa.select(QuizItemSource).where(QuizItemSource.quiz_item_id == UUID(item["quiz_item_id"])))
+    original = source.quote_text
+    chunk = db.get(MaterialChunk, source.chunk_id)
+    chunk.text = "资料后来被修改"
+    db.flush()
+
+    @contextmanager
+    def pending(*_args, **_kwargs):
+        raise ApiError(409, "model_test_required", "连接待测试")
+        yield
+    monkeypatch.setattr(learning.model_connections, "task", pending)
+    row = learning.submit_text_answer(db, owner_user_id=owner, response_id=UUID(item["response_id"]), answer_text="A")
+    assert row.verdict == "correct"
+    monkeypatch.setattr(learning, "ocr_answer_bytes", lambda _bytes: ("A", 0.99))
+    image_row = learning.submit_image_answer(
+        db, owner_user_id=owner, response_id=row.id, image_bytes=_png_with_text("A")
+    )
+    assert image_row.verdict == "correct"
+    quiz_item = db.get(learning.QuizItem, UUID(item["quiz_item_id"]))
+    quiz_item.item_type = "short_answer"
+    db.flush()
+    with pytest.raises(ApiError) as error:
+        learning.submit_text_answer(db, owner_user_id=owner, response_id=row.id, answer_text="other")
+    assert error.value.code == "model_test_required"
+    source_payload = learning.attempt_payload(db, attempt.id, owner)["items"][0]["sources"][0]
+    assert source_payload["quote"] == original
+    assert source_payload["quote_status"] == "verified"
+    source.quote_text = None
+    db.flush()
+    source_payload = learning.attempt_payload(db, attempt.id, owner)["items"][0]["sources"][0]
+    assert source_payload["quote"] == "资料后来被修改"
+    assert source_payload["quote_status"] == "unverified"
+    db.get(KnowledgeBase, kb_id).deleted_at = datetime.now(UTC)
+    db.flush()
+    source_payload = learning.attempt_payload(db, attempt.id, owner)["items"][0]["sources"][0]
+    assert source_payload["quote"] is None
+    assert source_payload["quote_status"] == "unavailable"
+
+
+def test_wrong_retry_uses_each_question_library_and_copies_quote(learning_env):
+    from study_platform.persistence.models import Quiz, QuizItem, QuizItemSource, WrongQuestion
+
+    _, db, owner, kb_id = learning_env
+    first = learning.generate_learning_quiz(db, owner_user_id=owner, knowledge_base_id=kb_id, count=1, mode="mcq")
+    original = db.scalar(sa.select(QuizItem).where(QuizItem.quiz_id == first.id))
+    source = db.scalar(sa.select(QuizItemSource).where(QuizItemSource.quiz_item_id == original.id))
+    other_kb = KnowledgeBase(id=uuid4(), owner_user_id=owner, name="另一知识库")
+    db.add(other_kb)
+    db.flush()
+    db.add(Course(id=other_kb.id, owner_user_id=owner, name=other_kb.name))
+    second = Quiz(owner_user_id=owner, course_id=other_kb.id, title="另一练习", status="ready", difficulty=3, source_scope={})
+    db.add(second)
+    db.flush()
+    second_item = QuizItem(quiz_id=second.id, ordinal=0, item_type="mcq", stem="题目", options=["A. 一", "B. 二"], answer_key={"choice": "A"}, rubric={}, difficulty=3, max_score=1)
+    db.add(second_item)
+    db.flush()
+    for quiz in (first, second):
+        attempt = learning.start_attempt(db, owner_user_id=owner, quiz_id=quiz.id)
+        response = learning.attempt_payload(db, attempt.id, owner)["items"][0]
+        learning.submit_text_answer(db, owner_user_id=owner, response_id=UUID(response["response_id"]), answer_text="B")
+    wrongs = db.scalars(sa.select(WrongQuestion).where(WrongQuestion.owner_user_id == owner)).all()
+    retry = learning.retry_wrong_questions(db, owner_user_id=owner, wrong_ids=[w.id for w in wrongs])
+    items = learning.attempt_payload(db, retry.id, owner)["items"]
+    assert {item["knowledge_base_id"] for item in items} == {str(kb_id), str(other_kb.id)}
+    cloned = next(item for item in items if item["knowledge_base_id"] == str(kb_id))
+    copied_source = db.scalar(sa.select(QuizItemSource).where(QuizItemSource.quiz_item_id == UUID(cloned["quiz_item_id"])))
+    assert copied_source.quote_text == source.quote_text
+
+    retry_item = db.get(QuizItem, UUID(cloned["quiz_item_id"]))
+    retry_item.rubric = {**retry_item.rubric, "origin_wrong_id": str(uuid4())}
+    other_kb.deleted_at = datetime.now(UTC)
+    db.flush()
+    unavailable = learning.attempt_payload(db, retry.id, owner)["items"]
+    assert all(item["knowledge_base_id"] is None for item in unavailable)
+
+
+def test_concurrent_answer_updates_serialize_attempt_progress():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from study_platform.persistence.models import (
+        Quiz,
+        QuizAttempt,
+        QuizItem,
+        QuizResponse,
+        WrongQuestion,
+    )
+
+    if os.getenv("RUN_DB_TESTS") != "1" or not os.getenv("TEST_DATABASE_URL"):
+        pytest.skip("explicit PostgreSQL test database required")
+    url = make_url(os.environ["TEST_DATABASE_URL"])
+    if not (url.database or "").endswith("_test"):
+        pytest.fail("isolated *_test database required")
+    engine = sa.create_engine(url.set(drivername="postgresql+psycopg"))
+    owner, kb_id = uuid4(), uuid4()
+    first_done, release_first, second_done = Event(), Event(), Event()
+    try:
+        with Session(engine) as db:
+            db.add(User(id=owner, email=f"{owner.hex}@test.example", password_hash="x", display_name="Test"))
+            db.add(KnowledgeBase(id=kb_id, owner_user_id=owner, name="Test"))
+            db.flush()
+            db.add(Course(id=kb_id, owner_user_id=owner, name="Test"))
+            quiz = Quiz(owner_user_id=owner, course_id=kb_id, title="Test", status="ready", difficulty=3, source_scope={})
+            db.add(quiz)
+            db.flush()
+            for ordinal in range(2):
+                db.add(QuizItem(quiz_id=quiz.id, ordinal=ordinal, item_type="mcq", stem="题", options=["A. 一", "B. 二"], answer_key={"choice": "A"}, rubric={}, difficulty=3, max_score=1))
+            db.flush()
+            attempt = learning.start_attempt(db, owner_user_id=owner, quiz_id=quiz.id)
+            attempt_id = attempt.id
+            ids = [UUID(item["response_id"]) for item in learning.attempt_payload(db, attempt.id, owner)["items"]]
+            db.commit()
+
+        def first():
+            with Session(engine) as db:
+                learning.submit_text_answer(db, owner_user_id=owner, response_id=ids[0], answer_text="A")
+                first_done.set()
+                assert release_first.wait(5)
+                db.commit()
+
+        def second():
+            with Session(engine) as db:
+                learning.override_verdict(db, owner_user_id=owner, response_id=ids[1], verdict="correct", reference_answer=None)
+                db.commit()
+                second_done.set()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(first)
+            assert first_done.wait(5)
+            b = pool.submit(second)
+            try:
+                assert not second_done.wait(0.2)
+            finally:
+                release_first.set()
+            a.result(timeout=5)
+            b.result(timeout=5)
+        with Session(engine) as db:
+            attempt = db.get(QuizAttempt, attempt_id)
+            assert attempt.status == "graded"
+            assert attempt.total_score == 2
+    finally:
+        release_first.set()
+        with Session(engine) as db:
+            quiz_ids = sa.select(Quiz.id).where(Quiz.owner_user_id == owner)
+            attempt_ids = sa.select(QuizAttempt.id).where(QuizAttempt.owner_user_id == owner)
+            db.execute(sa.delete(WrongQuestion).where(WrongQuestion.owner_user_id == owner))
+            db.execute(sa.delete(QuizResponse).where(QuizResponse.attempt_id.in_(attempt_ids)))
+            db.execute(sa.delete(QuizAttempt).where(QuizAttempt.owner_user_id == owner))
+            db.execute(sa.delete(QuizItem).where(QuizItem.quiz_id.in_(quiz_ids)))
+            db.execute(sa.delete(Quiz).where(Quiz.owner_user_id == owner))
+            db.execute(sa.delete(Course).where(Course.id == kb_id))
+            db.execute(sa.delete(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+            db.execute(sa.delete(User).where(User.id == owner))
+            db.commit()
+        engine.dispose()

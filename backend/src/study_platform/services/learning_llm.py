@@ -174,6 +174,17 @@ def resolve_mcq_choice(text: str, options: Sequence[str] = ()) -> str | None:
         if key:
             option_map[key] = body
 
+    if option_map:
+        norm_target = _norm_mcq_text(cleaned)
+        for let, body in option_map.items():
+            if norm_target == _norm_mcq_text(f"{let}. {body}"):
+                return let
+        matches = [let for let, body in option_map.items() if norm_target == _norm_mcq_text(body)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            return None
+
     direct = _CHOICE_DIRECT_RE.match(cleaned)
     if direct:
         cand = direct.group(1).upper()
@@ -186,12 +197,6 @@ def resolve_mcq_choice(text: str, options: Sequence[str] = ()) -> str | None:
         if not option_map or cand in option_map:
             return cand
 
-    if option_map:
-        norm_target = _norm_mcq_text(cleaned)
-        if norm_target:
-            for let, body in option_map.items():
-                if norm_target in (_norm_mcq_text(body), _norm_mcq_text(f"{let}. {body}")):
-                    return let
     return None
 
 
@@ -215,9 +220,12 @@ def parse_quiz_response(raw: str, fragment_count: int) -> tuple[list[GeneratedQu
         stem = row.get("stem")
         reference = row.get("reference_answer")
         indices = _valid_source_indices(row.get("source_indices"), fragment_count)
-        raw_type = row.get("item_type") or "short_answer"
-        item_type = raw_type if raw_type in ("mcq", "short_answer") else "short_answer"
+        item_type = row.get("item_type", "short_answer")
+        if item_type not in ("mcq", "short_answer"):
+            continue
         raw_options = row.get("options")
+        if item_type == "short_answer" and raw_options not in (None, []):
+            continue
         options: tuple[str, ...] = ()
         if (
             not isinstance(stem, str)
@@ -300,13 +308,16 @@ def _default_invoker(
     return content if isinstance(content, str) else str(content)
 
 
+def fragment_excerpt(text: str) -> str:
+    excerpt = text.strip()
+    return excerpt[:1500] + "…" if len(excerpt) > 1500 else excerpt
+
+
 def _fragments_prompt(fragments: list[FragmentRef]) -> str:
     blocks = []
     for frag in fragments:
         title = f"（{frag.title}）" if frag.title else ""
-        excerpt = frag.text.strip()
-        if len(excerpt) > 1500:
-            excerpt = excerpt[:1500] + "…"
+        excerpt = fragment_excerpt(frag.text)
         blocks.append(f"[{frag.index}]{title}\n{excerpt}")
     return "\n\n".join(blocks)
 
@@ -349,6 +360,8 @@ def generate_questions_with_llm(
         questions, insufficient = parse_quiz_response(last_raw, len(fragments))
         if insufficient:
             return [], insufficient
+        if mode != "mixed":
+            questions = [question for question in questions if question.item_type == mode]
         if questions:
             return questions[:count], None
         if attempt >= settings.learning_llm_max_retries:
