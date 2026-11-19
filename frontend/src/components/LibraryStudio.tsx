@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { BookMarked, BrainCircuit, Download, FilePlus2, GitBranch, Layers, Pencil, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router'
@@ -48,6 +48,7 @@ export function LibraryStudio({
   const [notes, setNotes] = useState<StudyNote[] | null>(initialNotes ?? null)
   const [notesError, setNotesError] = useState('')
   const [notesRetry, setNotesRetry] = useState(0)
+  const notesRequest = useRef<AbortController | null>(null)
   const reportNotesFailure = useEffectEvent(report)
   const [busy, setBusy] = useState<string | null>(null)
   const [activeNote, setActiveNote] = useState<StudyNote | null>(null)
@@ -84,6 +85,7 @@ export function LibraryStudio({
   useEffect(() => {
     if (initialNotes && revision === 0 && notesRetry === 0) return
     const controller = new AbortController()
+    notesRequest.current = controller
     void api.studio.notes(kbId, controller.signal).then(
       (result) => { if (!controller.signal.aborted) { setNotes(result.items); setNotesError('') } },
       (error: unknown) => {
@@ -95,6 +97,11 @@ export function LibraryStudio({
     return () => controller.abort()
   }, [initialNotes, kbId, revision, notesRetry])
 
+  function reloadNotes() {
+    notesRequest.current?.abort()
+    setNotesRetry((value) => value + 1)
+  }
+
   async function generateArtifact(kind: StudioArtifactKind) {
     if (busy) return
     if (readyCount === 0) {
@@ -104,6 +111,7 @@ export function LibraryStudio({
     setBusy(kind)
     try {
       const created = await api.studio.generateNote(kbId, { kind })
+      reloadNotes()
       setNotes((prev) => [created, ...(prev ?? []).filter((item) => item.id !== created.id)])
       setActiveNote(created)
       setEditing(false)
@@ -144,7 +152,8 @@ export function LibraryStudio({
     setBusy('create')
     try {
       const created = await api.studio.createNote(kbId, { title, content_md })
-      setNotes((prev) => [created, ...(prev ?? [])])
+      reloadNotes()
+      setNotes((prev) => [created, ...(prev ?? []).filter((item) => item.id !== created.id)])
       setCreating(false)
       setActiveNote(created)
       setEditing(false)
@@ -166,6 +175,7 @@ export function LibraryStudio({
     setBusy('save')
     try {
       const updated = await api.studio.updateNote(activeNote.id, { title, content_md })
+      reloadNotes()
       setActiveNote(updated)
       setNotes((prev) => prev?.map((row) => (row.id === updated.id ? updated : row)) ?? null)
       setEditing(false)
@@ -182,6 +192,7 @@ export function LibraryStudio({
     setBusy('ingest')
     try {
       const res = await api.studio.ingestNote(activeNote.id)
+      reloadNotes()
       const updated = { ...activeNote, ingested_material_id: res.material_id }
       setActiveNote(updated)
       setNotes((prev) => prev?.map((row) => (row.id === updated.id ? updated : row)) ?? null)
@@ -200,6 +211,7 @@ export function LibraryStudio({
     setBusy('delete')
     try {
       await api.studio.deleteNote(activeNote.id)
+      reloadNotes()
       setNotes((prev) => prev?.filter((row) => row.id !== activeNote.id) ?? null)
       setActiveNote(null)
       setConfirmDelete(false)
@@ -272,7 +284,7 @@ export function LibraryStudio({
         </Button>
       </div>
 
-      {notesError && <div role="alert">笔记读取失败：{notesError} <Button type="button" size="sm" variant="ghost" onClick={() => setNotesRetry((value) => value + 1)}>重试读取笔记</Button></div>}
+      {notesError && <div role="alert">笔记读取失败：{notesError} <Button type="button" size="sm" variant="ghost" onClick={reloadNotes}>重试读取笔记</Button></div>}
       {!notes?.length ? (
         !notesError && <p className="muted library-empty">
           {notes === null

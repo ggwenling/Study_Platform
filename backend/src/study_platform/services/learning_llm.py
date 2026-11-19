@@ -174,6 +174,14 @@ def resolve_mcq_choice(text: str, options: Sequence[str] = ()) -> str | None:
         if key:
             option_map[key] = body
 
+    normalized = unicodedata.normalize("NFKC", cleaned)
+    direct = _CHOICE_DIRECT_RE.match(normalized)
+    direct_choice = direct.group(1).upper() if direct else None
+    if option_map and direct_choice not in option_map:
+        direct_choice = None
+    if direct and direct_choice and direct.end() == len(normalized):
+        return direct_choice
+
     if option_map:
         norm_target = _norm_mcq_text(cleaned)
         for let, body in option_map.items():
@@ -185,11 +193,8 @@ def resolve_mcq_choice(text: str, options: Sequence[str] = ()) -> str | None:
         if len(matches) > 1:
             return None
 
-    direct = _CHOICE_DIRECT_RE.match(cleaned)
-    if direct:
-        cand = direct.group(1).upper()
-        if not option_map or cand in option_map:
-            return cand
+    if direct_choice:
+        return direct_choice
 
     wrapped = _CHOICE_WRAPPED_RE.search(cleaned)
     if wrapped:

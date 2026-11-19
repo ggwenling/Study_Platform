@@ -261,6 +261,28 @@ def test_mcq_full_option_body_takes_precedence_over_letter():
     assert resolve_mcq_choice("A. 常规方案", ["A. 常规方案", "B. A. 常规方案"]) == "A"
 
 
+def test_mcq_standalone_letter_takes_precedence_over_matching_option_body():
+    from types import SimpleNamespace
+
+    from study_platform.services.learning import _grade_mcq_choice
+    from study_platform.services.learning_llm import resolve_mcq_choice
+
+    options = ["A. B", "B. A", "C. A star"]
+    raw = json.dumps({"questions": [{
+        "item_type": "mcq", "stem": "Which option contains A?", "options": options,
+        "reference_answer": "B", "source_indices": [1],
+    }]})
+    questions, _ = parse_quiz_response(raw, 1)
+    assert questions[0].reference_answer == "B"
+    assert resolve_mcq_choice("（Ｂ）", options) == "B"
+    assert resolve_mcq_choice("A star", options) == "C"
+
+    item = SimpleNamespace(answer_key={"choice": "B", "text": "B"}, options=options, explanation=None)
+    assert _grade_mcq_choice(item, "B")[0] == "correct"
+    assert _grade_mcq_choice(item, "B. A")[0] == "correct"
+    assert _grade_mcq_choice(item, "A")[0] == "incorrect"
+
+
 def test_generated_types_respect_requested_mode_and_retry(monkeypatch):
     monkeypatch.setattr(
         "study_platform.services.learning_llm.get_settings",

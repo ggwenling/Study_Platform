@@ -128,6 +128,28 @@ afterEach(async () => {
 })
 
 describe('Studio notes & Flashcard SM-2 review', () => {
+  it('keeps a saved guide when a notes list requested before generation arrives late', async () => {
+    let finishStaleRead!: (result: { items: StudyNote[] }) => void
+    let finishFreshRead!: (result: { items: StudyNote[] }) => void
+    vi.mocked(api.studio.notes)
+      .mockImplementationOnce(() => new Promise((resolve) => { finishStaleRead = resolve }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFreshRead = resolve }))
+    vi.mocked(api.studio.generateNote).mockResolvedValue(sampleGuide)
+    await render(<LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} revision={0} onIngested={vi.fn()} />)
+
+    await act(async () => findBtn('生成学习指南')!.click())
+    expect(vi.mocked(api.studio.notes).mock.calls[0][1]?.aborted).toBe(true)
+    expect(node.querySelector('.studio-note-card')?.textContent).toContain(sampleGuide.title)
+    await act(async () => finishStaleRead({ items: [] }))
+    expect(node.querySelector('.studio-note-card')?.textContent).toContain(sampleGuide.title)
+    expect(api.studio.notes).toHaveBeenCalledTimes(2)
+
+    const otherNote = { ...sampleGuide, id: 'note-2', title: '已有笔记' }
+    await act(async () => finishFreshRead({ items: [sampleGuide, otherNote] }))
+    expect([...node.querySelectorAll('.studio-note-card strong')].map((card) => card.textContent))
+      .toEqual([sampleGuide.title, otherNote.title])
+  })
+
   it('generates a studio study guide, edits it, and ingests it back into the knowledge base', async () => {
     vi.mocked(api.studio.notes).mockResolvedValue({ items: [] })
     vi.mocked(api.studio.generateNote).mockResolvedValue(sampleGuide)
