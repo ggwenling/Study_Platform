@@ -65,6 +65,7 @@ function SourceList({ sources }: { sources?: LearningSource[] }) {
               <strong>{src.title}</strong>
               <small>{src.availability === 'available' ? src.location_label : '来源已不可用'}</small>
             </div>
+            {src.quote_status === 'unverified' && <small>原文未验证</small>}
             {src.quote && <p className="learning-source-quote">{src.quote}</p>}
           </li>
         ))}
@@ -85,6 +86,10 @@ export function Learning({ knowledgeBases, notify }: Props) {
   const [quizCount, setQuizCount] = useState('5')
   const [materials, setMaterials] = useState<Material[]>([])
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([])
+  const [scoped, setScoped] = useState(false)
+  const [materialsStatus, setMaterialsStatus] = useState<{ kbId: string; ready: boolean }>({ kbId: '', ready: false })
+  const [materialsError, setMaterialsError] = useState('')
+  const [materialsRetry, setMaterialsRetry] = useState(0)
   const [attempt, setAttempt] = useState<LearningAttempt | null>(null)
   const [attempts, setAttempts] = useState<LearningAttemptSummary[]>([])
   const [deckCount, setDeckCount] = useState(0)
@@ -137,6 +142,12 @@ export function Learning({ knowledgeBases, notify }: Props) {
 
   useEffect(() => {
     setSelectedMaterialIds([])
+    setScoped(false)
+  }, [kbId])
+
+  useEffect(() => {
+    setMaterialsStatus({ kbId, ready: false })
+    setMaterialsError('')
     if (!kbId) {
       setMaterials([])
       return
@@ -146,14 +157,15 @@ export function Learning({ knowledgeBases, notify }: Props) {
       (rows) => {
         if (!controller.signal.aborted) {
           setMaterials(rows.filter((item) => item.status === 'ready'))
+          setMaterialsStatus({ kbId, ready: true })
         }
       },
-      () => {
-        if (!controller.signal.aborted) setMaterials([])
+      (error: unknown) => {
+        if (!controller.signal.aborted) setMaterialsError(errorMessage(error))
       },
     )
     return () => controller.abort()
-  }, [kbId])
+  }, [kbId, materialsRetry])
 
   function applyResponseUpdate(responseId: string, result: LearningResponseResult) {
     setAttempt((prev) => {
@@ -197,11 +209,15 @@ export function Learning({ knowledgeBases, notify }: Props) {
       notify('请先选择知识库')
       return
     }
+    if (scoped && (materialsStatus.kbId !== kbId || !materialsStatus.ready || !selectedMaterialIds.length || selectedMaterialIds.length > 50 || selectedMaterialIds.some((id) => !materials.some((row) => row.id === id)))) {
+      notify('所选资料范围尚未确认，请检查资料状态或选择使用全库。')
+      return
+    }
     setBusy(true)
     try {
       const gen = await api.learning.generateQuiz(kbId, Number(quizCount) || 5, {
         mode: quizMode,
-        material_ids: selectedMaterialIds.length ? selectedMaterialIds : null,
+        material_ids: scoped ? selectedMaterialIds : null,
       })
       const next = await api.learning.startAttempt(gen.quiz_id)
       setAttempt(next)
@@ -306,6 +322,10 @@ export function Learning({ knowledgeBases, notify }: Props) {
     referenceAnswer?: string | null
     feedback?: string | null
   }) {
+    if (!params.targetKbId || !knowledgeBases.some((kb) => kb.id === params.targetKbId)) {
+      notify('原知识库不可用，无法追问此题。')
+      return
+    }
     const prompt = buildFollowUpPrompt({
       stem: params.stem,
       userAnswer: params.userAnswer,
@@ -314,7 +334,7 @@ export function Learning({ knowledgeBases, notify }: Props) {
     })
     void navigate('/', {
       state: {
-        preferredLibrary: params.targetKbId || kbId || undefined,
+        preferredLibrary: params.targetKbId,
         initialDraft: prompt,
       },
     })
@@ -430,24 +450,27 @@ export function Learning({ knowledgeBases, notify }: Props) {
             />
           </div>
 
-          {materials.length > 0 && (
+          {materialsError && <div role="alert">资料状态读取失败：{materialsError} <Button type="button" size="sm" variant="ghost" onClick={() => setMaterialsRetry((value) => value + 1)}>重新读取资料</Button></div>}
+          {(materials.length > 0 || scoped) && (
             <Accordion
               defaultOpen={-1}
               items={[
                 {
-                  title: selectedMaterialIds.length
+                  title: scoped
                     ? `出题资料范围 · 已勾选 ${selectedMaterialIds.length} 份`
                     : `出题资料范围 · 默认全库（共 ${materials.length} 份就绪资料）`,
                   content: (
                     <div className="learning-material-picker">
-                      {selectedMaterialIds.length > 0 && (
+                      <p className="muted">最多选择 50 份资料。{scoped && !selectedMaterialIds.length ? '请重新选择资料或使用全库。' : ''}</p>
+                      {selectedMaterialIds.filter((id) => !materials.some((row) => row.id === id)).map((id) => <p role="alert" key={id}>已选资料不可用：{id} <Button type="button" size="sm" variant="ghost" onClick={() => setSelectedMaterialIds((prev) => prev.filter((item) => item !== id))}>移除</Button></p>)}
+                      {scoped && (
                         <Button
                           type="button"
                           size="sm"
                           variant="ghost"
-                          onClick={() => setSelectedMaterialIds([])}
+                          onClick={() => { setSelectedMaterialIds([]); setScoped(false) }}
                         >
-                          清除限定
+                          使用全库
                         </Button>
                       )}
                       <ul>
@@ -458,8 +481,9 @@ export function Learning({ knowledgeBases, notify }: Props) {
                                 type="checkbox"
                                 className="material-scope-checkbox"
                                 checked={selectedMaterialIds.includes(mat.id)}
+                                disabled={materialsStatus.kbId !== kbId || !materialsStatus.ready || (!selectedMaterialIds.includes(mat.id) && selectedMaterialIds.length >= 50)}
                                 onChange={(e) => {
-                                  if (e.target.checked) setSelectedMaterialIds((prev) => [...prev, mat.id])
+                                  if (e.target.checked) { setScoped(true); setSelectedMaterialIds((prev) => prev.length < 50 ? [...prev, mat.id] : prev) }
                                   else setSelectedMaterialIds((prev) => prev.filter((id) => id !== mat.id))
                                 }}
                               />
@@ -633,7 +657,7 @@ export function Learning({ knowledgeBases, notify }: Props) {
                 size="sm"
                 onClick={() =>
                   askInChat({
-                    targetKbId: attempt.knowledge_base_id,
+                    targetKbId: current.knowledge_base_id,
                     stem: current.stem,
                     userAnswer: currentSubmittedText,
                     referenceAnswer: isReferenceRevealed(current) ? current.reference_answer : null,

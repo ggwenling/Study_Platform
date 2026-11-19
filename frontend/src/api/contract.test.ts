@@ -34,6 +34,7 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.materials('id'); await uploadMaterial('id', new File(['x'], 'x.txt')); await api.material('id'); await api.deleteMaterial('id'); await api.retryMaterial('id')
   await api.job('id'); await api.cancelJob('id'); await api.preview('id'); await api.content('id'); await api.pageImage('id', 1); await api.source('id')
   await api.conversations(); await api.createConversation(); await api.conversation('id'); await api.updateConversation('id', { title: 'x' }); await api.deleteConversation('id'); await api.messages('id')
+  await api.conversations(undefined, undefined, true); await api.archiveConversation('id', true)
   await api.overview(); await api.search('q'); await api.capabilities(); await api.turn('id', 'id'); await api.cancelTurn('id', 'id')
   await api.modelUsage(30)
   await api.modelConnections()
@@ -42,7 +43,7 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.testModelConnection('id'); await api.defaultModelConnection('llm', 'id'); await api.deleteModelConnection('id')
   for await (const _ of streamChat({ knowledge_base_id: 'id', answer_mode: 'knowledge_only', intent: 'qa', content: 'x' }, 'key')) { /* consume */ }
   for await (const _ of retryTurn('id', 'id')) { /* consume */ }
-  expect(calls).toHaveLength(46)
+  expect(calls).toHaveLength(48)
   for (const [url, method] of calls) {
     const path = Object.keys(contract.paths).find((template) => new RegExp('^' + template.replace(/\{[^}]+\}/g, '[^/]+') + '$').test(url))
     expect(path, `${method.toUpperCase()} ${url}`).toBeDefined()
@@ -84,6 +85,11 @@ it('publishes the fields consumed by the frontend', () => {
     expect(contract.components.schemas[name]?.required, name).toEqual(expect.arrayContaining(fields))
   }
   expect(contract.components.schemas.UserDTO.properties).toHaveProperty('avatar_url')
+  expect(contract.components.schemas.ConversationDTO.properties).toHaveProperty('archived_at')
+  expect(contract.components.schemas.CitationDTO.properties).toHaveProperty('quote_status')
+  expect(contract.paths['/api/v1/conversations'].get).toMatchObject({
+    parameters: expect.arrayContaining([expect.objectContaining({ name: 'archived', in: 'query' })]),
+  })
   expect(contract.components.schemas.SearchItem.properties).toHaveProperty('knowledge_base_id')
   expect(contract.components.schemas.ChatRequest.properties).toEqual(expect.objectContaining({
     conversation_id: expect.any(Object), answer_mode: expect.any(Object), intent: expect.any(Object), material_ids: expect.any(Object),

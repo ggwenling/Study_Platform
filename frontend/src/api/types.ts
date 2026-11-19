@@ -2,7 +2,7 @@ export interface ApiErrorBody { code: string; message: string; request_id?: stri
 export interface Page<T> { items: T[]; next_cursor: string | null }
 export interface User { id: string; email: string; display_name: string; avatar_url: string | null }
 export interface Scope { knowledge_base_id: string; knowledge_base_name: string; answer_mode: 'knowledge_only' | 'with_general'; intent?: 'qa' | 'summary'; selected_material_ids?: string[] | null; index_version_ids: string[] }
-export interface Citation { id: string; source_label: string; material_id: string; material_version_id: string; knowledge_base_id: string; title: string; quote: string; locator: Record<string, unknown>; location_label: string; version_no: number; availability: 'available' | 'unavailable'; unavailable_reason?: string | null; content_url?: string | null; preview_url?: string | null }
+export interface Citation { id: string; source_label: string; material_id: string; material_version_id: string; knowledge_base_id: string; title: string; quote: string; quote_status?: 'verified' | 'unverified' | 'unavailable' | null; locator: Record<string, unknown>; location_label: string; version_no: number; availability: 'available' | 'unavailable'; unavailable_reason?: string | null; content_url?: string | null; preview_url?: string | null }
 export interface Message { id: string; conversation_id: string; sequence_no: number; role: 'user' | 'assistant' | 'system_summary'; content: string; status: 'pending' | 'streaming' | 'completed' | 'failed' | 'stopped'; created_at: string; scope: Scope | null; citations: Citation[]; turn_id: string | null }
 export interface ChatRequest { conversation_id?: string | null; knowledge_base_id: string; answer_mode?: 'knowledge_only' | 'with_general'; intent?: 'qa' | 'summary'; content: string; material_ids?: string[] | null }
 export type ChatPhase = 'working' | 'searching' | 'solving' | 'composing'
@@ -42,6 +42,7 @@ export interface LearningSource {
   location_label: string
   availability: 'available' | 'unavailable'
   quote?: string | null
+  quote_status?: 'verified' | 'unverified' | 'unavailable' | null
 }
 
 export interface LearningResponseResult {
@@ -59,6 +60,7 @@ export interface LearningResponseResult {
 export interface LearningItem {
   response_id: string
   quiz_item_id: string
+  knowledge_base_id?: string | null
   ordinal: number
   stem: string
   item_type: string
@@ -99,7 +101,7 @@ export interface LearningAttemptSummary {
 export interface WrongQuestionItem {
   id: string
   quiz_item_id: string
-  knowledge_base_id?: string
+  knowledge_base_id?: string | null
   knowledge_base_name?: string | null
   item_type?: string
   stem: string

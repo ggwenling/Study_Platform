@@ -142,7 +142,7 @@ describe('scoped material selection & in-conversation summary toggle', () => {
     })
 
     await act(async () => materialsTrigger.click())
-    const clear = [...node.querySelectorAll<HTMLButtonElement>('.current-materials button')].find((button) => button.textContent === '清除限定')!
+    const clear = node.querySelector<HTMLButtonElement>('.current-materials button[aria-label="清除选择"]')!
     await act(async () => clear.click())
     expect(materialsTrigger.getAttribute('aria-expanded')).toBe('false')
     expect(node.querySelector('.current-materials [role=status]')?.textContent).toContain('请至少勾选 1 份资料')
@@ -154,6 +154,41 @@ describe('scoped material selection & in-conversation summary toggle', () => {
     })
     expect(node.textContent).not.toContain('已限定 2 份资料')
   })
+})
+
+it('keeps an invalid selection blocked until the user explicitly uses the whole library', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [readyMaterial('m1', '第一章.md')], next_cursor: null })
+  await render(<Composer />)
+  await act(async () => node.querySelector<HTMLButtonElement>('.current-materials button[aria-expanded]')!.click())
+  await act(async () => node.querySelector<HTMLInputElement>('input[type=checkbox]')!.click())
+  vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  workspace.value.revision++
+  await render(<Composer />)
+  expect(node.textContent).toContain('已选资料不可用')
+  const textarea = node.querySelector('textarea')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, '问题')
+    textarea.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  const submit = async () => act(async () => node.querySelector('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  await submit()
+  expect(workspace.value.chat.send).not.toHaveBeenCalled()
+  await act(async () => [...node.querySelectorAll('button')].find((button) => button.textContent === '移除')!.click())
+  await submit()
+  expect(workspace.value.chat.send).not.toHaveBeenCalled()
+  await act(async () => [...node.querySelectorAll('button')].find((button) => button.textContent === '使用全库')!.click())
+  await submit()
+  expect(workspace.value.chat.send).toHaveBeenCalledWith(expect.objectContaining({ material_ids: null }))
+})
+
+it('limits a material selection to 50', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: Array.from({ length: 51 }, (_, i) => readyMaterial(`m${i}`, `资料${i}`)), next_cursor: null })
+  await render(<Composer />)
+  await act(async () => node.querySelector<HTMLButtonElement>('.current-materials button[aria-expanded]')!.click())
+  const boxes = [...node.querySelectorAll<HTMLInputElement>('input[type=checkbox]')]
+  for (const box of boxes.slice(0, 50)) await act(async () => box.click())
+  expect(boxes[50].disabled).toBe(true)
+  expect(node.textContent).toContain('最多选择 50 份资料')
 })
 
 describe('inline [S1] citations & KaTeX math rendering in MarkdownContent', () => {

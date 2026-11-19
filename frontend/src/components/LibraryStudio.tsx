@@ -46,6 +46,8 @@ export function LibraryStudio({
   const { notify, report, refresh } = useWorkspace()
   const navigate = useNavigate()
   const [notes, setNotes] = useState<StudyNote[] | null>(initialNotes ?? null)
+  const [notesError, setNotesError] = useState('')
+  const [notesRetry, setNotesRetry] = useState(0)
   const reportNotesFailure = useEffectEvent(report)
   const [busy, setBusy] = useState<string | null>(null)
   const [activeNote, setActiveNote] = useState<StudyNote | null>(null)
@@ -80,18 +82,18 @@ export function LibraryStudio({
   }, [kbId, linkedNoteId])
 
   useEffect(() => {
-    if (initialNotes && revision === 0) return
+    if (initialNotes && revision === 0 && notesRetry === 0) return
     const controller = new AbortController()
     void api.studio.notes(kbId, controller.signal).then(
-      (result) => { if (!controller.signal.aborted) setNotes(result.items) },
+      (result) => { if (!controller.signal.aborted) { setNotes(result.items); setNotesError('') } },
       (error: unknown) => {
         if (controller.signal.aborted) return
-        setNotes((current) => current ?? [])
+        setNotesError(errorMessage(error))
         reportNotesFailure(error)
       },
     )
     return () => controller.abort()
-  }, [initialNotes, kbId, revision])
+  }, [initialNotes, kbId, revision, notesRetry])
 
   async function generateArtifact(kind: StudioArtifactKind) {
     if (busy) return
@@ -270,8 +272,9 @@ export function LibraryStudio({
         </Button>
       </div>
 
+      {notesError && <div role="alert">笔记读取失败：{notesError} <Button type="button" size="sm" variant="ghost" onClick={() => setNotesRetry((value) => value + 1)}>重试读取笔记</Button></div>}
       {!notes?.length ? (
-        <p className="muted library-empty">
+        !notesError && <p className="muted library-empty">
           {notes === null
             ? '正在读取笔记…'
             : '暂无研究笔记。你可以在对话回答下方点击「存为笔记」，或点击上方按钮一键生成知识产物。'}
@@ -379,6 +382,8 @@ export function LibraryStudio({
                           onClick={() => onOpenSource?.(cit)}
                         >
                           [{cit.source_label}] {cit.title} · {cit.location_label}
+                          {cit.availability === 'available' && cit.quote_status === 'unverified' && ' · 原文未验证'}
+                          {cit.availability === 'available' && cit.quote_status === 'unavailable' && ' · 历史引文不可用'}
                         </Button>
                       ))}
                     </div>

@@ -12,14 +12,18 @@ const phases: Record<string, string> = {
   ready: '可问答', failed: '处理失败', cancelled: '已取消',
 }
 const terminal = (row: Material) => ['ready', 'failed', 'cancelled'].includes(row.status)
+const emptySelection: string[] = []
 
 export function CurrentMaterials({
   libraryId,
   name,
   reveal = 0,
   summaryMode = false,
-  selectedIds = [],
+  selectedIds = emptySelection,
   onSelectedChange,
+  onScopeStatus,
+  onUseAll,
+  scoped = false,
 }: {
   libraryId: string
   name: string
@@ -27,10 +31,14 @@ export function CurrentMaterials({
   summaryMode?: boolean
   selectedIds?: string[]
   onSelectedChange?: (ids: string[]) => void
+  onScopeStatus?: (libraryId: string, ids: string[], valid: boolean) => void
+  onUseAll?: () => void
+  scoped?: boolean
 }) {
   const { revision, refresh, report, notify } = useWorkspace()
   const [data, setData] = useState<{ libraryId: string; rows: Material[] | null; error: string }>({ libraryId, rows: null, error: '' })
   const [attempt, setAttempt] = useState(0)
+  const [checking, setChecking] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<Material | null>(null)
   const [open, setOpen] = useState(-1)
@@ -58,14 +66,17 @@ export function CurrentMaterials({
     const controller = new AbortController()
     let timer: number | undefined
     async function load() {
+      setChecking(true)
       try {
         const items = await allPages((cursor) => api.materials(libraryId, cursor, controller.signal))
         if (controller.signal.aborted) return
         setData((current) => current.libraryId === libraryId ? { libraryId, rows: items, error: '' } : current)
+        setChecking(false)
         if (items.some((item) => !terminal(item))) timer = window.setTimeout(load, 2200)
       } catch (failure) {
         if (controller.signal.aborted) return
         setData((current) => current.libraryId === libraryId ? { ...current, error: errorMessage(failure) } : current)
+        setChecking(false)
         report(failure)
       }
     }
@@ -73,12 +84,12 @@ export function CurrentMaterials({
     return () => { controller.abort(); window.clearTimeout(timer) }
   }, [libraryId, revision, attempt])
 
-  useEffect(() => {
-    if (!onSelectedChange || !rows || !selectedIds.length) return
-    const readySet = new Set(rows.filter((row) => row.status === 'ready').map((row) => row.id))
-    const valid = selectedIds.filter((id) => readySet.has(id))
-    if (valid.length !== selectedIds.length) onSelectedChange(valid)
-  }, [rows, selectedIds, onSelectedChange])
+  const readyIds = new Set(rows?.filter((row) => row.status === 'ready').map((row) => row.id))
+  const invalidIds = rows ? selectedIds.filter((id) => !readyIds.has(id)) : []
+  const validScope = Boolean(rows && !error && !checking && !invalidIds.length && selectedIds.length > 0 && selectedIds.length <= 50)
+  useLayoutEffect(() => {
+    onScopeStatus?.(libraryId, selectedIds, validScope)
+  }, [libraryId, selectedIds, validScope, onScopeStatus])
 
   const ready = rows?.filter((row) => row.status === 'ready').length ?? 0
   const pending = rows?.filter((row) => !terminal(row)).length ?? 0
@@ -89,14 +100,17 @@ export function CurrentMaterials({
       ? `${ready} 份可问答${pending ? ` · ${pending} 份处理中` : ''}${failed ? ` · ${failed} 份需处理` : ''}`
       : '正在读取…'
 
-  const scopeSummary = selectedIds.length
+  const scopeSummary = scoped && (invalidIds.length > 0 || error) ? '已选资料不可用或状态读取失败，请检查范围'
+    : selectedIds.length
     ? `本轮${summaryMode ? '摘要' : '提问'}已限定 ${selectedIds.length} 份资料`
+    : scoped ? '资料范围未确认 · 请重新选择或使用全库'
     : summaryMode ? '摘要模式 · 请至少勾选 1 份资料' : statusSummary
+  const clearScopeLabel = summaryMode ? '清除选择' : '使用全库'
 
   function toggleMaterial(id: string, checked: boolean) {
     if (!onSelectedChange) return
     if (checked) {
-      if (!selectedIds.includes(id)) onSelectedChange([...selectedIds, id])
+      if (!selectedIds.includes(id) && selectedIds.length < 50) onSelectedChange([...selectedIds, id])
     } else {
       onSelectedChange(selectedIds.filter((item) => item !== id))
     }
@@ -110,14 +124,16 @@ export function CurrentMaterials({
           <span key={scopeSummary}>{scopeSummary}</span>
         </small>
       </span>,
-      headerAction: selectedIds.length > 0 && <Button type="button" size="sm" variant="ghost" className="clear-material-scope"
-        onClick={() => onSelectedChange?.([])}>清除限定</Button>,
+      headerAction: scoped && <Button type="button" size="sm" variant="ghost" className="clear-material-scope"
+        aria-label={clearScopeLabel} onClick={() => onUseAll?.()}>{clearScopeLabel}</Button>,
       // Keep the outgoing height while the accordion closes, even when a library switch replaces the rows with loading text.
       content: <div ref={bodyRef} className="current-materials-body" style={open < 0 ? { minBlockSize: bodyHeight } : undefined}>
         {error ? <div role="alert"><p>{error}</p>{rows && <p className="muted">下方保留上次读取结果，当前状态尚未确认。</p>}<Button type="button" size="sm" variant="secondary" onClick={() => setAttempt((value) => value + 1)}>重新读取状态</Button></div>
           : rows === null ? <p role="status">正在读取资料…</p>
             : !rows.length ? <p>这个知识库还没有资料，请从输入区添加附件或图片。</p>
-              : <p className="muted">{selectedIds.length ? `已限定本轮使用所勾选的 ${selectedIds.length} 份就绪资料（未勾选时默认检索全库）。` : ready && (pending || failed) ? '本次提问仅使用已就绪资料，其余资料仍在处理或需重试。' : ready ? '资料已就绪，可以继续提问（可勾选特定资料聚焦范围）。' : pending ? '暂无可问答资料，请等待处理完成。' : '暂无可问答资料，请重试处理或重新上传。'}</p>}
+              : !scoped && <p className="muted">{ready && (pending || failed) ? '本次提问仅使用已就绪资料，其余资料仍在处理或需重试。' : ready ? '资料已就绪，可以继续提问（可勾选特定资料聚焦范围）。' : pending ? '暂无可问答资料，请等待处理完成。' : '暂无可问答资料，请重试处理或重新上传。'}</p>}
+        {scoped && <p className="muted">最多选择 50 份资料。{invalidIds.length > 0 ? '部分已选资料不可用，请移除或等待恢复。' : !selectedIds.length ? (summaryMode ? '请重新选择摘要资料。' : '请重新选择资料，或选择使用全库。') : ''}</p>}
+        {invalidIds.map((id) => <p key={id} role="alert">已选资料不可用：{rows?.find((row) => row.id === id)?.title ?? '已移除的资料'} <Button type="button" size="sm" variant="ghost" onClick={() => toggleMaterial(id, false)}>移除</Button></p>)}
         {rows && rows.length > 0 && <ul className="current-materials-list">{rows.map((row) => <li key={row.id}>
           {onSelectedChange && row.status === 'ready' && (
             <input
@@ -125,6 +141,7 @@ export function CurrentMaterials({
               className="material-scope-checkbox"
               aria-label={`限定资料：${row.title}`}
               checked={selectedIds.includes(row.id)}
+              disabled={!selectedIds.includes(row.id) && selectedIds.length >= 50}
               onChange={(event) => toggleMaterial(row.id, event.target.checked)}
             />
           )}

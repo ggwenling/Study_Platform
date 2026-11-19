@@ -3,10 +3,9 @@ import type { DragEvent, FormEvent, ReactNode } from 'react'
 import { ChevronRight, CircleDashed, Ellipsis, FilePlus2, FileText, Folder, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, Trash2, TriangleAlert, Upload } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { api } from '@/api/client'
-import type { DocumentLocation, Fragment, FragmentPage, KnowledgeBase, LibraryOverview, Material, MaterialPreview, StudyNote } from '@/api/types'
+import type { DocumentLocation, Fragment, KnowledgeBase, LibraryOverview, Material, MaterialPreview } from '@/api/types'
 import { allPages, errorMessage, locatorLabel } from '@/api/ui'
 import { ApiError } from '@/api/stream'
-import { useUploadQueue } from '../useUploadQueue'
 import { PasteTextDialog } from './PasteTextDialog'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
 import { Button } from '@/components/arc/button/button'
@@ -33,7 +32,7 @@ const phases: Record<string, string> = {
 
 type Panel = 'create' | 'edit' | 'deleteKb' | 'topics' | 'tags' | 'files' | 'ocr' | 'ocrQueue' | 'failed' | 'activity' | 'preview'
 type DocumentScope = { material_id?: string; section_id?: string; label?: string }
-type Preview = { title: string; version: string; text?: string; source?: MaterialPreview; locator?: string; imagePage?: number }
+type Preview = { title: string; version: string; text?: string; source?: MaterialPreview; locator?: string; imagePage?: number; quoteLabel?: string }
 type LinkedFragment = { id: string; preview?: Preview; failure?: string }
 
 function fragmentPreview(fragment: Fragment): Preview {
@@ -110,12 +109,10 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   library: KnowledgeBase; libraries: KnowledgeBase[]; select: (id: string) => void; create: () => void; onDeleted: () => void;
   fragmentId: string | null; noteId: string | null; closeSearchResult: () => void;
 }) {
-  const { user, revision, capabilities, refresh, notify, report } = useWorkspace()
+  const { revision, refresh, notify, report, libraryUploadQueue: uploadQueue } = useWorkspace()
   const id = library.id
   const [overview, setOverview] = useState<LibraryOverview>()
   const [materials, setMaterials] = useState<Material[]>([])
-  const [initial, setInitial] = useState<{ notes: StudyNote[]; fragments: FragmentPage }>()
-  const loaded = useRef(false)
   const [failure, setFailure] = useState('')
   const [reload, setReload] = useState(0)
   const [fragmentRevision, setFragmentRevision] = useState(0)
@@ -155,22 +152,12 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     let timer: number
     async function load() {
       try {
-        const firstPage = loaded.current ? undefined : Promise.all([
-          api.studio.notes(id, signal),
-          api.fragments(id, { page: '1' }, signal),
-        ])
-        const [summary, rows, sections] = await Promise.all([
+        const [summary, rows] = await Promise.all([
           api.libraryOverview(id, signal),
           allPages((cursor) => api.materials(id, cursor, signal)),
-          firstPage,
         ])
         if (signal.aborted) return
-        if (sections) {
-          setInitial({ notes: sections[0].items, fragments: sections[1] })
-          loaded.current = true
-        } else {
-          setFragmentRevision((value) => value + 1)
-        }
+        setFragmentRevision((value) => value + 1)
         setOverview(summary)
         setMaterials(rows)
         setFailure('')
@@ -195,13 +182,6 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   }, [expanded, id, locations, materials])
 
   const reloadData = () => setReload((value) => value + 1)
-  const uploadQueue = useUploadQueue({
-    userId: user?.id,
-    maxUploadBytes: capabilities?.max_upload_bytes,
-    refresh: () => { reloadData(); refresh() },
-    notify,
-    report,
-  })
   const addFiles = (files: FileList | File[]) => uploadQueue.enqueue(files, { id, name: library.name })
   const failedUploads = uploadQueue.items.filter((row) => row.status === 'failed')
 
@@ -293,12 +273,12 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     } catch (error) { report(error) } finally { setBusy(undefined) }
   }
 
-  async function openSource(version: string, title: string, locator?: Record<string, unknown>) {
+  async function openSource(version: string, title: string, locator?: Record<string, unknown>, excerpt?: { text: string; label: string }) {
     try {
       const source = await api.preview(version)
       const page = locator?.page ?? locator?.image
       const imagePage = typeof page === 'number' && source.sections.some((part) => (part.locator.page ?? part.locator.image) === page && Array.isArray(part.locator.ocr)) ? page : undefined
-      setPreview({ title, version, source, locator: locator ? locatorLabel(locator) : undefined, imagePage })
+      setPreview({ title, version, source, locator: locator ? locatorLabel(locator) : undefined, imagePage, text: excerpt?.text, quoteLabel: excerpt?.label })
       setPanel('preview')
     } catch (error) { report(error) }
   }
@@ -339,7 +319,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   const heatmap = (selectable = true) => overview ? <ActivityHeatmap className="library-heatmap" days={overview.activity} label="资料活动" period="最近 12 周" weekStartsOn={1} locale="zh-CN"
     unit={{ one: '次索引', other: '次索引' }} selectedDate={day} onSelectDate={selectable ? (value) => { selectDay(value); scrollToFragments() } : undefined} /> : <p className="muted">暂无活动记录</p>
 
-  if (!initial) return failure ? <div className="placeholder-page">
+  if (!overview) return failure ? <div className="placeholder-page">
     <EmptyState title="无法读取知识库" description={failure} action={<Button onClick={() => { setFailure(''); reloadData() }}>重试</Button>} />
   </div> : <LibraryLoading />
 
@@ -380,7 +360,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         <div className="upload-queue-failures library-upload-note">
           {failedUploads.map((item) => (
             <span key={item.id} className="upload-failure-item">
-              <span>「{item.name}」上传失败</span>
+              <span>「{item.name}」上传至「{item.libraryName}」失败</span>
               <Button type="button" size="sm" variant="secondary" onClick={() => uploadQueue.retryItem(item.id)}>重试上传</Button>
             </span>
           ))}
@@ -419,13 +399,14 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         kbName={library.name}
         readyCount={overview?.ready_count ?? 0}
         revision={fragmentRevision}
-        initialNotes={initial.notes}
         linkedNoteId={noteId}
         closeLinkedNote={closeSearchResult}
         onIngested={reloadData}
         onOpenSource={(cit) => {
           if (cit.availability === 'available') {
-            void openSource(cit.material_version_id, cit.title, cit.locator)
+            const label = cit.quote_status === 'unverified' ? '原文未验证'
+              : cit.quote_status === 'unavailable' ? '历史引文不可用' : '笔记引用片段'
+            void openSource(cit.material_version_id, cit.title, cit.locator, { text: cit.quote, label })
           } else {
             notify('此来源已不可访问。')
           }
@@ -440,7 +421,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       <section className="library-panel library-fragment-panel" ref={fragmentPanel}>
         {heading(<FileText size={22} />, '片段浏览', '检索与管理已生成的内容片段')}
         <LibraryFragments id={id} tags={overview?.tags ?? []} day={day} setDay={setDay} scope={scope}
-          clearScope={() => setScope({})} revision={fragmentRevision} initialPage={initial.fragments} onPreview={showFragment}
+          clearScope={() => setScope({})} revision={fragmentRevision} onPreview={showFragment}
           onOpenSource={(row) => void openSource(row.version_id, row.title, row.locator)} />
       </section>
     </div>
@@ -504,7 +485,9 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         {visiblePreview ? <div className="source-detail">
           <DownloadMaterial version={visiblePreview.version} title={visiblePreview.title} />
           {visiblePreview.imagePage && <MaterialPage version={visiblePreview.version} page={visiblePreview.imagePage} title={visiblePreview.title} />}
+          {visiblePreview.quoteLabel && <strong>{visiblePreview.quoteLabel}</strong>}
           {visiblePreview.text && <p>{visiblePreview.text}</p>}
+          {visiblePreview.quoteLabel && Boolean(visiblePreview.source?.sections.length) && <strong>资料预览</strong>}
           {visiblePreview.source?.sections.map((section, index) => <p key={index}>
             <small>{locatorLabel(section.locator)}</small><br />{section.text}
           </p>)}

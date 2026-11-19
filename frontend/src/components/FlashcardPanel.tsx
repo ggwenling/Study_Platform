@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BrainCircuit, ChevronRight, RotateCw, Trash2 } from 'lucide-react'
 import { api } from '@/api/client'
 import type { FlashcardDeckDetail, FlashcardDeckSummary, KnowledgeBase } from '@/api/types'
@@ -35,6 +35,8 @@ export function FlashcardPanel({
   const [cardIndex, setCardIndex] = useState(0)
   const [flipped, setFlipped] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [pendingReview, setPendingReview] = useState<{ cardId: string; rating: 0 | 1 | 2 | 3; key: string } | null>(null)
+  const ratingInFlight = useRef(false)
 
   useEffect(() => {
     if (!knowledgeBases.length) {
@@ -101,13 +103,17 @@ export function FlashcardPanel({
     }
   }
 
-  async function rateCurrentCard(rating: 0 | 1 | 2 | 3) {
-    if (!activeDeck || busy) return
+  async function rateCurrentCard(rating: 0 | 1 | 2 | 3, retry = false) {
+    if (!activeDeck || busy || ratingInFlight.current) return
     const current = activeDeck.cards[cardIndex]
-    if (!current) return
+    if (!current || (pendingReview && !retry)) return
+    const review = pendingReview ?? { cardId: current.id, rating, key: crypto.randomUUID() }
+    ratingInFlight.current = true
+    setPendingReview(review)
     setBusy(true)
     try {
-      const updated = await api.studio.reviewFlashcard(current.id, rating)
+      const updated = await api.studio.reviewFlashcard(review.cardId, review.rating, review.key)
+      setPendingReview(null)
       setActiveDeck((prev) => {
         if (!prev) return prev
         const cards = prev.cards.map((c) => (c.id === updated.id ? { ...c, ...updated, sources: c.sources } : c))
@@ -125,8 +131,10 @@ export function FlashcardPanel({
       }
       await loadDecks()
     } catch (error) {
+      if (error instanceof ApiError && [400, 401, 403, 404, 409, 422].includes(error.status ?? 0)) setPendingReview(null)
       notify(error instanceof ApiError ? errorMessage(error) : '提交复习结果失败')
     } finally {
+      ratingInFlight.current = false
       setBusy(false)
     }
   }
@@ -166,7 +174,7 @@ export function FlashcardPanel({
           />
         </div>
         <div className="learning-config-actions">
-          <Button type="button" loading={busy} disabled={busy || !kbId} onClick={() => void generateDeck()}>
+          <Button type="button" loading={busy} disabled={busy || Boolean(pendingReview) || !kbId} onClick={() => void generateDeck()}>
             <BrainCircuit size={16} aria-hidden /> 从当前库生成闪卡
           </Button>
         </div>
@@ -183,7 +191,7 @@ export function FlashcardPanel({
                 间隔 {card.interval_days} 天 · 已复习 {card.repetition_count} 次
               </span>
             </div>
-            <Button type="button" size="sm" variant="ghost" onClick={() => setActiveDeck(null)}>
+            <Button type="button" size="sm" variant="ghost" disabled={busy || Boolean(pendingReview)} onClick={() => setActiveDeck(null)}>
               返回卡组列表
             </Button>
           </header>
@@ -212,6 +220,9 @@ export function FlashcardPanel({
             )}
           </div>
 
+          {pendingReview && <div role="alert">评分结果尚未确认，请重试上次评分。
+            <Button type="button" size="sm" disabled={busy} onClick={() => void rateCurrentCard(pendingReview.rating, true)}>重试上次评分</Button>
+          </div>}
           {!flipped ? (
             <div className="learning-actions">
               <Button type="button" variant="secondary" onClick={() => setFlipped(true)}>
@@ -220,16 +231,16 @@ export function FlashcardPanel({
             </div>
           ) : (
             <div className="flashcard-ratings" role="group" aria-label="记忆程度评分">
-              <Button type="button" size="sm" variant="danger" disabled={busy} onClick={() => void rateCurrentCard(0)}>
+              <Button type="button" size="sm" variant="danger" disabled={busy || Boolean(pendingReview)} onClick={() => void rateCurrentCard(0)}>
                 重来（10分钟后）
               </Button>
-              <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void rateCurrentCard(1)}>
+              <Button type="button" size="sm" variant="secondary" disabled={busy || Boolean(pendingReview)} onClick={() => void rateCurrentCard(1)}>
                 困难
               </Button>
-              <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void rateCurrentCard(2)}>
+              <Button type="button" size="sm" variant="secondary" disabled={busy || Boolean(pendingReview)} onClick={() => void rateCurrentCard(2)}>
                 良好
               </Button>
-              <Button type="button" size="sm" variant="primary" disabled={busy} onClick={() => void rateCurrentCard(3)}>
+              <Button type="button" size="sm" variant="primary" disabled={busy || Boolean(pendingReview)} onClick={() => void rateCurrentCard(3)}>
                 熟练掌握
               </Button>
             </div>
@@ -239,7 +250,7 @@ export function FlashcardPanel({
             <Button
               type="button"
               variant="ghost"
-              disabled={cardIndex === 0 || busy}
+              disabled={cardIndex === 0 || busy || Boolean(pendingReview)}
               onClick={() => { setFlipped(false); setCardIndex((i) => i - 1) }}
             >
               上一张
@@ -247,7 +258,7 @@ export function FlashcardPanel({
             <Button
               type="button"
               variant="ghost"
-              disabled={cardIndex >= activeDeck.cards.length - 1 || busy}
+              disabled={cardIndex >= activeDeck.cards.length - 1 || busy || Boolean(pendingReview)}
               onClick={() => { setFlipped(false); setCardIndex((i) => i + 1) }}
             >
               下一张 <ChevronRight size={16} aria-hidden />

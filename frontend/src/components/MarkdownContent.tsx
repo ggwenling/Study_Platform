@@ -152,6 +152,8 @@ export function MarkdownContent({
           <strong>
             {citation.title} · {citation.availability === 'available' ? citation.location_label : '来源已不可用'}
           </strong>
+          {citation.availability === 'available' && citation.quote_status === 'unverified' && <span>原文未验证</span>}
+          {citation.availability === 'available' && citation.quote_status === 'unavailable' && <span>历史引文不可用</span>}
           {excerpt && <span>{excerpt}</span>}
         </span>
       )

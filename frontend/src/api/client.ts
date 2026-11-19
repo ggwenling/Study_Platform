@@ -293,8 +293,8 @@ export const api = {
       ),
     flashcardDeck: (deckId: string) => request<FlashcardDeckDetail>(`/flashcard-decks/${pathId(deckId)}`),
     deleteFlashcardDeck: (deckId: string) => request<void>(`/flashcard-decks/${pathId(deckId)}`, json('DELETE')),
-    reviewFlashcard: (cardId: string, rating: 0 | 1 | 2 | 3) =>
-      request<FlashcardItem>(`/flashcards/${pathId(cardId)}/review`, json('POST', { rating })),
+    reviewFlashcard: (cardId: string, rating: 0 | 1 | 2 | 3, idempotencyKey: string) =>
+      request<FlashcardItem>(`/flashcards/${pathId(cardId)}/review`, json('POST', { rating, idempotency_key: idempotencyKey })),
   },
   workshop: {
     hitTest: (

@@ -6,6 +6,7 @@ import type { Capabilities, Conversation, Dashboard, KnowledgeBase, User } from 
 import { allPages, errorMessage } from '@/api/ui'
 import { useChat } from './useChat'
 import type { ChatController } from './useChat'
+import { useUploadQueue } from './useUploadQueue'
 
 type Data = {
   user: User | null
@@ -20,6 +21,7 @@ type Data = {
   report: (error: unknown) => void
   requireLogin: () => void
   chat: ChatController
+  libraryUploadQueue: ReturnType<typeof useUploadQueue>
 }
 
 const Workspace = createContext<Data | null>(null)
@@ -54,6 +56,7 @@ export function WorkspaceData({ user, notify, requireLogin, onExpired, children 
   }
 
   const chat = useChat(refresh, report)
+  const libraryUploadQueue = useUploadQueue({ userId: user?.id, maxUploadBytes: capabilities?.max_upload_bytes, refresh, notify, report })
   useEffect(() => {
     if (!user) return
     let active = true
@@ -73,7 +76,7 @@ export function WorkspaceData({ user, notify, requireLogin, onExpired, children 
   }, [user, revision])
 
   return (
-    <Workspace.Provider value={{ user, libraries, recent, overview, capabilities, revision, loading, refresh, notify, report, requireLogin, chat }}>
+    <Workspace.Provider value={{ user, libraries, recent, overview, capabilities, revision, loading, refresh, notify, report, requireLogin, chat, libraryUploadQueue }}>
       {children}
     </Workspace.Provider>
   )

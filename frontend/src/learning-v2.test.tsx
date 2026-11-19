@@ -219,6 +219,34 @@ describe('Learning 2.0 workflow', () => {
     expect(node.textContent).toContain('错题重练')
   })
 
+  it('keeps an empty selected scope blocked until using the whole library and caps selection at 50', async () => {
+    const rows = Array.from({ length: 51 }, (_, i) => ({ id: `m${i}`, knowledge_base_id: 'kb-1', title: `资料${i}`, mime_type: 'text/plain', byte_size: 1, status: 'ready', version_id: 'v', job_id: null, created_at: '', error_code: null, error_message: null }))
+    vi.mocked(api.materials).mockResolvedValue({ items: rows, next_cursor: null })
+    vi.mocked(api.learning.generateQuiz).mockRejectedValue(new Error('stop after observing request'))
+    const notify = vi.fn()
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={notify} />)
+    const boxes = [...node.querySelectorAll<HTMLInputElement>('.learning-material-picker input[type=checkbox]')]
+    for (const box of boxes.slice(0, 50)) await act(async () => box.click())
+    expect(boxes[50].disabled).toBe(true)
+    for (const box of boxes.slice(0, 50)) await act(async () => box.click())
+    await act(async () => findButtonContaining('从当前库出题')!.click())
+    expect(api.learning.generateQuiz).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('所选资料范围尚未确认'))
+    await act(async () => findButtonContaining('使用全库')!.click())
+    await act(async () => findButtonContaining('从当前库出题')!.click())
+    expect(api.learning.generateQuiz).toHaveBeenCalledWith('kb-1', 5, expect.objectContaining({ material_ids: null }))
+  })
+
+  it('uses each question library for follow-up and reports an unavailable library', async () => {
+    const notify = vi.fn()
+    vi.mocked(api.learning.attempt).mockResolvedValue({ ...sampleAttempt, knowledge_base_id: 'kb-1', items: [{ ...sampleAttempt.items[0], knowledge_base_id: null }] })
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={notify} />)
+    await act(async () => findButtonContaining('继续上次练习')!.click())
+    await act(async () => findButtonContaining('去对话追问')!.click())
+    expect(notify).toHaveBeenCalledWith('原知识库不可用，无法追问此题。')
+    expect(navigateMock).not.toHaveBeenCalled()
+  })
+
   it('falls back to remaining valid kbId when selected KB is deleted and catches masterWrong errors cleanly', async () => {
     const notify = vi.fn()
     vi.mocked(api.learning.masterWrong).mockRejectedValueOnce(new Error('network failure'))

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { DragEvent, Ref } from 'react'
 import { ArrowUp, FileSpreadsheet, FileText, Globe, Image, Paperclip, Plus, Square } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
@@ -45,7 +45,11 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   const [supplement, setSupplement] = useState(false)
   const [summaryMode, setSummaryMode] = useState(summary)
   const [selected, setSelected] = useState('')
-  const [materialScope, setMaterialScope] = useState<{ libraryId?: string; ids: string[] }>({ ids: [] })
+  const [materialScope, setMaterialScope] = useState<{ libraryId?: string; ids: string[]; scoped?: boolean }>({ ids: [] })
+  const [scopeStatus, setScopeStatus] = useState<{ libraryId: string; ids: string[]; valid: boolean }>()
+  const reportScope = useCallback((libraryId: string, ids: string[], valid: boolean) => {
+    setScopeStatus({ libraryId, ids, valid })
+  }, [])
   const [uploadTarget, setUploadTarget] = useState<{ id: string; at: number } | null>(null)
   const [pasteOpen, setPasteOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -102,6 +106,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
     if (!user) return requireLogin()
     if (!libraryId) return notify('请先创建或选择知识库。')
     if (modelReady === false) return notify('当前模型不可用，请在设置的「模型连接」中配置或测试连接。')
+    if (materialScope.scoped && (!scopeStatus?.valid || scopeStatus.libraryId !== libraryId || scopeStatus.ids !== selectedMaterialIds)) return notify('所选资料范围尚未确认，请检查资料状态或选择使用全库。')
     if (summaryMode && selectedMaterialIds.length === 0) {
       setUploadTarget({ id: libraryId, at: Date.now() })
       return notify('请先在下方「当前库资料」中勾选要提炼的已就绪资料。')
@@ -112,7 +117,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
       knowledge_base_id: libraryId,
       answer_mode: supplement ? 'with_general' : 'knowledge_only',
       intent: summaryMode ? 'summary' : 'qa',
-      material_ids: selectedMaterialIds.length > 0 ? selectedMaterialIds : null,
+      material_ids: materialScope.scoped ? selectedMaterialIds : null,
       content,
     })) setDraft((current) => current.trim() === content ? '' : current)
   }
@@ -291,7 +296,10 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
         reveal={uploadTarget?.id === libraryId ? uploadTarget.at : 0}
         summaryMode={summaryMode}
         selectedIds={selectedMaterialIds}
-        onSelectedChange={(ids) => setMaterialScope({ libraryId, ids })}
+        scoped={Boolean(materialScope.scoped)}
+        onSelectedChange={(ids) => setMaterialScope({ libraryId, ids, scoped: true })}
+        onUseAll={() => setMaterialScope({ libraryId, ids: [], scoped: false })}
+        onScopeStatus={reportScope}
       />
     )}
     <PasteTextDialog

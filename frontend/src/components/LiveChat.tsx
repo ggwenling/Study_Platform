@@ -265,8 +265,10 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
               {focused.citations.map((citation) => <Button key={citation.id} variant="secondary" className="source-card" onClick={() => openSource(citation)}>
                 <span className="source-card-content">
                   <span className="source-card-title"><span className="source-badge">{citation.source_label}</span><FileText size={16} /><span>{citation.title}</span></span>
-                  {citation.availability === 'available' && <span className="source-excerpt">{citation.quote}</span>}
-                  <small>{citation.availability === 'available' ? citation.location_label : '来源已不可用'}</small>
+                  {citation.availability === 'available' && citation.quote && <span className="source-excerpt">{citation.quote}</span>}
+                  <small>{citation.availability === 'available' ? citation.location_label : '来源已不可用'}
+                    {citation.availability === 'available' && citation.quote_status === 'unavailable' && ' · 历史引文不可用'}
+                  </small>
                 </span>
               </Button>)}
             </div> : <p>这轮还没有可查看的资料引用。</p>}
@@ -278,7 +280,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
           {sourceError ? <p className="error-text" role="alert">{sourceError}</p> : source?.availability === 'unavailable'
             ? <p>此来源已不可访问。</p>
             : source ? <div className="source-detail">
-              <p>{source.quote}</p>
+              {source.quote_status === 'unavailable' ? <p>历史引文不可用。</p> : <p>{source.quote}</p>}
               {source.preview_url?.includes('/pages/') && <MaterialPage key={source.preview_url} version={source.material_version_id} page={Number(source.preview_url.split('/').at(-1))} title={`${source.title} · ${source.location_label}`} />}
               {source.content_url && <DownloadMaterial version={source.material_version_id} title={source.title} />}
             </div>
