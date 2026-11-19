@@ -39,6 +39,7 @@ from study_platform.services.retrieval import (
 )
 
 ACTIVE = ("created", "running")
+STREAM_POLL_SECONDS = 1
 
 
 def now():
@@ -330,6 +331,15 @@ def context(run_id):
             AiWorkflowRun.id != run.id, AiWorkflowRun.status == "completed",
             AiWorkflowRun.knowledge_base_id == run.knowledge_base_id,
             AiWorkflowRun.answer_mode == run.answer_mode,
+            ~sa.exists(
+                sa.select(MessageCitation.id)
+                .join(Message, Message.id == MessageCitation.message_id)
+                .join(MaterialChunk, MaterialChunk.id == MessageCitation.chunk_id)
+                .where(
+                    Message.workflow_run_id == AiWorkflowRun.id,
+                    MaterialChunk.retrieval_enabled.is_(False),
+                )
+            ),
         ).order_by(AiWorkflowRun.created_at.desc()).limit(4)).all()
         for prior in reversed(previous):
             if prior.source_scope.get("index_version_ids") != scope["index_version_ids"]:
@@ -598,6 +608,8 @@ async def _stream(owner, run_id, fence, replay=False):
         return
     content = ""
     usage = None
+    pending = None
+    iterator = None
     try:
         yield meta
         yield event("phase", turn_id=run_id, phase="working")
@@ -630,18 +642,27 @@ async def _stream(owner, run_id, fence, replay=False):
                 yield await ended_event(owner, conv_id, run_id)
                 return
             yield event("phase", turn_id=run_id, phase="composing")
-            stream = astream_chat(
+            iterator = astream_chat(
                 prompt(scope, evidence, history),
                 context=ModelUsageContext(owner, "chat"),
-            )
+            ).__aiter__()
             last_save = time.monotonic()
-            async for chunk in stream:
-                if isinstance(chunk.content, str) and chunk.content:
-                    content += chunk.content
-                    yield event("delta", turn_id=run_id, delta=chunk.content)
-                if chunk.usage_metadata:
-                    usage = chunk.usage_metadata
-                if time.monotonic()-last_save >= 1:
+            while True:
+                if pending is None:
+                    pending = asyncio.create_task(anext(iterator))
+                completed, _ = await asyncio.wait({pending}, timeout=STREAM_POLL_SECONDS)
+                if completed:
+                    task, pending = pending, None
+                    try:
+                        chunk = task.result()
+                    except StopAsyncIteration:
+                        break
+                    if isinstance(chunk.content, str) and chunk.content:
+                        content += chunk.content
+                        yield event("delta", turn_id=run_id, delta=chunk.content)
+                    if chunk.usage_metadata:
+                        usage = chunk.usage_metadata
+                if time.monotonic() - last_save >= STREAM_POLL_SECONDS:
                     if not await run_in_threadpool(checkpoint, run_id, fence, content):
                         yield await ended_event(owner, conv_id, run_id)
                         return
@@ -672,3 +693,9 @@ async def _stream(owner, run_id, fence, replay=False):
         error = exc if isinstance(exc, ApiError) else provider_error(exc)
         await run_in_threadpool(checkpoint, run_id, fence, content, "failed", None, error.code)
         yield event("error", turn_id=run_id, **error.payload())
+    finally:
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        if iterator is not None and hasattr(iterator, "aclose"):
+            await iterator.aclose()

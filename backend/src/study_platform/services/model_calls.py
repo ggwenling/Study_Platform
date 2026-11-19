@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from dataclasses import replace
 from typing import Any
 
@@ -230,12 +231,14 @@ async def astream_chat(
         nonlocal usage, success
         emitted = False
         client = None
+        raw_stream = None
         try:
             client = build_chat_model(
                 **({"connection": connection} if personal else {}),
                 use_fallback=use_fb, timeout=timeout, max_tokens=max_tokens, temperature=temperature
             )
-            async for chunk in client.astream(messages):
+            raw_stream = client.astream(messages)
+            async for chunk in raw_stream:
                 emitted = True
                 chunk_usage = _usage_from_chunk(chunk)
                 if chunk_usage:
@@ -248,6 +251,8 @@ async def astream_chat(
                 raise
             raise
         finally:
+            if raw_stream is not None and hasattr(raw_stream, "aclose"):
+                await raw_stream.aclose()
             if personal and client is not None:
                 client.root_client.close()
                 await client.root_async_client.close()
@@ -255,9 +260,10 @@ async def astream_chat(
     emitted_any = False
     try:
         try:
-            async for chunk in pump(False):
-                emitted_any = True
-                yield chunk
+            async with aclosing(pump(False)) as primary_stream:
+                async for chunk in primary_stream:
+                    emitted_any = True
+                    yield chunk
         except ApiError:
             raise
         except Exception as primary_exc:
@@ -269,8 +275,9 @@ async def astream_chat(
             used_fallback = True
             model_name = settings.chat_fallback_model
             logger.warning("primary chat stream failed before output; trying fallback", exc_info=primary_exc)
-            async for chunk in pump(True):
-                emitted_any = True
-                yield chunk
+            async with aclosing(pump(True)) as fallback_stream:
+                async for chunk in fallback_stream:
+                    emitted_any = True
+                    yield chunk
     finally:
         finalize()

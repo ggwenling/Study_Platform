@@ -37,8 +37,6 @@ def upgrade() -> None:
                 break
             for chunk_id, text in rows:
                 indexed = lexical_index_text(text or "")
-                if not indexed:
-                    continue
                 session.execute(
                     sa.text(
                         """

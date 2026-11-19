@@ -178,3 +178,172 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                     admin.exec_driver_sql(f"DROP DATABASE {quoted_name}")
         finally:
             admin_engine.dispose()
+
+
+def test_lexical_backfill_handles_symbol_only_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    if os.getenv("RUN_DB_TESTS") != "1":
+        pytest.skip("set RUN_DB_TESTS=1 to run PostgreSQL tests")
+    raw_url = os.getenv("TEST_DATABASE_URL")
+    if not raw_url:
+        pytest.skip("TEST_DATABASE_URL is not configured")
+    url = make_url(raw_url)
+    if url.get_backend_name() != "postgresql" or not (url.database or "").endswith("_test"):
+        pytest.fail("TEST_DATABASE_URL must name a PostgreSQL database ending in _test")
+    if {"dbname", "service", "servicefile"} & set(url.query):
+        pytest.fail("TEST_DATABASE_URL must not override the database name")
+
+    name = f"study_lexical_backfill_{uuid4().hex}_test"
+    url = url.set(drivername="postgresql+psycopg")
+    admin_engine = sa.create_engine(
+        url.set(database="postgres"),
+        isolation_level="AUTOCOMMIT",
+        connect_args={"connect_timeout": 5},
+    )
+    created = False
+    try:
+        with admin_engine.connect() as admin:
+            can_create = admin.scalar(
+                sa.text("SELECT rolcreatedb OR rolsuper FROM pg_roles WHERE rolname = current_user")
+            )
+            if not can_create:
+                pytest.skip("database role lacks CREATEDB")
+            quoted_name = admin.dialect.identifier_preparer.quote(name)
+            admin.exec_driver_sql(f"CREATE DATABASE {quoted_name}")
+            created = True
+
+        target = url.set(database=name)
+        engine = sa.create_engine(target, connect_args={"connect_timeout": 5})
+        try:
+            monkeypatch.setenv(
+                "MIGRATION_DATABASE_URL", target.render_as_string(hide_password=False)
+            )
+            config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+            command.upgrade(config, "0007_learning_verdict")
+
+            symbol_ids: list[object] = []
+            with engine.begin() as connection:
+                owner = connection.scalar(
+                    sa.text(
+                        """
+                        INSERT INTO study.users(email, password_hash, display_name)
+                        VALUES ('backfill@example.test', 'unused', 'Backfill')
+                        RETURNING id
+                        """
+                    )
+                )
+                kb = connection.scalar(
+                    sa.text(
+                        """
+                        INSERT INTO study.knowledge_bases(owner_user_id, name)
+                        VALUES (:owner, 'Backfill KB')
+                        RETURNING id
+                        """
+                    ),
+                    {"owner": owner},
+                )
+                material = connection.scalar(
+                    sa.text(
+                        """
+                        INSERT INTO study.materials(owner_user_id, knowledge_base_id, title, kind, status)
+                        VALUES (:owner, :kb, 'Symbols', 'other', 'active')
+                        RETURNING id
+                        """
+                    ),
+                    {"owner": owner, "kb": kb},
+                )
+                version = connection.scalar(
+                    sa.text(
+                        """
+                        INSERT INTO study.material_versions(
+                            material_id, version_no, is_current, source_mime,
+                            source_sha256, byte_size, object_key, parse_status
+                        )
+                        VALUES (:material, 1, true, 'text/plain', :sha, 10, 'backfill-key', 'ready')
+                        RETURNING id
+                        """
+                    ),
+                    {"material": material, "sha": "b" * 64},
+                )
+                index_version = connection.scalar(
+                    sa.text(
+                        """
+                        INSERT INTO study.index_versions(
+                            material_version_id, generation, pipeline_profile,
+                            embedding_profile, status, is_active, ready_at
+                        )
+                        VALUES (:version, 1, 'legacy', 'legacy:1024', 'ready', true, now())
+                        RETURNING id
+                        """
+                    ),
+                    {"version": version},
+                )
+                samples = ["---", "... *** !!!", "   ", "雪松仓库 QZ-731"]
+                for ordinal, text in enumerate(samples):
+                    chunk_id = connection.scalar(
+                        sa.text(
+                            """
+                            INSERT INTO study.material_chunks(
+                                index_version_id, material_version_id, ordinal,
+                                text, text_sha256, locator, lexical
+                            )
+                            VALUES (:index_id, :version_id, :ordinal, :text, :sha, '{}'::jsonb, NULL)
+                            RETURNING id
+                            """
+                        ),
+                        {
+                            "index_id": index_version,
+                            "version_id": version,
+                            "ordinal": ordinal,
+                            "text": text,
+                            "sha": f"{ordinal:064x}",
+                        },
+                    )
+                    if ordinal < 3:
+                        symbol_ids.append(chunk_id)
+                    else:
+                        normal_id = chunk_id
+
+            command.upgrade(config, "0008_lexical_backfill")
+
+            with engine.connect() as connection:
+                null_count = connection.scalar(
+                    sa.text("SELECT COUNT(*) FROM study.material_chunks WHERE lexical IS NULL")
+                )
+                assert null_count == 0
+                for chunk_id in symbol_ids:
+                    lexical_text = connection.scalar(
+                        sa.text("SELECT lexical::text FROM study.material_chunks WHERE id = :id"),
+                        {"id": chunk_id},
+                    )
+                    assert lexical_text == ""
+                matched_cn = connection.scalar(
+                    sa.text(
+                        """
+                        SELECT lexical @@ plainto_tsquery('simple', '雪松')
+                        FROM study.material_chunks
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": normal_id},
+                )
+                matched_num = connection.scalar(
+                    sa.text(
+                        """
+                        SELECT lexical @@ plainto_tsquery('simple', '731')
+                        FROM study.material_chunks
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": normal_id},
+                )
+                assert matched_cn is True
+                assert matched_num is True
+        finally:
+            engine.dispose()
+    finally:
+        try:
+            if created:
+                with admin_engine.connect() as admin:
+                    admin.exec_driver_sql(f"DROP DATABASE {quoted_name}")
+        finally:
+            admin_engine.dispose()

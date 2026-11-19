@@ -861,7 +861,7 @@ def test_disabled_fragment_is_excluded_from_summary_vector_search_and_history(ch
     query = request(s.kb_a, conv)
     query["intent"] = "summary"
     query["material_ids"] = [str(evidence["material_id"])]
-    next_run, _, _ = chat.prepare(s.owner, query, uuid4().hex)
+    next_run, next_fence, _ = chat.prepare(s.owner, query, uuid4().hex)
     _, first_chunks, first_history = chat.context(next_run)
     assert first_chunks and first_history
 
@@ -869,8 +869,7 @@ def test_disabled_fragment_is_excluded_from_summary_vector_search_and_history(ch
         update_retrieval(s.kb_a, RetrievalUpdate(ids=[evidence["id"]], enabled=False),
                          db, SimpleNamespace(id=s.owner))
     scope, chunks, history = chat.context(next_run)
-    assert chunks == []
-    assert history == first_history
+    assert chunks == history == []
     assert chat.retrieve_vectors(scope, [[0.1] * 1024], s.owner) == []
     assert chat.turn(s.owner, conv, first)["messages"][-1]["citations"][0]["quote"] == evidence["text"]
 
@@ -880,6 +879,14 @@ def test_disabled_fragment_is_excluded_from_summary_vector_search_and_history(ch
     _, chunks, history = chat.context(next_run)
     assert chunks == first_chunks and history == first_history
     assert chat.retrieve_vectors(scope, [[0.1] * 1024], s.owner)[0]["id"] == evidence["id"]
+
+    assert chat.checkpoint(next_run, next_fence, "Clean summary", "completed", [])
+    with s.factory() as db:
+        update_retrieval(s.kb_a, RetrievalUpdate(ids=[evidence["id"]], enabled=False),
+                         db, SimpleNamespace(id=s.owner))
+    third_run, _, _ = chat.prepare(s.owner, request(s.kb_a, conv, content="Follow-up"), uuid4().hex)
+    _, _, filtered_history = chat.context(third_run)
+    assert filtered_history == [("user", query["content"]), ("assistant", "Clean summary")]
 
 
 def test_lexical_hybrid_boosts_chinese_keyword_match(chat_db, monkeypatch):
@@ -996,3 +1003,96 @@ def test_embedding_releases_job_locks_and_fences_cancel(chat_db, monkeypatch, tm
         assert db.get(AiJob, job_id).status == "cancelled"
         assert not db.scalar(sa.select(IndexVersion.id).where(
             IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True)))
+
+
+def test_stalled_stream_polls_lease_and_exits_promptly_on_cancel(chat_db, monkeypatch):
+    s = chat_db
+    evidence = seed_evidence(s)
+    monkeypatch.setattr(chat, "STREAM_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(chat, "retrieve", lambda _scope, _content, _owner, **_kw: [evidence])
+
+    started = asyncio.Event()
+    never_fires = asyncio.Event()
+    closed = False
+
+    async def stalled_chunks():
+        nonlocal closed
+        started.set()
+        try:
+            await never_fires.wait()
+            yield SimpleNamespace(content="unreachable", usage_metadata=None)
+        finally:
+            closed = True
+
+    monkeypatch.setattr(chat, "astream_chat", lambda messages, **_: stalled_chunks())
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+    conv = conversation_for(s, run)
+    shortened_lease = chat.now() + timedelta(seconds=5)
+    with s.factory.begin() as db:
+        db.get(AiWorkflowRun, run).lease_expires_at = shortened_lease
+
+    async def run_scenario():
+        events = []
+
+        async def consume():
+            async for item in chat.stream(s.owner, run, fence):
+                events.append(item)
+
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        renewed = False
+        for _ in range(20):
+            await asyncio.sleep(0.05)
+            with s.factory() as db:
+                current_lease = db.get(AiWorkflowRun, run).lease_expires_at
+            if current_lease > shortened_lease:
+                renewed = True
+                break
+        assert renewed, "stalled stream must renew lease during periodic polling"
+        chat.cancel(s.owner, conv, run)
+        await asyncio.wait_for(task, timeout=2.0)
+        return events
+
+    events = asyncio.run(run_scenario())
+    assert closed is True
+    assert any("event: stopped" in item for item in events)
+    assert not any("event: done" in item for item in events)
+    assert chat.turn(s.owner, conv, run)["status"] == "stopped"
+
+
+def test_early_cancel_closes_chat_stream_before_gc(chat_db, monkeypatch):
+    s = chat_db
+    evidence = seed_evidence(s)
+    monkeypatch.setattr(chat, "STREAM_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(chat, "retrieve", lambda _scope, _content, _owner, **_kw: [evidence])
+
+    closed = False
+
+    async def chunks():
+        nonlocal closed
+        try:
+            for piece in ("First ", "Second ", "Third ", "Fourth "):
+                yield SimpleNamespace(content=piece, usage_metadata=None)
+                await asyncio.sleep(0.03)
+        finally:
+            closed = True
+
+    monkeypatch.setattr(chat, "astream_chat", lambda messages, **_: chunks())
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+    conv = conversation_for(s, run)
+
+    async def consume():
+        events = []
+        cancelled = False
+        async for item in chat.stream(s.owner, run, fence):
+            events.append(item)
+            if not cancelled and "event: delta" in item:
+                chat.cancel(s.owner, conv, run)
+                cancelled = True
+        return events
+
+    events = asyncio.run(consume())
+    assert closed is True
+    assert any("event: stopped" in item for item in events)
+    assert not any("event: done" in item for item in events)
+    assert chat.turn(s.owner, conv, run)["status"] == "stopped"

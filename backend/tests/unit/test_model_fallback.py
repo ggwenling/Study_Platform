@@ -161,3 +161,64 @@ def test_astream_chat_switches_when_primary_fails_before_output(monkeypatch):
 def test_provider_error_marks_five_xx_retryable():
     error = models.provider_error(_status_error(502))
     assert error.retryable is True
+
+
+def test_astream_chat_aclose_finalizes_usage_and_closes_personal_client(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from study_platform.services.model_usage import ModelUsageContext
+
+    settings = Settings(_env_file=None, deepseek_api_key="primary", chat_model="platform-model")
+    raw_closed = False
+    recorded: list[dict] = []
+
+    async def raw_stream(_):
+        nonlocal raw_closed
+        try:
+            yield SimpleNamespace(content="first", usage_metadata={"total_tokens": 5})
+            yield SimpleNamespace(content="second", usage_metadata={"total_tokens": 9})
+        finally:
+            raw_closed = True
+
+    root_client = Mock()
+    root_async_client = Mock(close=AsyncMock())
+    client = Mock(
+        astream=raw_stream,
+        root_client=root_client,
+        root_async_client=root_async_client,
+    )
+
+    monkeypatch.setattr(model_calls, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        model_calls,
+        "resolved",
+        lambda owner, kind: {"id": "personal-1", "source": "personal", "model": "custom-model"},
+    )
+    monkeypatch.setattr(model_calls, "build_chat_model", lambda **kwargs: client)
+    monkeypatch.setattr(
+        model_calls,
+        "record_model_call",
+        lambda ctx, **kwargs: recorded.append({"ctx": ctx, **kwargs}),
+    )
+
+    async def run():
+        stream = model_calls.astream_chat(
+            [HumanMessage(content="x")],
+            context=ModelUsageContext(uuid4(), "chat"),
+        )
+        first = await anext(stream)
+        assert first.content == "first"
+        assert raw_closed is False
+        assert recorded == []
+        await stream.aclose()
+        assert raw_closed is True
+        root_client.close.assert_called_once()
+        root_async_client.close.assert_awaited_once()
+        assert len(recorded) == 1
+        assert recorded[0]["model_name"] == "custom-model"
+        assert recorded[0]["success"] is False
+        assert recorded[0]["usage"] == {"total_tokens": 5}
+
+    asyncio.run(run())
