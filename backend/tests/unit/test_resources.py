@@ -1,6 +1,7 @@
 """Resource serialization and Shanghai activity boundary regressions."""
 
 from datetime import UTC, date, datetime
+from hashlib import sha256
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -57,12 +58,23 @@ def test_citation_snapshot_and_unavailable_sources(monkeypatch, tmp_path):
         material_version_id=version_id,
         index_version_id=index_id,
         locator={"page": 3},
+        quote_text=None,
+        quote_sha256=None,
     )
     dto = citation_dto(db, citation)
     assert dto["quote"] == "Original quote"
     assert dto["locator"] == {"page": 3}
     assert dto["preview_url"].endswith("/preview")
     assert dto["availability"] == "available"
+    assert dto["quote_status"] == "unverified"
+    citation.quote_sha256 = sha256(b"Original quote").hexdigest()
+    assert citation_dto(db, citation)["quote_status"] == "verified"
+    db.get(MaterialChunk, chunk_id).text = "Edited quote"
+    changed = citation_dto(db, citation)
+    assert changed["quote"] == "" and changed["quote_status"] == "unavailable"
+    assert changed["availability"] == "available" and changed["locator"] == {"page": 3}
+    citation.quote_text = "Original quote"
+    assert citation_dto(db, citation)["quote"] == "Original quote"
     citation.locator["ocr"] = [{"text": "Original quote"}]
     assert citation_dto(db, citation)["preview_url"].endswith("/preview")
     page.touch()
@@ -87,6 +99,7 @@ def test_citation_snapshot_and_unavailable_sources(monkeypatch, tmp_path):
     assert dto["unavailable_reason"] == "material_deleted"
     assert dto["content_url"] is None and dto["preview_url"] is None
     assert dto["quote"] == "" and dto["locator"] == {}
+    assert dto["quote_status"] == "unavailable"
     material.deleted_at = None
     kb.deleted_at = datetime.now(UTC)
     citation.locator = {"image": 1, "ocr": [{"text": "Hidden OCR", "box": [[1, 2]]}]}

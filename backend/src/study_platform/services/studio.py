@@ -34,7 +34,7 @@ from study_platform.persistence.models import (
     NoteCitation,
 )
 from study_platform.services.chat import chunk_dto, chunk_query, visible_indices
-from study_platform.services.citations import citation_dto
+from study_platform.services.citations import citation_dto, citation_quote
 from study_platform.services.learning_anchor import ensure_course_anchor
 from study_platform.services.learning_llm import strip_json_fence
 from study_platform.services.model_calls import invoke_chat
@@ -246,6 +246,7 @@ def create_note(
     db.add(note)
     db.flush()
     for cit in msg_citations:
+        quote, quote_status = citation_quote(db, cit)
         db.add(
             NoteCitation(
                 note_id=note.id,
@@ -253,6 +254,8 @@ def create_note(
                 material_version_id=cit.material_version_id,
                 index_version_id=cit.index_version_id,
                 locator=cit.locator if isinstance(cit.locator, dict) else {},
+                quote_text=quote if quote_status == "verified" else None,
+                quote_sha256=cit.quote_sha256,
                 ordinal=cit.ordinal,
             )
         )
@@ -499,6 +502,7 @@ def generate_studio_artifact(
                 material_version_id=chunk["material_version_id"],
                 index_version_id=chunk["index_version_id"],
                 locator=chunk["locator"] if isinstance(chunk["locator"], dict) else {},
+                quote_text=chunk["text"],
                 ordinal=source_num - 1,
             )
         )
@@ -530,7 +534,7 @@ def _parse_flashcards_json(raw: str, max_index: int) -> list[tuple[str, str, lis
             or not indices
         ):
             continue
-        valid_idx = [i for i in dict.fromkeys(indices) if isinstance(i, int) and 1 <= i <= max_index]
+        valid_idx = list(dict.fromkeys(i for i in indices if type(i) is int and 1 <= i <= max_index))
         if not valid_idx:
             continue
         out.append((front.strip()[:1000], back.strip()[:2000], valid_idx))

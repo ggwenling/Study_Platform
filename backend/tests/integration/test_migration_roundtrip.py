@@ -1,6 +1,7 @@
 """Exercise Alembic only in a disposable database created by this test."""
 
 import os
+from io import StringIO
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,7 +18,8 @@ from study_platform.persistence.base import Base
 pytestmark = pytest.mark.integration
 
 
-def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("offline", [False, True], ids=["online", "offline"])
+def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> None:
     if os.getenv("RUN_DB_TESTS") != "1":
         pytest.skip("set RUN_DB_TESTS=1 to run PostgreSQL tests")
     raw_url = os.getenv("TEST_DATABASE_URL")
@@ -102,31 +104,64 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
                             VALUES (:owner, :conversation, :kb, 'completed')"""), {"owner": owner, "conversation": conversation, "kb": kb})
             command.upgrade(config, "0009_model_call_records")
             with engine.begin() as connection:
-                material = connection.execute(sa.insert(models.Material).values(
-                    owner_user_id=owner, knowledge_base_id=kb_ids[0], title="Legacy", kind="other", status="active"
-                ).returning(models.Material.id)).scalar_one()
-                version = connection.execute(sa.insert(models.MaterialVersion).values(
-                    material_id=material, version_no=1, is_current=True, source_mime="text/plain",
-                    source_sha256="a" * 64, byte_size=1, object_key="legacy", parse_status="ready"
-                ).returning(models.MaterialVersion.id)).scalar_one()
-                old_index = connection.execute(sa.insert(models.IndexVersion).values(
-                    material_version_id=version, generation=1, pipeline_profile="legacy",
-                    embedding_profile="legacy-embedding:1024", status="ready", is_active=True, ready_at=sa.func.now()
-                ).returning(models.IndexVersion.id)).scalar_one()
-            command.upgrade(config, "head")
+                def add_material(profile: str, *, deleted: bool = False):
+                    material = connection.execute(sa.insert(models.Material).values(
+                        owner_user_id=owner, knowledge_base_id=kb_ids[0], title=profile,
+                        kind="other", status="active", deleted_at=sa.func.now() if deleted else None,
+                    ).returning(models.Material.id)).scalar_one()
+                    version = connection.execute(sa.insert(models.MaterialVersion).values(
+                        material_id=material, version_no=1, is_current=True, source_mime="text/plain",
+                        source_sha256="a" * 64, byte_size=1, object_key=profile, parse_status="ready",
+                    ).returning(models.MaterialVersion.id)).scalar_one()
+                    index = connection.execute(sa.insert(models.IndexVersion).values(
+                        material_version_id=version, generation=1, pipeline_profile="legacy",
+                        embedding_profile=profile, status="ready", is_active=True,
+                        ready_at=sa.func.now() + sa.text("interval '1 hour'") if deleted else sa.func.now(),
+                    ).returning(models.IndexVersion.id)).scalar_one()
+                    return material, version, index
+
+                materials, versions, indexes = zip(
+                    add_material("legacy-embedding:1024"),
+                    add_material("deleted-embedding:1024", deleted=True),
+                    strict=True,
+                )
+
+            from study_platform.core import config as settings_module
+
+            # Exercise the same quoted JSON value in the online and generated SQL paths.
+            platform = settings_module.get_settings().model_copy(update={
+                "embedding_model": "platform-'quoted'",
+                "embedding_base_url": "https://platform.example/v1/",
+            })
+            monkeypatch.setattr(settings_module, "get_settings", lambda: platform)
+            if offline:
+                output = StringIO()
+                script = Config(config.config_file_name, output_buffer=output)
+                command.upgrade(script, "0009_model_call_records:head", sql=True)
+                with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+                    connection.exec_driver_sql(output.getvalue())
+            else:
+                command.upgrade(config, "head")
             with engine.connect() as connection:
-                bindings = connection.execute(sa.text("SELECT id, embedding_connection_id, embedding_binding FROM study.knowledge_bases")).all()
-                assert all(row[1] is None and row[2]["dimensions"] == 1024 for row in bindings)
-                assert next(row[2] for row in bindings if row[0] == kb_ids[0])["profile"] == "legacy-embedding:1024"
-                assert next(row[2] for row in bindings if row[0] == kb_ids[0])["model"] == "legacy-embedding"
-                assert connection.scalar(sa.text("SELECT is_active FROM study.index_versions WHERE id=:id"), {"id": old_index})
+                bindings = {}
+                for kb_id, personal_id, binding in connection.execute(sa.text(
+                    "SELECT id, embedding_connection_id, embedding_binding FROM study.knowledge_bases"
+                )):
+                    assert personal_id is None and binding["dimensions"] == 1024
+                    assert binding["base_url"] == "https://platform.example/v1"
+                    bindings[kb_id] = binding
+                assert bindings[kb_ids[0]]["profile"] == "legacy-embedding:1024"
+                assert bindings[kb_ids[0]]["model"] == "legacy-embedding"
+                assert bindings[kb_ids[1]]["model"] == "platform-'quoted'"
+                assert bindings[kb_ids[1]]["profile"] == "platform-'quoted':1024"
+                assert connection.scalar(sa.text("SELECT is_active FROM study.index_versions WHERE id=:id"), {"id": indexes[0]})
                 for conversation, expected_project in zip(conversations, [kb_ids[0], None, None, None], strict=True):
                     assert connection.scalar(sa.text("SELECT project_knowledge_base_id FROM study.conversations WHERE id=:id"), {"id": conversation}) == expected_project
             check(True)
             with engine.begin() as connection:
-                connection.execute(sa.delete(models.IndexVersion).where(models.IndexVersion.id == old_index))
-                connection.execute(sa.delete(models.MaterialVersion).where(models.MaterialVersion.id == version))
-                connection.execute(sa.delete(models.Material).where(models.Material.id == material))
+                connection.execute(sa.delete(models.IndexVersion).where(models.IndexVersion.id.in_(indexes)))
+                connection.execute(sa.delete(models.MaterialVersion).where(models.MaterialVersion.id.in_(versions)))
+                connection.execute(sa.delete(models.Material).where(models.Material.id.in_(materials)))
                 for table in ("ai_workflow_runs", "conversations", "knowledge_bases"):
                     connection.execute(sa.text(f"DELETE FROM study.{table} WHERE owner_user_id=:owner"), {"owner": owner})
                 connection.execute(sa.text("DELETE FROM study.users WHERE id=:owner"), {"owner": owner})

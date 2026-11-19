@@ -25,6 +25,7 @@ from study_platform.main import create_app
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import AiJob, KnowledgeBase, ModelConnection, User
 from study_platform.services import chat, classification, ingestion, model_connections
+from study_platform.services.learning_grade import grade_text_answer
 from study_platform.services.learning_llm import (
     FragmentRef,
     generate_questions_with_llm,
@@ -188,6 +189,9 @@ def connections_env(compatible_api, monkeypatch, tmp_path):
         deepseek_api_key="",
         embedding_api_key="",
         chat_fallback_model="must-not-be-used",
+        chat_fallback_api_key="",
+        learning_stub_grader=False,
+        rag_query_rewrite_enabled=False,
     )
     for module in (
         "services.model_connections",
@@ -349,6 +353,59 @@ def test_encryption_ownership_defaults_and_revision(connections_env):
     )
 
 
+@pytest.mark.parametrize("kind", ["llm", "embedding"])
+@pytest.mark.parametrize("empty_key", [None, "", "   "])
+def test_address_change_requires_explicit_key(connections_env, kind, empty_key):
+    state = connections_env
+    row, body = create(state, kind)
+    path = f"/me/model-connections/{row['id']}"
+    before = state.client.get("/me/model-connections").json()["items"][0]
+    response = state.client.patch(
+        path, json={**body, "base_url": body["base_url"] + "/other", "api_key": empty_key}
+    )
+    assert response.status_code == 422 and response.json()["code"] == "model_key_required"
+    assert state.client.get("/me/model-connections").json()["items"][0] == before
+
+    same = state.client.patch(
+        path, json={**body, "base_url": body["base_url"] + "/", "api_key": empty_key}
+    )
+    assert same.status_code == 200 and same.json()["revision"] == 1
+    changed = state.client.patch(
+        path, json={**body, "base_url": body["base_url"] + "/other"}
+    )
+    assert changed.status_code == 200 and changed.json()["revision"] == 2
+
+
+def test_completed_chat_replay_after_connection_deleted(connections_env):
+    state = connections_env
+    llm, _ = activate(state)
+    kb = state.client.post("/knowledge-bases", json={"name": "Replay"}).json()
+    payload = {
+        "knowledge_base_id": kb["id"], "conversation_id": None,
+        "answer_mode": "knowledge_only", "content": "Question", "intent": "qa",
+        "material_ids": None,
+    }
+    key = uuid4().hex
+    run_id, fence, _ = chat.prepare(state.owner.id, payload, key)
+    assert chat.checkpoint(run_id, fence, "资料不足", "completed", [])
+    assert state.client.put(
+        "/me/model-connections/defaults/llm", json={"connection_id": None}
+    ).status_code == 204
+    assert state.client.delete(f"/me/model-connections/{llm['id']}").status_code == 204
+    call_count = len(state.provider.calls)
+    assert chat.prepare(state.owner.id, payload, key) == (run_id, fence, True)
+
+    async def collect():
+        return [part async for part in chat.stream(state.owner.id, run_id, fence, replay=True)]
+
+    frames = asyncio.run(collect())
+    assert [frame.split("\n", 1)[0] for frame in frames] == [
+        "event: meta", "event: delta", "event: sources", "event: done"
+    ]
+    assert "资料不足" in frames[1]
+    assert len(state.provider.calls) == call_count
+
+
 @pytest.mark.parametrize(
     ("kind", "model", "code"),
     [
@@ -414,6 +471,8 @@ def test_task_default_switch_pins_all_llm_purposes_and_personal_errors(connectio
         )
         assert questions
         assert grade_with_llm("题", "参考", "回答", owner_user_id=owner).verdict == "correct"
+        grade = grade_text_answer("回答", "参考", 1.0, owner_user_id=owner)
+        assert grade[0] == "correct" and grade[3] == "learning_llm_v1"
         assert classification.suggest({"title": "资料"}, owner_user_id=owner)["topic"] == "知识"
         assert all(call[1]["model"] == "model-a" for call in state.provider.calls[2:])
     with model_connections.task(owner):
@@ -546,6 +605,10 @@ def test_end_to_end_chat_summary_learning_and_failure_preserve_indexes(connectio
         f"/learning/knowledge-bases/{kb['id']}/quizzes/generate", json={"count": 1}
     )
     assert result.status_code == 200 and result.json()["item_count"] == 1, result.text
+    assert any(
+        "source_indices" in call[1]["messages"][0]["content"]
+        for call in state.provider.calls if call[0].endswith("chat/completions")
+    )
     assert all(
         call[1]["model"] == llm_model
         for call in state.provider.calls

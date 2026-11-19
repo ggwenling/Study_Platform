@@ -1,5 +1,7 @@
 """User model connections, encrypted revisions and library bindings."""
 
+import json
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -12,7 +14,6 @@ depends_on = None
 
 
 def upgrade():
-    bind = op.get_bind()
     op.create_table(
         "model_connections",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -86,14 +87,13 @@ def upgrade():
         "dimensions": 1024,
         "profile": f"{settings.embedding_model}:1024",
     }
-    bind.execute(
-        sa.text("UPDATE study.knowledge_bases SET embedding_binding=:binding").bindparams(
-            sa.bindparam("binding", type_=JSONB)
-        ),
-        {"binding": binding},
+    libraries = sa.table("knowledge_bases", sa.column("embedding_binding", JSONB), schema="study")
+    op.execute(
+        libraries.update().values(
+            embedding_binding=sa.cast(op.inline_literal(json.dumps(binding), sa.String()), JSONB)
+        )
     )
-    bind.execute(
-        sa.text("""
+    op.execute("""
         UPDATE study.knowledge_bases kb
         SET embedding_binding = kb.embedding_binding || jsonb_build_object(
             'profile', profiles.profile, 'model', regexp_replace(profiles.profile, chr(58) || '1024$', ''))
@@ -101,12 +101,13 @@ def upgrade():
             SELECT DISTINCT ON (m.knowledge_base_id) m.knowledge_base_id, i.embedding_profile AS profile
             FROM study.materials m
             JOIN study.material_versions v ON v.material_id=m.id AND v.is_current
+                AND v.parse_status='ready'
             JOIN study.index_versions i ON i.material_version_id=v.id AND i.is_active AND i.status='ready'
-            ORDER BY m.knowledge_base_id, i.ready_at DESC NULLS LAST
+            WHERE m.deleted_at IS NULL AND m.status='active'
+            ORDER BY m.knowledge_base_id, i.ready_at DESC NULLS LAST, i.id
         ) profiles
         WHERE profiles.knowledge_base_id=kb.id
     """)
-    )
     op.add_column(
         "model_call_records",
         sa.Column("connection_source", sa.String(200), nullable=False, server_default="platform"),

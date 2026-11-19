@@ -343,6 +343,90 @@ def seed_evidence(s):
     }
 
 
+def test_chat_and_notes_keep_the_evidence_used_before_fragment_edits(chat_db, monkeypatch):
+    from study_platform.services import model_connections, rag_workshop, studio
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    monkeypatch.setattr(model_connections, "session_factory", lambda: s.factory)
+    monkeypatch.setattr(rag_workshop, "embed_texts", lambda *_args, **_kwargs: [[1.0] + [0.0] * 1023])
+    monkeypatch.setattr(chat, "retrieve", lambda *_args, **_kwargs: [evidence])
+    settings = chat.get_settings().model_copy(update={"learning_stub_grader": True})
+    monkeypatch.setattr(studio, "get_settings", lambda: settings)
+
+    def edit(text):
+        with s.factory() as db:
+            rag_workshop.edit_fragment_text(
+                db, user=SimpleNamespace(id=s.owner), kb_id=s.kb_a, chunk_id=evidence["id"], text=text,
+            )
+
+    async def answer(*_args, **_kwargs):
+        edit("Edited evidence during generation")
+        yield SimpleNamespace(content="First answer [S1]", usage_metadata=None)
+
+    monkeypatch.setattr(chat, "astream_chat", answer)
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+
+    async def consume():
+        return [payload(event) async for event in chat.stream(s.owner, run, fence)]
+
+    assert asyncio.run(consume())[-1]["type"] == "done"
+    conv = conversation_for(s, run)
+    message = chat.turn(s.owner, conv, run)["messages"][-1]
+    assert message["citations"][0]["quote"] == evidence["text"]
+    with s.factory.begin() as db:
+        guide = studio.generate_studio_artifact(
+            db, owner_user_id=s.owner, knowledge_base_id=s.kb_a, kind="study_guide",
+        )
+
+    edit("Edited evidence again")
+    with s.factory.begin() as db:
+        saved = studio.create_note(
+            db, owner_user_id=s.owner, knowledge_base_id=s.kb_a, message_id=message["id"],
+            title="Saved answer", content_md=message["content"],
+        )
+        reloaded = studio.get_note(db, owner_user_id=s.owner, note_id=guide["id"])
+    assert saved["citations"][0]["quote"] == evidence["text"]
+    assert reloaded["citations"][0]["quote"] == "Edited evidence during generation"
+    assert saved["citations"][0]["quote_status"] == reloaded["citations"][0]["quote_status"] == "verified"
+
+
+def test_migration_recovers_only_verified_legacy_chat_and_saved_note_quotes(chat_db):
+    from study_platform.persistence.models import MaterialChunk, MessageCitation, NoteCitation
+    from study_platform.services import studio
+
+    s = chat_db
+    unchanged = {**seed_evidence(s), "source_number": 1}
+    changed = seed_evidence(s)
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+    assert chat.checkpoint(run, fence, "Answer [S1] [S2]", "completed", [unchanged, changed])
+    conv = conversation_for(s, run)
+    message = chat.turn(s.owner, conv, run)["messages"][-1]
+    with s.factory.begin() as db:
+        note = studio.create_note(
+            db, owner_user_id=s.owner, knowledge_base_id=s.kb_a, message_id=message["id"],
+            title="Legacy note", content_md=message["content"],
+        )
+    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    command.downgrade(config, "0011_conversation_archive")
+    with s.factory.begin() as db:
+        db.get(MaterialChunk, changed["id"]).text = "Already overwritten"
+    command.upgrade(config, "head")
+
+    with s.factory() as db:
+        for citation_model in (MessageCitation, NoteCitation):
+            original, overwritten = db.scalars(sa.select(citation_model).order_by(citation_model.ordinal)).all()
+            assert original.quote_text == unchanged["text"]
+            assert overwritten.quote_text is None and overwritten.quote_sha256 is not None
+        saved_note = studio.get_note(db, owner_user_id=s.owner, note_id=note["id"])
+    restored_message = chat.turn(s.owner, conv, run)["messages"][-1]
+    for result in (saved_note, restored_message):
+        verified, missing = result["citations"]
+        assert verified["quote"] == unchanged["text"] and verified["quote_status"] == "verified"
+        assert missing["quote"] == "" and missing["quote_status"] == "unavailable"
+        assert missing["availability"] == "available" and missing["locator"] == changed["locator"]
+
+
 def test_reference_endpoint_checks_conversation_owner(chat_db):
     from study_platform.api.v1.resources import get_source
 

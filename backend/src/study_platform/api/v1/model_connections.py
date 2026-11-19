@@ -158,8 +158,11 @@ def version(body, previous=None):
     key = body.api_key.get_secret_value().strip() if body.api_key else None
     if not key and previous is None:
         raise ApiError(422, "model_key_required", "请填写 API Key。")
+    base_url = normalize_url(body.base_url)
+    if not key and previous is not None and base_url != previous["base_url"]:
+        raise ApiError(422, "model_key_required", "更换模型地址时请填写 API Key。")
     return {
-        "base_url": normalize_url(body.base_url),
+        "base_url": base_url,
         "model": body.model,
         "key": service.encrypt(key) if key else previous["key"],
         "suffix": (key[-4:] if len(key) > 4 else "") if key else previous["suffix"],

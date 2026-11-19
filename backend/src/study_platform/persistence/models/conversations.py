@@ -197,6 +197,7 @@ class MessageCitation(Base):
     index_version_id = sa.Column("index_version_id", postgresql.UUID(as_uuid=True), nullable=False)
     locator = sa.Column("locator", postgresql.JSONB(), nullable=False)
     quote_sha256 = sa.Column("quote_sha256", sa.CHAR(64), nullable=False)
+    quote_text = sa.Column("quote_text", sa.Text(), nullable=True)
     ordinal = sa.Column("ordinal", sa.SmallInteger(), nullable=False)
     created_at = sa.Column(
         "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
@@ -319,6 +320,8 @@ class NoteCitation(Base):
     )
     index_version_id = sa.Column("index_version_id", postgresql.UUID(as_uuid=True), nullable=False)
     locator = sa.Column("locator", postgresql.JSONB(), nullable=False)
+    quote_sha256 = sa.Column("quote_sha256", sa.CHAR(64), nullable=True)
+    quote_text = sa.Column("quote_text", sa.Text(), nullable=True)
     ordinal = sa.Column("ordinal", sa.Integer(), nullable=False)
     created_at = sa.Column(
         "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")

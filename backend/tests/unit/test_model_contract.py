@@ -57,6 +57,10 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
     assert len(expected) == 37  # Frozen 0001 dictionary.
     expected["study.materials"].update({"knowledge_base_id", "topic", "tags"})
     expected["study.material_chunks"].add("retrieval_enabled")
+    expected["study.conversations"].add("archived_at")
+    expected["study.message_citations"].add("quote_text")
+    expected["study.note_citations"].update({"quote_text", "quote_sha256"})
+    expected["study.quiz_item_sources"].add("quote_text")
     expected["study.ai_workflow_runs"].update(
         {"knowledge_base_id", "answer_mode", "lease_expires_at", "fencing"}
     )

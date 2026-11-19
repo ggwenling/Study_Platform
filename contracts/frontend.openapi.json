@@ -780,6 +780,16 @@
               ],
               "title": "Project Knowledge Base Id"
             }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Archived"
+            }
           }
         ],
         "responses": {
@@ -979,6 +989,64 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{conversation_id}/archive": {
+      "patch": {
+        "tags": [
+          "workspace"
+        ],
+        "summary": "Set Conversation Archive",
+        "operationId": "set_conversation_archive_api_v1_conversations__conversation_id__archive_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationArchiveBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationDTO"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -4464,6 +4532,22 @@
             "type": "string",
             "title": "Quote"
           },
+          "quote_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "verified",
+                  "unverified",
+                  "unavailable"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote Status"
+          },
           "locator": {
             "additionalProperties": true,
             "type": "object",
@@ -4868,6 +4952,19 @@
         ],
         "title": "ConnectionsDTO"
       },
+      "ConversationArchiveBody": {
+        "properties": {
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
+          }
+        },
+        "type": "object",
+        "required": [
+          "archived"
+        ],
+        "title": "ConversationArchiveBody"
+      },
       "ConversationBody": {
         "properties": {
           "title": {
@@ -4920,6 +5017,18 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
           }
         },
         "type": "object",
@@ -4928,7 +5037,8 @@
           "project_knowledge_base_id",
           "title",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "archived_at"
         ],
         "title": "ConversationDTO"
       },

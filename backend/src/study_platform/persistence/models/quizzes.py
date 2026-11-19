@@ -178,6 +178,7 @@ class QuizItemSource(Base):
     )
     index_version_id = sa.Column("index_version_id", postgresql.UUID(as_uuid=True), nullable=False)
     locator = sa.Column("locator", postgresql.JSONB(), nullable=False)
+    quote_text = sa.Column("quote_text", sa.Text(), nullable=True)
     created_at = sa.Column(
         "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
     )

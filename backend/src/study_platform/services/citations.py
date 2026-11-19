@@ -1,5 +1,7 @@
 """Stable historical message and citation representations."""
 
+from hashlib import sha256
+
 from sqlalchemy import select
 
 from study_platform.persistence.models import (
@@ -14,8 +16,18 @@ from study_platform.persistence.models import (
 from study_platform.services.storage import page_path, source_path
 
 
+def citation_quote(db, citation) -> tuple[str, str]:
+    if citation.quote_text is not None:
+        return citation.quote_text, "verified"
+    text = db.get(MaterialChunk, citation.chunk_id).text
+    if citation.quote_sha256 is None:
+        return text, "unverified"
+    if sha256(text.encode()).hexdigest() == citation.quote_sha256:
+        return text, "verified"
+    return "", "unavailable"
+
+
 def citation_dto(db, citation) -> dict:
-    chunk = db.get(MaterialChunk, citation.chunk_id)
     version = db.get(MaterialVersion, citation.material_version_id)
     material = db.get(Material, version.material_id)
     kb = db.get(KnowledgeBase, material.knowledge_base_id)
@@ -66,6 +78,7 @@ def citation_dto(db, citation) -> dict:
     preview = f"{base}/preview"
     if isinstance(page, int) and page > 0 and locator.get("ocr") and page_path(version.id, page).is_file():
         preview = f"{base}/pages/{page}"
+    quote, quote_status = citation_quote(db, citation) if availability == "available" else ("", "unavailable")
     return {
         "id": citation.id,
         "source_label": f"S{citation.ordinal + 1}",
@@ -73,7 +86,8 @@ def citation_dto(db, citation) -> dict:
         "material_version_id": version.id,
         "knowledge_base_id": kb.id,
         "title": material.title,
-        "quote": chunk.text if availability == "available" else "",
+        "quote": quote,
+        "quote_status": quote_status,
         "locator": locator if availability == "available" else {},
         "location_label": label,
         "version_no": version.version_no,

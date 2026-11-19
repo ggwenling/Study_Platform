@@ -106,6 +106,7 @@ class CitationDTO(BaseModel):
     knowledge_base_id: UUID
     title: str
     quote: str
+    quote_status: Literal["verified", "unverified", "unavailable"] | None = None
     locator: dict
     location_label: str
     version_no: int

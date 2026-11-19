@@ -306,6 +306,7 @@ def checkpoint(run_id, fence, content, status=None, citations=None, failure=None
                         material_version_id=chunk["material_version_id"],
                         index_version_id=chunk["index_version_id"], locator=chunk["locator"],
                         quote_sha256=hashlib.sha256(chunk["text"].encode()).hexdigest(),
+                        quote_text=chunk["text"],
                         ordinal=chunk["source_number"]-1,
                     ))
         db.commit()
@@ -551,6 +552,10 @@ async def ended_event(owner, conv_id, run_id):
 
 
 async def stream(owner, run_id, fence, replay=False):
+    if replay:
+        async for item in _stream(owner, run_id, fence, replay):
+            yield item
+        return
     with session_factory()() as db:
         run = db.get(AiWorkflowRun, run_id)
         llm = run.source_scope.get("llm_connection", {"id": None, "kind": "llm"})
