@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Check, CircleDashed, Ellipsis, FileText, Search, TriangleAlert } from 'lucide-react'
 import { api } from '@/api/client'
@@ -42,9 +42,10 @@ function dateKey(value?: Date) {
 
 type Scope = { material_id?: string; section_id?: string; label?: string }
 
-export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, revision, onPreview, onOpenSource }: {
+export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, revision, initialPage, onPreview, onOpenSource }: {
   id: string; tags: string[]; day?: string; setDay: (day?: string) => void; scope: Scope;
   clearScope: () => void; revision: number; onPreview: (fragment: Fragment) => void;
+  initialPage?: FragmentPage;
   onOpenSource: (fragment: Fragment) => void;
 }) {
   const { report, notify } = useWorkspace()
@@ -63,7 +64,8 @@ export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, rev
   }
   const resultKey = `${filterKey}:${page}`
   const selected = selection.key === resultKey ? selection.ids : []
-  const [view, setView] = useState<{ key: string; data?: FragmentPage; error?: string }>({ key: '' })
+  const [view, setView] = useState<{ key: string; data?: FragmentPage; error?: string }>(() => ({ key: resultKey, data: initialPage }))
+  const prefetchedKey = useRef(initialPage ? resultKey : null)
   const [reload, setReload] = useState(0)
   const [updating, setUpdating] = useState(false)
   const [editingFragment, setEditingFragment] = useState<Fragment | null>(null)
@@ -75,6 +77,8 @@ export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, rev
   }, [query])
 
   useEffect(() => {
+    if (prefetchedKey.current === resultKey && revision === 0 && reload === 0) return
+    prefetchedKey.current = null
     const controller = new AbortController()
     api.fragments(id, {
       q: debounced || undefined, file_type: fileType === 'all' ? undefined : fileType,

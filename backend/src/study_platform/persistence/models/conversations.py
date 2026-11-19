@@ -78,6 +78,7 @@ class Conversation(Base):
         onupdate=sa.func.now(),
     )
     deleted_at = sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True)
+    archived_at = sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True)
 
 
 class Message(Base):

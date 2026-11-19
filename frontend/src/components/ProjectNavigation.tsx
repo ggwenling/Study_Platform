@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Download, ExternalLink, MessageCircle, Pencil, Plus, SquarePen, Trash2 } from 'lucide-react'
+import { Archive, Copy, Download, ExternalLink, MessageCircle, Pencil, Plus, SquarePen, Trash2 } from 'lucide-react'
 import { NavLink, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import type { Conversation, KnowledgeBase, Page } from '@/api/types'
@@ -38,8 +38,51 @@ function buildConversationMenuItems(
         notify('已复制会话链接。')
       } catch { notify('无法访问剪贴板。') }
     } },
+    { id: 'archive', label: '归档会话', icon: <Archive size={15} />, onSelect: () => openDialog({ mode: 'archive', conversation: row }) },
     { id: 'delete', label: '删除会话', icon: <Trash2 size={15} />, destructive: true, onSelect: () => openDialog({ mode: 'delete', conversation: row }) },
   ]
+}
+
+function SidebarConversation({ row, openDialog }: {
+  row: Conversation; openDialog: (target: ConversationDialogTarget) => void;
+}) {
+  const { report, notify } = useWorkspace()
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const label = row.title || '未命名对话'
+  const path = `/chat/${row.id}`
+  const archive = useRef<HTMLButtonElement>(null)
+
+  function showDialog(target: ConversationDialogTarget) {
+    const trigger = archive.current
+    if (target.mode === 'archive' && trigger) {
+      const { x, y, width, height } = trigger.getBoundingClientRect()
+      openDialog({ ...target, origin: { x: x + width / 2, y: y + height / 2, trigger } })
+    } else {
+      openDialog(target)
+    }
+  }
+
+  function measure(rowElement: HTMLDivElement) {
+    const clip = rowElement.querySelector<HTMLElement>('.sidebar-thread-title')!
+    const { paddingLeft, paddingRight } = getComputedStyle(clip)
+    const available = clip.clientWidth - parseFloat(paddingLeft) - parseFloat(paddingRight)
+    const distance = Math.max(0, (clip.firstElementChild?.getBoundingClientRect().width ?? 0) - available)
+    rowElement.style.setProperty('--thread-shift', `-${distance}px`)
+    rowElement.style.setProperty('--thread-duration', `${Math.max(1.1, distance / 48)}s`)
+  }
+
+  return <div className="sidebar-thread" data-current={pathname === path || undefined}
+    onPointerEnter={(event) => { if (event.pointerType !== 'touch') measure(event.currentTarget) }}
+    onFocus={(event) => measure(event.currentTarget)}>
+    <ContextMenu label={`会话：${label}`} items={buildConversationMenuItems(row, navigate, notify, report, showDialog)}
+      onActivate={() => void navigate(path)}>
+      <span className="sidebar-thread-title" aria-current={pathname === path ? 'page' : undefined}><span>{label}</span></span>
+    </ContextMenu>
+    <Button ref={archive} variant="ghost" size="sm" className="sidebar-thread-archive"
+      title="归档会话" aria-label={`归档会话：${label}`}
+      onClick={() => showDialog({ mode: 'archive', conversation: row })}><Archive size={15} aria-hidden="true" /></Button>
+  </div>
 }
 
 export function ProjectNavigation() {
@@ -55,11 +98,7 @@ export function ProjectNavigation() {
     <section className="recent">
       <Accordion openIndex={recentOpen ? 0 : -1} onOpenChange={(index) => setRecentOpen(index === 0)} items={[{ title: '最近对话', content: <>
         {!recent.length && <p>{loading ? '正在读取…' : user ? '暂无最近对话' : '登录后查看最近对话'}</p>}
-        {recent.slice(0, 6).map((row) => <ContextMenu
-          key={row.id}
-          label={`会话：${row.title || '未命名对话'}`}
-          items={buildConversationMenuItems(row, navigate, notify, report, setDialogTarget)}
-        ><span className="recent-link" aria-current={pathname === `/chat/${row.id}` ? 'page' : undefined}>{row.title || '未命名对话'}</span></ContextMenu>)}
+        {recent.slice(0, 6).map((row) => <SidebarConversation key={row.id} row={row} openDialog={setDialogTarget} />)}
         <NavLink to="/chat/demo" className="demo-link">查看示例会话 ↗</NavLink>
       </> }]} />
     </section>
@@ -82,6 +121,7 @@ export function ProjectNavigation() {
       target={dialogTarget}
       onClose={() => setDialogTarget(null)}
       onRenamed={() => refresh()}
+      onArchived={() => refresh()}
       onBeforeDelete={(deletedId) => chat?.evictConversation?.(deletedId)}
       onDeleted={(deletedId) => {
         chat?.evictConversation?.(deletedId)
@@ -104,7 +144,6 @@ function ProjectFolder({ kb, openDialog }: { kb: KnowledgeBase; openDialog: (tar
   const createPending = useRef(false)
   const [attempt, setAttempt] = useState(0)
   const navigate = useNavigate()
-  const { pathname } = useLocation()
   useEffect(() => {
     if (!open) return
     let current = true
@@ -135,11 +174,7 @@ function ProjectFolder({ kb, openDialog }: { kb: KnowledgeBase; openDialog: (tar
       aria-label={`在「${kb.name}」中新建对话`} onClick={() => void createConversation()}><SquarePen size={15} /></Button></Tooltip>,
     content: <div className="project-conversations">
       {error ? <><p className="error-text" role="alert">{error}</p><Button variant="ghost" size="sm" onClick={() => setAttempt((value) => value + 1)}>重试</Button></> : !page ? <p role="status">正在读取…</p> : <>
-        {page.items.map((row) => <ContextMenu
-          key={row.id}
-          label={`会话：${row.title || '未命名对话'}`}
-          items={buildConversationMenuItems(row, navigate, notify, report, openDialog)}
-        ><span className="recent-link" aria-current={pathname === `/chat/${row.id}` ? 'page' : undefined}>{row.title || '未命名对话'}</span></ContextMenu>)}
+        {page.items.map((row) => <SidebarConversation key={row.id} row={row} openDialog={openDialog} />)}
         {!page.items.length && <p className="muted">暂无会话</p>}
         {page.next_cursor && <Button variant="ghost" size="sm" loading={busy} onClick={async () => {
           setBusy(true)

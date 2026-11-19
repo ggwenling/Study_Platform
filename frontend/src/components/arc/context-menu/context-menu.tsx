@@ -22,6 +22,7 @@ export interface ContextMenuProps {
   children: ReactNode;
   items: ContextMenuItem[];
   label?: string;
+  onActivate?: () => void;
 }
 
 type Highlight = { index: number; top: number; height: number; danger: boolean; glide: boolean };
@@ -36,7 +37,7 @@ function clampTo(x: number, y: number, width: number, height: number) {
   return { x: left, y: top, originX: Math.max(0, Math.min(width, x - left)), originY: Math.max(0, Math.min(height, y - top)) };
 }
 
-export function ContextMenu({ children, items, label = "Context menu" }: ContextMenuProps) {
+export function ContextMenu({ children, items, label = "Context menu", onActivate }: ContextMenuProps) {
   const reduced = useReducedMotion();
   const [open, setOpen] = useState(false);
   // The portal mounts on first open (client only) and stays so the menu can animate out.
@@ -97,6 +98,11 @@ export function ContextMenu({ children, items, label = "Context menu" }: Context
   }
 
   function onTargetKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (onActivate && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      onActivate();
+      return;
+    }
     if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10") || event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       const rect = targetRef.current?.getBoundingClientRect();
@@ -106,6 +112,7 @@ export function ContextMenu({ children, items, label = "Context menu" }: Context
 
   function onTargetClick() {
     if (pressedWhileOpen.current) { pressedWhileOpen.current = false; return; }
+    if (onActivate) { onActivate(); return; }
     const rect = targetRef.current?.getBoundingClientRect();
     if (rect) showMenu(rect.left + 12, rect.bottom + 8);
   }

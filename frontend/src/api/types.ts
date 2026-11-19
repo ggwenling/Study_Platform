@@ -17,7 +17,7 @@ export type ChatEvent =
 export interface UploadResult { material_id: string; version_id: string; job_id: string; status: string }
 export interface KnowledgeBase { id: string; name: string; description: string | null; created_at: string; updated_at: string; embedding_connection_id?: string | null; embedding_binding?: { model: string; base_url: string; dimensions: number } | null }
 export interface KnowledgeBaseInput { name: string; description?: string | null }
-export interface Conversation { id: string; project_knowledge_base_id: string | null; title: string | null; created_at: string; updated_at: string }
+export interface Conversation { id: string; project_knowledge_base_id: string | null; title: string | null; created_at: string; updated_at: string; archived_at?: string | null }
 export interface SearchItem {
   id: string
   type: 'knowledge_base' | 'material' | 'conversation' | 'fragment' | 'note'

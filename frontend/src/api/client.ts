@@ -169,7 +169,7 @@ export const api = {
   createKnowledgeBase: (body: KnowledgeBaseInput) => request<KnowledgeBase>('/knowledge-bases', json('POST', body)),
   updateKnowledgeBase: (id: string, body: KnowledgeBaseInput) => request<KnowledgeBase>(`/knowledge-bases/${pathId(id)}`, json('PATCH', body)),
   deleteKnowledgeBase: (id: string) => request<void>(`/knowledge-bases/${pathId(id)}`, json('DELETE')),
-  libraryOverview: (id: string) => request<LibraryOverview>(`/knowledge-bases/${pathId(id)}/overview`),
+  libraryOverview: (id: string, signal?: AbortSignal) => request<LibraryOverview>(`/knowledge-bases/${pathId(id)}/overview`, { signal }),
   syncLibrary: (id: string) => request<LibraryOverview>(`/knowledge-bases/${pathId(id)}/sync`, json('POST')),
   documentLocations: (id: string, material: string) => request<DocumentLocation[]>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/locations`),
   fragments: (id: string, filters: Record<string, string | undefined>, signal?: AbortSignal) =>
@@ -194,11 +194,12 @@ export const api = {
   content: (id: string) => checkedFetch(`/material-versions/${pathId(id)}/content`),
   pageImage: (id: string, page: number) => checkedFetch(`/material-versions/${pathId(id)}/pages/${page}`),
   source: (id: string) => request<Citation>(`/sources/${pathId(id)}`),
-  conversations: (cursor?: string, project?: string) => request<Page<Conversation>>('/conversations' + query({ cursor, project_knowledge_base_id: project })),
+  conversations: (cursor?: string, project?: string, archived = false) => request<Page<Conversation>>('/conversations' + query({ cursor, project_knowledge_base_id: project, archived: archived ? 'true' : undefined })),
   createConversation: (body: { title?: string; project_knowledge_base_id?: string } = {}) => request<Conversation>('/conversations', json('POST', body)),
   conversation: (id: string) => request<Conversation>(`/conversations/${pathId(id)}`),
   updateConversation: (id: string, body: { title: string }) => request<Conversation>(`/conversations/${pathId(id)}`, json('PATCH', body)),
   deleteConversation: (id: string) => request<void>(`/conversations/${pathId(id)}`, json('DELETE')),
+  archiveConversation: (id: string, archived: boolean) => request<Conversation>(`/conversations/${pathId(id)}/archive`, json('PATCH', { archived })),
   messages: (id: string, cursor?: string) => request<Page<Message>>(`/conversations/${pathId(id)}/messages` + query({ cursor })),
   overview: () => request<Dashboard>('/dashboard/overview'),
   search: (q: string, cursor?: string, includeContent = false, signal?: AbortSignal) => request<Page<SearchItem>>(
@@ -261,8 +262,8 @@ export const api = {
       request<{ id: string; status: string }>(`/learning/wrong-questions/${pathId(id)}/mastered`, json('POST')),
   },
   studio: {
-    notes: (knowledgeBaseId: string) =>
-      request<{ items: StudyNote[] }>(`/knowledge-bases/${pathId(knowledgeBaseId)}/notes`),
+    notes: (knowledgeBaseId: string, signal?: AbortSignal) =>
+      request<{ items: StudyNote[] }>(`/knowledge-bases/${pathId(knowledgeBaseId)}/notes`, { signal }),
     createNote: (
       knowledgeBaseId: string,
       body: { title: string; content_md: string; note_type?: StudyNote['note_type']; message_id?: string | null },

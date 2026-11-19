@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { BookOpen, ChevronRight, Download, Ellipsis, GraduationCap, History, Layers, MessageCircle, PanelLeft, Pencil, Search, Settings, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, BookOpen, ChevronRight, Download, Ellipsis, GraduationCap, History, Layers, MessageCircle, PanelLeft, Pencil, Search, Settings, Trash2 } from 'lucide-react'
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { Button } from '@/components/arc/button/button'
@@ -337,29 +337,35 @@ const historyWhen = new Intl.DateTimeFormat('zh-CN', {
 
 function HistoryPage() {
   const { user, revision, refresh, notify, report, requireLogin, chat } = useWorkspace()
+  const [archived, setArchived] = useState(false)
   const [items, setItems] = useState<Conversation[] | null>(null)
   const [error, setError] = useState('')
   const [dialogTarget, setDialogTarget] = useState<ConversationDialogTarget | null>(null)
   useEffect(() => {
     if (!user) return
     let active = true
-    void allPages(api.conversations).then(
+    void allPages((cursor) => api.conversations(cursor, undefined, archived)).then(
       (rows) => { if (active) { setItems(rows); setError('') } },
       (failure) => { if (active) { setError(errorMessage(failure)); report(failure) } },
     )
     return () => { active = false }
-  }, [user, revision])
+  }, [user, revision, archived])
   if (!user) return <div className="placeholder-page"><EmptyState title="登录后查看历史" description="打开已保存的会话。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
-  if (error) return <Placeholder title="暂时无法读取历史" description={error} />
-  if (!items) return <div className="placeholder-page" role="status">正在读取历史…</div>
-  if (!items.length) {
-    return (
-      <div className="placeholder-page">
-        <EmptyState title="暂无会话历史" description="从首页开始第一轮问答，记录会出现在这里。" action={<Link to="/"><Button>前往首页</Button></Link>} />
-      </div>
-    )
+  function changeHistory(next: boolean) {
+    if (archived === next) return
+    setItems(null)
+    setError('')
+    setArchived(next)
   }
-  return <section className="resource-page history-page"><h1>会话历史</h1><ul className="resource-list history-list">
+  return <section className="resource-page history-page"><h1>会话历史</h1>
+    <div className="history-tabs" role="group" aria-label="会话状态">
+      <Button size="sm" variant={archived ? 'ghost' : 'secondary'} aria-pressed={!archived} onClick={() => changeHistory(false)}>未归档</Button>
+      <Button size="sm" variant={archived ? 'secondary' : 'ghost'} aria-pressed={archived} onClick={() => changeHistory(true)}>已归档</Button>
+    </div>
+    {error ? <p role="alert">{error} <Button size="sm" onClick={refresh}>重试</Button></p>
+      : !items ? <p role="status">正在读取历史…</p>
+      : !items.length ? <p className="muted">{archived ? '暂无已归档的会话。' : '暂无会话历史。'}</p>
+      : <ul className="resource-list history-list">
     {items.map((row) => <li key={row.id}>
       <Link to={`/chat/${row.id}`}>{row.title || '未命名对话'}</Link>
       <time className="history-meta" dateTime={row.updated_at}>{historyWhen.format(new Date(row.updated_at))}</time>
@@ -369,6 +375,16 @@ function HistoryPage() {
         iconOnly
         modal={false}
         items={[
+          archived
+            ? { label: '恢复会话', icon: <ArchiveRestore size={15} />, onSelect: async () => {
+                try {
+                  await api.archiveConversation(row.id, false)
+                  setItems((current) => current?.filter((item) => item.id !== row.id) ?? null)
+                  refresh()
+                  notify('会话已恢复。')
+                } catch (failure) { report(failure) }
+              } }
+            : { label: '归档会话', icon: <Archive size={15} />, onSelect: () => setDialogTarget({ mode: 'archive', conversation: row }) },
           { label: '重命名会话', icon: <Pencil size={15} />, onSelect: () => setDialogTarget({ mode: 'rename', conversation: row }) },
           { label: '导出 Markdown', icon: <Download size={15} />, onSelect: async () => {
             try {
@@ -380,12 +396,16 @@ function HistoryPage() {
         ]}
       />
     </li>)}
-  </ul>
+  </ul>}
   <ConversationDialogs
     target={dialogTarget}
     onClose={() => setDialogTarget(null)}
     onRenamed={(updated) => {
       setItems((current) => current ? current.map((item) => item.id === updated.id ? updated : item) : current)
+      refresh()
+    }}
+    onArchived={(updated) => {
+      setItems((current) => current?.filter((item) => item.id !== updated.id) ?? null)
       refresh()
     }}
     onBeforeDelete={(deletedId) => chat?.evictConversation?.(deletedId)}

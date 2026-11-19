@@ -31,6 +31,7 @@ export interface DialogContentProps extends ComponentPropsWithoutRef<typeof Dial
   overlayClassName?: string;
   gentle?: boolean;
   fromIcon?: boolean;
+  launchFrom?: { x: number; y: number };
 }
 
 const fade: Transition = { duration: motionTokens.duration.instant };
@@ -44,7 +45,7 @@ function SwapText({ text }: { text: string }) {
   </AnimatePresence>;
 }
 
-export function DialogContent({ title, description, children, headerStart, closeLabel = "Close dialog", overlayClassName, gentle = false, fromIcon = false, className, onPointerDownOutside, ...props }: DialogContentProps) {
+export function DialogContent({ title, description, children, headerStart, closeLabel = "Close dialog", overlayClassName, gentle = false, fromIcon = false, launchFrom, className, onPointerDownOutside, ...props }: DialogContentProps) {
   const open = useContext(OpenContext);
   const reduced = useReducedMotion();
   // When the open state last changed. Radix waits for the click before treating a press as outside, and a press on the trigger
@@ -58,6 +59,12 @@ export function DialogContent({ title, description, children, headerStart, close
   const classes = [styles.content, className].filter(Boolean).join(" ");
   const overlayClasses = [styles.overlay, overlayClassName].filter(Boolean).join(" ");
   const iconSize = { opacity: 0, scaleX: 0.065, scaleY: 0.09 };
+  const entrance = reduced ? { opacity: 0 } : launchFrom ? {
+    x: launchFrom.x - document.body.clientWidth / 2,
+    y: launchFrom.y - window.innerHeight / 2,
+    opacity: .25,
+    scale: .12,
+  } : fromIcon ? iconSize : { opacity: 0, y: gentle ? 4 : 8, scale: gentle ? 1 : .96 };
   const inner = <>
     <div className={styles.header}><div>{headerStart}<DialogPrimitive.Title className={styles.title}><SwapText text={title}/></DialogPrimitive.Title>{description ? <DialogPrimitive.Description className={styles.description}><SwapText text={description}/></DialogPrimitive.Description> : null}</div><DialogPrimitive.Close className={styles.close} aria-label={closeLabel}><X size={16} strokeWidth={1.75} aria-hidden="true"/></DialogPrimitive.Close></div>
     <div className={styles.body}>{children}</div>
@@ -72,7 +79,7 @@ export function DialogContent({ title, description, children, headerStart, close
     {open && <DialogPrimitive.Portal key="dialog" forceMount>
       <DialogPrimitive.Overlay asChild forceMount><motion.div className={overlayClasses} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: reduced ? fade : gentle ? { duration: .16 } : leave }} transition={reduced ? fade : { duration: gentle ? .22 : motionTokens.duration.standard, ease: [...motionTokens.ease.enter] }}/></DialogPrimitive.Overlay>
       <DialogPrimitive.Content {...props} onPointerDownOutside={pressOutside} asChild forceMount>
-        <motion.div className={classes} initial={reduced ? { opacity: 0 } : fromIcon ? iconSize : { opacity: 0, y: gentle ? 4 : 8, scale: gentle ? 1 : .96 }} animate={fromIcon ? { opacity: 1, scaleX: 1, scaleY: 1 } : { opacity: 1, y: 0, scale: 1 }} exit={reduced ? { opacity: 0, transition: fade } : fromIcon ? { ...iconSize, transition: leave } : gentle ? { opacity: 0, transition: { duration: .16 } } : { opacity: 0, y: 4, scale: .98, transition: leave }} transition={reduced ? fade : fromIcon || gentle ? { duration: .28, ease: [.22, 1, .36, 1] } : { default: motionTokens.spring.smooth, opacity: { duration: motionTokens.duration.fast, ease: [...motionTokens.ease.enter] } }}>{inner}</motion.div>
+        <motion.div className={classes} initial={entrance} animate={fromIcon ? { opacity: 1, scaleX: 1, scaleY: 1 } : { opacity: 1, x: 0, y: 0, scale: 1 }} exit={reduced ? { opacity: 0, transition: fade } : fromIcon ? { ...iconSize, transition: leave } : gentle ? { opacity: 0, transition: { duration: .16 } } : { opacity: 0, y: 4, scale: .98, transition: leave }} transition={reduced ? fade : launchFrom ? { duration: .36, ease: [...motionTokens.ease.enter] } : fromIcon || gentle ? { duration: .28, ease: [.22, 1, .36, 1] } : { default: motionTokens.spring.smooth, opacity: { duration: motionTokens.duration.fast, ease: [...motionTokens.ease.enter] } }}>{inner}</motion.div>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>}
   </AnimatePresence>;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useEffectEvent, useState } from 'react'
 import type { FormEvent } from 'react'
 import { BookMarked, BrainCircuit, Download, FilePlus2, GitBranch, Layers, Pencil, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router'
@@ -27,6 +27,7 @@ export function LibraryStudio({
   kbName,
   readyCount,
   revision,
+  initialNotes,
   onIngested,
   onOpenSource,
   linkedNoteId,
@@ -36,6 +37,7 @@ export function LibraryStudio({
   kbName: string
   readyCount: number
   revision: number
+  initialNotes?: StudyNote[]
   onIngested: () => void
   onOpenSource?: (citation: Citation) => void
   linkedNoteId?: string | null
@@ -43,14 +45,22 @@ export function LibraryStudio({
 }) {
   const { notify, report, refresh } = useWorkspace()
   const navigate = useNavigate()
-  const [notes, setNotes] = useState<StudyNote[]>([])
-  const [loading, setLoading] = useState(false)
+  const [notes, setNotes] = useState<StudyNote[] | null>(initialNotes ?? null)
+  const reportNotesFailure = useEffectEvent(report)
   const [busy, setBusy] = useState<string | null>(null)
   const [activeNote, setActiveNote] = useState<StudyNote | null>(null)
   const [editing, setEditing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [linkedNoteFailure, setLinkedNoteFailure] = useState('')
+  const [requestedNote, setRequestedNote] = useState(linkedNoteId)
+  if (requestedNote !== linkedNoteId) {
+    setRequestedNote(linkedNoteId)
+    setActiveNote(null)
+    setEditing(false)
+    setConfirmDelete(false)
+    setLinkedNoteFailure('')
+  }
 
   useEffect(() => {
     if (!linkedNoteId) return
@@ -69,22 +79,19 @@ export function LibraryStudio({
     return () => { live = false }
   }, [kbId, linkedNoteId])
 
-  const loadNotes = useCallback(async () => {
-    if (!api.studio?.notes) return
-    setLoading(true)
-    try {
-      const res = await api.studio.notes(kbId)
-      setNotes(res.items)
-    } catch (error) {
-      report(error)
-    } finally {
-      setLoading(false)
-    }
-  }, [kbId, report])
-
   useEffect(() => {
-    void loadNotes()
-  }, [loadNotes, revision])
+    if (initialNotes && revision === 0) return
+    const controller = new AbortController()
+    void api.studio.notes(kbId, controller.signal).then(
+      (result) => { if (!controller.signal.aborted) setNotes(result.items) },
+      (error: unknown) => {
+        if (controller.signal.aborted) return
+        setNotes((current) => current ?? [])
+        reportNotesFailure(error)
+      },
+    )
+    return () => controller.abort()
+  }, [initialNotes, kbId, revision])
 
   async function generateArtifact(kind: StudioArtifactKind) {
     if (busy) return
@@ -95,7 +102,7 @@ export function LibraryStudio({
     setBusy(kind)
     try {
       const created = await api.studio.generateNote(kbId, { kind })
-      setNotes((prev) => [created, ...prev.filter((item) => item.id !== created.id)])
+      setNotes((prev) => [created, ...(prev ?? []).filter((item) => item.id !== created.id)])
       setActiveNote(created)
       setEditing(false)
       setConfirmDelete(false)
@@ -135,7 +142,7 @@ export function LibraryStudio({
     setBusy('create')
     try {
       const created = await api.studio.createNote(kbId, { title, content_md })
-      setNotes((prev) => [created, ...prev])
+      setNotes((prev) => [created, ...(prev ?? [])])
       setCreating(false)
       setActiveNote(created)
       setEditing(false)
@@ -158,7 +165,7 @@ export function LibraryStudio({
     try {
       const updated = await api.studio.updateNote(activeNote.id, { title, content_md })
       setActiveNote(updated)
-      setNotes((prev) => prev.map((row) => (row.id === updated.id ? updated : row)))
+      setNotes((prev) => prev?.map((row) => (row.id === updated.id ? updated : row)) ?? null)
       setEditing(false)
       notify('笔记已更新。')
     } catch (error) {
@@ -175,7 +182,7 @@ export function LibraryStudio({
       const res = await api.studio.ingestNote(activeNote.id)
       const updated = { ...activeNote, ingested_material_id: res.material_id }
       setActiveNote(updated)
-      setNotes((prev) => prev.map((row) => (row.id === updated.id ? updated : row)))
+      setNotes((prev) => prev?.map((row) => (row.id === updated.id ? updated : row)) ?? null)
       refresh()
       onIngested()
       notify('笔记已作为 Markdown 资料回写入库，正在建立索引。')
@@ -191,7 +198,7 @@ export function LibraryStudio({
     setBusy('delete')
     try {
       await api.studio.deleteNote(activeNote.id)
-      setNotes((prev) => prev.filter((row) => row.id !== activeNote.id))
+      setNotes((prev) => prev?.filter((row) => row.id !== activeNote.id) ?? null)
       setActiveNote(null)
       setConfirmDelete(false)
       if (linkedNoteId) closeLinkedNote?.()
@@ -263,9 +270,9 @@ export function LibraryStudio({
         </Button>
       </div>
 
-      {notes.length === 0 ? (
+      {!notes?.length ? (
         <p className="muted library-empty">
-          {loading
+          {notes === null
             ? '正在读取笔记…'
             : '暂无研究笔记。你可以在对话回答下方点击「存为笔记」，或点击上方按钮一键生成知识产物。'}
         </p>

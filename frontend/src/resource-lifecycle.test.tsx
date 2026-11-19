@@ -28,8 +28,10 @@ vi.mock('./api/client', () => ({
     deleteMaterial: vi.fn(),
     retryMaterial: vi.fn(),
     libraryOverview: vi.fn(),
+    syncLibrary: vi.fn(),
     documentLocations: vi.fn(),
     fragments: vi.fn(),
+    studio: { notes: vi.fn() },
     deleteKnowledgeBase: vi.fn(),
   },
   uploadMaterial: vi.fn(),
@@ -83,6 +85,7 @@ function findButton(label: string) {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(api.studio.notes).mockResolvedValue({ items: [] })
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('IntersectionObserver', class { observe() {} unobserve() {} disconnect() {} takeRecords() { return [] } })
@@ -220,6 +223,42 @@ describe('conversation export & lifecycle dialogs', () => {
 })
 
 describe('material cancel/delete & knowledge base deletion', () => {
+  it('reveals the complete library after its notes and fragments finish, and keeps the empty note state during sync', async () => {
+    vi.mocked(api.libraryOverview).mockResolvedValue(overviewData)
+    vi.mocked(api.syncLibrary).mockResolvedValue(overviewData)
+    vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+    let resolveFragments!: () => void
+    vi.mocked(api.fragments).mockReturnValueOnce(new Promise((resolve) => {
+      resolveFragments = () => resolve({ total: 0, page_size: 20, items: [] })
+    })).mockResolvedValue({ total: 0, page_size: 20, items: [] })
+    let resolveNotes!: () => void
+    vi.mocked(api.studio.notes).mockReturnValueOnce(new Promise((resolve) => {
+      resolveNotes = () => resolve({ items: [] })
+    }))
+
+    await render(<Library preferredId="kb-1" />)
+    expect(node.querySelector('.library-loading')).toBeTruthy()
+    expect(node.querySelector('.library-detail-ready')).toBeNull()
+    await act(async () => resolveNotes())
+    expect(node.querySelector('.library-detail-ready')).toBeNull()
+    await act(async () => resolveFragments())
+    expect(node.querySelector('.library-loading')).toBeNull()
+    const emptyNotes = node.querySelector('.library-studio-panel .library-empty')
+    expect(emptyNotes?.textContent).toContain('暂无研究笔记')
+    expect(api.studio.notes).toHaveBeenCalledTimes(1)
+    expect(api.fragments).toHaveBeenCalledTimes(1)
+
+    vi.mocked(api.studio.notes).mockReturnValueOnce(new Promise((resolve) => {
+      resolveNotes = () => resolve({ items: [] })
+    }))
+    await act(async () => findButton('同步')!.click())
+    expect(api.studio.notes).toHaveBeenCalledTimes(2)
+    expect(node.querySelector('.library-studio-panel .library-empty')).toBe(emptyNotes)
+    expect(emptyNotes?.textContent).toContain('暂无研究笔记')
+    await act(async () => resolveNotes())
+    expect(node.querySelector('.library-studio-panel .library-empty')).toBe(emptyNotes)
+  })
+
   it('cancels an active ingest job and deletes a material with confirmation in CurrentMaterials', async () => {
     vi.mocked(api.materials).mockResolvedValue({ items: [materialRow('ocr')], next_cursor: null })
     vi.mocked(api.cancelJob).mockResolvedValue({ id: 'job-1', status: 'cancelled' })

@@ -3,7 +3,7 @@ import type { DragEvent, FormEvent, ReactNode } from 'react'
 import { ChevronRight, CircleDashed, Ellipsis, FilePlus2, FileText, Folder, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, Trash2, TriangleAlert, Upload } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { api } from '@/api/client'
-import type { DocumentLocation, Fragment, KnowledgeBase, LibraryOverview, Material, MaterialPreview } from '@/api/types'
+import type { DocumentLocation, Fragment, FragmentPage, KnowledgeBase, LibraryOverview, Material, MaterialPreview, StudyNote } from '@/api/types'
 import { allPages, errorMessage, locatorLabel } from '@/api/ui'
 import { ApiError } from '@/api/stream'
 import { useUploadQueue } from '../useUploadQueue'
@@ -114,6 +114,8 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   const id = library.id
   const [overview, setOverview] = useState<LibraryOverview>()
   const [materials, setMaterials] = useState<Material[]>([])
+  const [initial, setInitial] = useState<{ notes: StudyNote[]; fragments: FragmentPage }>()
+  const loaded = useRef(false)
   const [failure, setFailure] = useState('')
   const [reload, setReload] = useState(0)
   const [fragmentRevision, setFragmentRevision] = useState(0)
@@ -148,21 +150,35 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   const inFlightLocations = useRef(new Set<string>())
 
   useEffect(() => {
-    let active = true
+    const controller = new AbortController()
+    const { signal } = controller
     let timer: number
     async function load() {
       try {
-        const [summary, rows] = await Promise.all([api.libraryOverview(id), allPages((cursor) => api.materials(id, cursor))])
-        if (!active) return
+        const firstPage = loaded.current ? undefined : Promise.all([
+          api.studio.notes(id, signal),
+          api.fragments(id, { page: '1' }, signal),
+        ])
+        const [summary, rows, sections] = await Promise.all([
+          api.libraryOverview(id, signal),
+          allPages((cursor) => api.materials(id, cursor, signal)),
+          firstPage,
+        ])
+        if (signal.aborted) return
+        if (sections) {
+          setInitial({ notes: sections[0].items, fragments: sections[1] })
+          loaded.current = true
+        } else {
+          setFragmentRevision((value) => value + 1)
+        }
         setOverview(summary)
         setMaterials(rows)
-        setFragmentRevision((value) => value + 1)
         setFailure('')
         if (summary.processing_count) timer = window.setTimeout(load, 2200)
-      } catch (error) { if (active) setFailure(errorMessage(error)) }
+      } catch (error) { if (!signal.aborted) setFailure(errorMessage(error)) }
     }
     void load()
-    return () => { active = false; window.clearTimeout(timer) }
+    return () => { controller.abort(); window.clearTimeout(timer) }
   }, [id, revision, reload])
 
   useEffect(() => {
@@ -323,7 +339,11 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   const heatmap = (selectable = true) => overview ? <ActivityHeatmap className="library-heatmap" days={overview.activity} label="资料活动" period="最近 12 周" weekStartsOn={1} locale="zh-CN"
     unit={{ one: '次索引', other: '次索引' }} selectedDate={day} onSelectDate={selectable ? (value) => { selectDay(value); scrollToFragments() } : undefined} /> : <p className="muted">暂无活动记录</p>
 
-  return <section className="library-detail" aria-label="知识库详情" data-dragging={dragging || undefined} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+  if (!initial) return failure ? <div className="placeholder-page">
+    <EmptyState title="无法读取知识库" description={failure} action={<Button onClick={() => { setFailure(''); reloadData() }}>重试</Button>} />
+  </div> : <LibraryLoading />
+
+  return <section className="library-detail library-detail-ready" aria-label="知识库详情" data-dragging={dragging || undefined} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
     <div className="orbit-light library-orbit" aria-hidden="true" />
     <div className="library-main">
       <header className="library-header">
@@ -395,11 +415,11 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         <LibraryProgress overview={overview} />
       </section>
       <LibraryStudio
-        key={noteId ?? 'studio'}
         kbId={id}
         kbName={library.name}
         readyCount={overview?.ready_count ?? 0}
         revision={fragmentRevision}
+        initialNotes={initial.notes}
         linkedNoteId={noteId}
         closeLinkedNote={closeSearchResult}
         onIngested={reloadData}
@@ -420,7 +440,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       <section className="library-panel library-fragment-panel" ref={fragmentPanel}>
         {heading(<FileText size={22} />, '片段浏览', '检索与管理已生成的内容片段')}
         <LibraryFragments id={id} tags={overview?.tags ?? []} day={day} setDay={setDay} scope={scope}
-          clearScope={() => setScope({})} revision={fragmentRevision} onPreview={showFragment}
+          clearScope={() => setScope({})} revision={fragmentRevision} initialPage={initial.fragments} onPreview={showFragment}
           onOpenSource={(row) => void openSource(row.version_id, row.title, row.locator)} />
       </section>
     </div>
@@ -472,7 +492,14 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       {(panel === 'topics' || panel === 'tags') && <DialogContent title={panel === 'topics' ? '主题管理' : '标签管理'} closeLabel="关闭">
         <LibraryClassification id={id} materials={materials} labels={overview?.[panel] ?? []} onChange={reloadData} />
       </DialogContent>}
-      {panel === 'activity' && <DialogContent title="近 12 周索引活动" closeLabel="关闭">{heatmap()}</DialogContent>}
+      {panel === 'activity' && overview && <DialogContent className="library-activity-dialog"
+        title="索引活动" description="最近 12 周各日期的资料索引次数" closeLabel="关闭索引活动">
+        <div className="library-activity-stats">
+          <div><span>索引次数</span><strong>{number.format(overview.activity.reduce((total, day) => total + day.count, 0))}</strong></div>
+          <div><span>活跃天数</span><strong>{number.format(overview.activity.filter((day) => day.count > 0).length)}</strong></div>
+        </div>
+        <div className="library-activity-chart">{heatmap(false)}</div>
+      </DialogContent>}
       {(panel === 'preview' || fragmentId) && <DialogContent title={visiblePreview?.title ?? '资料片段'} description={visiblePreview?.locator ?? '查看原件中提取的文字。'} closeLabel="关闭">
         {visiblePreview ? <div className="source-detail">
           <DownloadMaterial version={visiblePreview.version} title={visiblePreview.title} />
@@ -520,6 +547,19 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       onSubmitFile={(file) => addFiles([file])}
     />
   </section>
+}
+
+function LibraryLoading() {
+  return <div className="library-detail library-loading" role="status">
+    <span className="library-loading-label">正在读取知识库…</span>
+    <div className="library-main" aria-hidden="true">
+      <div className="library-skeleton library-skeleton-heading" />
+      <div className="library-skeleton library-skeleton-structure" />
+      <div className="library-skeleton library-skeleton-panel" />
+      <div className="library-skeleton library-skeleton-panel" />
+    </div>
+    <div className="library-skeleton library-skeleton-aside" aria-hidden="true" />
+  </div>
 }
 
 function LibraryProgress({ overview }: { overview?: LibraryOverview }) {

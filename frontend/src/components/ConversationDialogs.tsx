@@ -8,8 +8,9 @@ import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { Input } from '@/components/arc/input/input'
 
 export type ConversationDialogTarget = {
-  mode: 'rename' | 'delete'
+  mode: 'rename' | 'delete' | 'archive'
   conversation: Pick<Conversation, 'id' | 'title'>
+  origin?: { x: number; y: number; trigger: HTMLElement }
 }
 
 export function ConversationDialogs({
@@ -18,6 +19,7 @@ export function ConversationDialogs({
   onRenamed,
   onBeforeDelete,
   onDeleted,
+  onArchived,
   report,
   notify,
 }: {
@@ -26,6 +28,7 @@ export function ConversationDialogs({
   onRenamed?: (updated: Conversation) => void
   onBeforeDelete?: (deletedId: string) => void
   onDeleted?: (deletedId: string) => void
+  onArchived?: (archived: Conversation) => void
   report: (error: unknown) => void
   notify: (message: string) => void
 }) {
@@ -77,6 +80,23 @@ export function ConversationDialogs({
     }
   }
 
+  async function confirmArchive() {
+    if (!target || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const updated = await api.archiveConversation(target.conversation.id, true)
+      onArchived?.(updated)
+      notify('已归档。可在历史的「已归档」中恢复。')
+      onClose()
+    } catch (failure) {
+      setError(errorMessage(failure))
+      report(failure)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const label = target?.conversation.title?.trim() || '未命名对话'
 
   return (
@@ -98,6 +118,27 @@ export function ConversationDialogs({
               <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>取消</Button>
             </div>
           </form>
+        </DialogContent>
+      )}
+      {target?.mode === 'archive' && (
+        <DialogContent title="归档会话" description="归档后会从最近对话和项目列表移除。可在历史的「已归档」中查看或恢复。"
+          closeLabel="关闭归档会话" launchFrom={target.origin}
+          onOpenAutoFocus={(event) => {
+            const cancel = document.querySelector<HTMLButtonElement>('[data-archive-cancel]')
+            if (cancel) { event.preventDefault(); cancel.focus({ preventScroll: true }) }
+          }}
+          onCloseAutoFocus={(event) => {
+            const trigger = target.origin?.trigger
+            if (trigger?.isConnected) { event.preventDefault(); trigger.focus({ preventScroll: true }) }
+          }}>
+          <div className="stack-form">
+            <p>确认归档「{label}」吗？</p>
+            {error && <p className="error-text" role="alert">{error}</p>}
+            <div className="form-actions">
+              <Button type="button" variant="ghost" data-archive-cancel disabled={busy} onClick={onClose}>取消</Button>
+              <Button type="button" loading={busy} onClick={() => void confirmArchive()}>确认归档</Button>
+            </div>
+          </div>
         </DialogContent>
       )}
       {target?.mode === 'delete' && (

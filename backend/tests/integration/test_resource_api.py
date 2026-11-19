@@ -103,6 +103,33 @@ def test_project_conversation_ownership_paging_and_library_deletion(resource_cli
     assert http.get(f'/conversations/{first["id"]}').json()["project_knowledge_base_id"] is None
 
 
+def test_conversation_archive_is_reversible_and_keeps_project_and_messages(resource_client):
+    http, db = resource_client
+    signup(http)
+    kb = http.post("/knowledge-bases", json={"name": "Archive project"}).json()["id"]
+    row = http.post("/conversations", json={"title": "Archive example", "project_knowledge_base_id": kb}).json()
+    path = f'/conversations/{row["id"]}'
+    db.add(Message(conversation_id=UUID(row["id"]), role="user", content="Keep this message",
+                   status="completed", sequence_no=0))
+    db.commit()
+    owner_headers = dict(http.headers)
+    signup(http)
+    assert http.patch(f"{path}/archive", json={"archived": True}).status_code == 404
+    assert http.get("/conversations", params={"archived": True}).json()["items"] == []
+    http.headers.update(owner_headers)
+    archived = http.patch(f"{path}/archive", json={"archived": True})
+    assert archived.status_code == 200
+    data = archived.json()
+    assert data["archived_at"] and data["updated_at"] == row["updated_at"]
+    assert http.patch(f"{path}/archive", json={"archived": True}).json()["archived_at"] == data["archived_at"]
+    assert http.get("/conversations").json()["items"] == []
+    assert http.get("/conversations", params={"project_knowledge_base_id": kb}).json()["items"] == []
+    assert http.get("/conversations", params={"archived": True}).json()["items"] == [data]
+    assert http.get(f"{path}/messages").json()["items"][0]["content"] == "Keep this message"
+    assert http.patch(f"{path}/archive", json={"archived": False}).json()["archived_at"] is None
+    assert http.get("/conversations", params={"project_knowledge_base_id": kb}).json()["items"] == [row]
+
+
 def test_resources_ownership_pagination_and_tombstones(resource_client):
     http, db = resource_client
     owner = signup(http)

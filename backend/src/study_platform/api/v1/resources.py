@@ -81,6 +81,7 @@ class ConversationDTO(BaseModel):
     title: str | None
     created_at: datetime
     updated_at: datetime
+    archived_at: datetime | None
 
 
 class ConversationPage(BaseModel):
@@ -138,7 +139,7 @@ def kb_dto(kb):
 
 
 def conversation_dto(row):
-    return {k: getattr(row, k) for k in ("id", "title", "project_knowledge_base_id", "created_at", "updated_at")}
+    return {k: getattr(row, k) for k in ("id", "title", "project_knowledge_base_id", "created_at", "updated_at", "archived_at")}
 
 
 class CreateConversationBody(ConversationBody):
@@ -296,6 +297,7 @@ def list_conversations(
     limit: int = Query(20, ge=1, le=100),
     cursor: UUID | None = None,
     project_knowledge_base_id: UUID | None = None,
+    archived: bool = False,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -305,13 +307,15 @@ def list_conversations(
         db,
         sa.select(Conversation).where(
             Conversation.owner_user_id == user.id, Conversation.deleted_at.is_(None),
+            Conversation.archived_at.is_not(None) if archived else Conversation.archived_at.is_(None),
             *([Conversation.project_knowledge_base_id == project_knowledge_base_id] if project_knowledge_base_id else []),
         ),
         Conversation,
         limit,
         cursor,
         user.id,
-        scope=(lambda row: row.project_knowledge_base_id == project_knowledge_base_id) if project_knowledge_base_id else None,
+        scope=lambda row: (row.archived_at is not None) == archived
+        and (not project_knowledge_base_id or row.project_knowledge_base_id == project_knowledge_base_id),
     )
     return {"items": [conversation_dto(r) for r in rows], "next_cursor": next_cursor}
 
@@ -347,6 +351,24 @@ def rename_conversation(
 ):
     row = owned_conversation(db, user, conversation_id)
     row.title = body.title
+    db.commit()
+    return conversation_dto(row)
+
+
+class ConversationArchiveBody(BaseModel):
+    archived: bool
+
+
+@router.patch("/conversations/{conversation_id}/archive", response_model=ConversationDTO)
+def set_conversation_archive(
+    conversation_id: UUID, body: ConversationArchiveBody,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    row = owned_conversation(db, user, conversation_id, lock=True)
+    if body.archived != (row.archived_at is not None):
+        row.archived_at = datetime.now(UTC) if body.archived else None
+        # Archiving should not change when the last conversation activity took place.
+        row.updated_at = Conversation.updated_at
     db.commit()
     return conversation_dto(row)
 

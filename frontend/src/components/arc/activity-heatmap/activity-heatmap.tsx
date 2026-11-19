@@ -155,6 +155,7 @@ function RiseText({ text, reduced, children }: { text: string; reduced: boolean;
 }
 
 export function ActivityHeatmap({ days, label, period, unit: unitProp = CONTRIBUTIONS, thresholds, weekStartsOn = 0, selectedDate = null, onSelectDate, actions, locale = "en-US", className }: ActivityHeatmapProps) {
+  const chinese = locale.startsWith("zh");
   const reduced = useReducedMotionSafe();
   const id = useId();
   // Keyed by its words, so an inline unit object does not rebuild every cell on each render.
@@ -218,13 +219,15 @@ export function ActivityHeatmap({ days, label, period, unit: unitProp = CONTRIBU
   function contentFor(index: number, anchor: HTMLElement): Tip {
     const count = model.counts[index]!;
     const date = new Date(model.start + index * DAY);
-    return { key: `day-${toIso(date.getTime())}`, primary: count ? `${formats.number.format(count)} ${noun(count, unit)}` : `No ${unit.other}`, secondary: formats.short.format(date), value: count, anchor };
+    return { key: `day-${toIso(date.getTime())}`, primary: count || chinese ? `${formats.number.format(count)} ${noun(count, unit)}` : `No ${unit.other}`, secondary: formats.short.format(date), value: count, anchor };
   }
   const [a, b, c] = model.thresholds;
-  const ranges = [`no ${unit.other}`, a === 1 ? `1 ${unit.one}` : `1 to ${a} ${unit.other}`, `${a + 1} to ${b} ${unit.other}`, `${b + 1} to ${c} ${unit.other}`, `${c + 1} or more ${unit.other}`];
+  const rangeLabel = (start: number, end: number) => start === end ? `${start} ${noun(start, unit)}` : `${start}–${end} ${unit.other}`;
+  const ranges = chinese ? [`0 ${unit.other}`, rangeLabel(1, a), rangeLabel(a + 1, b), rangeLabel(b + 1, c), `${c + 1} ${unit.other}及以上`]
+    : [`no ${unit.other}`, a === 1 ? `1 ${unit.one}` : `1 to ${a} ${unit.other}`, `${a + 1} to ${b} ${unit.other}`, `${b + 1} to ${c} ${unit.other}`, `${c + 1} or more ${unit.other}`];
   const shortRanges = [`no ${unit.other}`, a === 1 ? `1 ${unit.one}` : `1–${a} ${unit.other}`, `${a + 1}–${b} ${unit.other}`, `${b + 1}–${c} ${unit.other}`, `${c + 1}+ ${unit.other}`];
-  const dayCount = highlight === null ? "" : `${formats.number.format(model.perLevel[highlight]!)} ${model.perLevel[highlight] === 1 ? "day" : "days"}`;
-  const caption = highlight === null ? "" : `${dayCount} with ${shortRanges[highlight]}`;
+  const dayCount = highlight === null ? "" : `${formats.number.format(model.perLevel[highlight]!)} ${chinese ? "天" : model.perLevel[highlight] === 1 ? "day" : "days"}`;
+  const caption = highlight === null ? "" : chinese ? `${ranges[highlight]} · ${dayCount}` : `${dayCount} with ${shortRanges[highlight]}`;
   function show(next: Tip) {
     window.clearTimeout(hideTimer.current);
     setChange(tip && openRef.current ? Math.sign(next.value - tip.value) as Change : "instant");
@@ -339,10 +342,10 @@ export function ActivityHeatmap({ days, label, period, unit: unitProp = CONTRIBU
       const count = model.counts[index]!;
       const date = new Date(model.start + index * DAY);
       return <span key={col} role="gridcell" className={styles.cell} style={wave} data-index={index} data-level={model.levels[index]} tabIndex={index === tabIndexDay ? 0 : -1}
-        aria-selected={onSelectDate ? index === selectedIndex : undefined} aria-label={`${count ? formats.number.format(count) : "No"} ${noun(count, unit)}, ${formats.long.format(date)}`}
+        aria-selected={onSelectDate ? index === selectedIndex : undefined} aria-label={`${count || chinese ? formats.number.format(count) : "No"} ${noun(count, unit)}, ${formats.long.format(date)}`}
         onClick={() => onSelectDate?.(toIso(date.getTime()))} />;
     })}
-  </div>), [model, step, maxDiagonal, tabIndexDay, selectedIndex, formats, unit, onSelectDate]);
+  </div>), [model, step, maxDiagonal, tabIndexDay, selectedIndex, formats, unit, onSelectDate, chinese]);
 
   const weekdayLabels = useMemo(() => Array.from({ length: 7 }, (_, row) => {
     const weekday = (row + weekStartsOn) % 7;
@@ -352,7 +355,6 @@ export function ActivityHeatmap({ days, label, period, unit: unitProp = CONTRIBU
 
   const selectedCol = hasSelection ? Math.floor((selectedIndex + model.lead) / 7) : 0;
   const selectedRow = hasSelection ? (selectedIndex + model.lead) % 7 : 0;
-  const chinese = locale.startsWith("zh");
   const totalText = `${formats.number.format(model.total)} ${noun(model.total, unit)}`;
   const summary = chinese ? `${period} · ${totalText}` : `${totalText} in ${period}`;
 
