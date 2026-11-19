@@ -87,6 +87,7 @@ try {
     Browser open "$BaseUrl/" | Out-Null
     Browser wait --fn '!!document.querySelector(".home-content")' | Out-Null
     Evaluate (Get-Content (Join-Path $PSScriptRoot 'fixtures/settings.js') -Raw) | Out-Null
+    Evaluate (Get-Content (Join-Path $PSScriptRoot 'fixtures/library-layout.js') -Raw) | Out-Null
     Evaluate 'window.settingsPreview.libraryName = "【模拟】青禾跨年度研究项目原始资料与访谈记录档案"' | Out-Null
     Browser click '.workspace-label button' | Out-Null
     Browser wait --fn '!!document.querySelector("input[name=password]")' | Out-Null
@@ -124,6 +125,47 @@ try {
     Check (Evaluate '(()=>{const page=getComputedStyle(document.querySelector(".workspace-page"));return page.opacity==="1" && page.top==="0px" && document.querySelector(".home-orbit").getAnimations().length===0})()') 'Reduced motion should skip the workspace entrance and keep the orbit static.'
     Browser set viewport 390 844 | Out-Null
     Check (Evaluate '(()=>{const b=document.querySelector(".composer-select"),v=b.querySelector(":scope > span[aria-hidden=true] > span"),form=document.querySelector(".composer").getBoundingClientRect(),send=document.querySelector(".send-button").getBoundingClientRect();return v.textContent.startsWith("青禾") && b.title.startsWith("【模拟】") && v.scrollWidth>v.clientWidth && getComputedStyle(v).textOverflow==="ellipsis" && send.right<=form.right && form.right<=document.documentElement.clientWidth})()') 'A long library name must truncate without clipping the composer on mobile.'
+
+    Browser set viewport 1322 955 | Out-Null
+    Browser set media dark | Out-Null
+    Browser wait --fn 'document.querySelector(".current-materials-title small")?.textContent.includes("1 份可问答")' | Out-Null
+    Evaluate '(()=>{window.layoutStatus=document.querySelector(".current-materials-title small");window.layoutStatusRect=layoutStatus.getBoundingClientRect();document.querySelector(".composer-select").focus({preventScroll:true})})()' | Out-Null
+    Browser press Enter | Out-Null
+    Browser press ArrowDown | Out-Null
+    Browser press Enter | Out-Null
+    Browser wait --fn 'document.querySelector(".current-materials-title small")?.textContent.includes("2 份可问答")' | Out-Null
+    Check (Evaluate '(()=>{const node=document.querySelector(".current-materials-title small"),rect=node.getBoundingClientRect();return node===layoutStatus && ["x","y","height"].every(key=>Math.abs(rect[key]-layoutStatusRect[key])<=1)})()') 'Switching libraries must keep the collapsed material status in the same slot.'
+    Check (Evaluate '(()=>{const project=document.querySelector(".project-folder"),title=project.querySelector(".project-name"),threads=project.querySelector(".project-conversations");return !title.querySelector("svg") && getComputedStyle(threads).borderLeftWidth==="0px" && Math.abs(title.getBoundingClientRect().left-threads.getBoundingClientRect().left)<=1})()') 'Project conversations should align under the icon-free title without a left border.'
+    Browser click '.current-materials h3 button' | Out-Null
+    Browser wait --fn 'document.querySelector(".current-materials [role=region]")?.getBoundingClientRect().height>=document.querySelector(".current-materials-body").offsetHeight' | Out-Null
+    $expandedHeight = Evaluate 'document.querySelector(".current-materials-body").offsetHeight'
+    Browser focus '.composer-select' | Out-Null
+    Browser press Enter | Out-Null
+    Browser press ArrowUp | Out-Null
+    Browser press Enter | Out-Null
+    Browser wait --fn 'document.querySelector(".current-materials-title small")?.textContent.includes("1 份可问答")' | Out-Null
+    Check ((Evaluate 'parseFloat(getComputedStyle(document.querySelector(".current-materials-body")).minBlockSize)') -eq $expandedHeight) 'Switching libraries while the panel is expanded must reserve its previous height for the collapse.'
+
+    Browser click '.navigation a[href="/knowledge"]' | Out-Null
+    Browser wait --fn '!!document.querySelector(".library-heatmap [data-level-key]") && document.querySelector(".library-total")?.textContent.includes("共 0 条片段") && getComputedStyle(document.querySelector(".workspace-page")).opacity==="1"' | Out-Null
+    $geometry = 'JSON.stringify([scrollY, ...[".library-main",".library-aside",".library-heatmap",".library-aside-summary",".hit-test-form",".library-filters"].flatMap(s=>{const r=document.querySelector(s).getBoundingClientRect();return [r.left,r.top,r.width,r.height].map(Math.round)})])'
+    $before = Evaluate $geometry
+    Browser hover '.library-heatmap [data-level-key="0"]' | Out-Null
+    Browser wait --fn 'document.querySelector(".library-heatmap [role=grid]").dataset.highlight==="0"' | Out-Null
+    Check ((Evaluate $geometry) -eq $before) 'Previewing a heatmap legend level must preserve card dimensions.'
+    Browser mouse move 460 96 | Out-Null
+    Browser wait --fn '!document.querySelector(".library-heatmap [role=grid]").dataset.highlight' | Out-Null
+    Check ((Evaluate $geometry) -eq $before) 'Leaving the heatmap legend must preserve card dimensions.'
+    foreach ($trigger in '.hit-test-form [role=combobox]', '.library-filters > div:nth-child(3) [role=combobox]') {
+        Evaluate "document.querySelector('$trigger').scrollIntoView({block:'center'})" | Out-Null
+        $before = Evaluate $geometry
+        Browser click $trigger | Out-Null
+        Browser wait --fn '!!document.querySelector("[role=listbox][data-state=open]")' | Out-Null
+        Check ((Evaluate $geometry) -eq $before) "Opening $trigger must keep the library layout and scroll position stable."
+        Browser press Escape | Out-Null
+        Browser wait --fn '!document.querySelector("[role=listbox][data-state=open]") && !document.body.hasAttribute("data-scroll-locked")' | Out-Null
+        Check ((Evaluate $geometry) -eq $before) "Closing $trigger must keep the library layout and scroll position stable."
+    }
     Write-Output 'Layout regression checks passed.'
 } finally {
     Browser close | Out-Null

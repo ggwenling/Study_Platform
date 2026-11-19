@@ -71,9 +71,11 @@ it('preserves stale rows on read error and lets the user resume polling', async 
 it('aborts on switching scope and ignores late responses from the old library', async () => {
   const old = deferred<{ items: Material[]; next_cursor: null }>()
   vi.mocked(api.materials).mockReturnValueOnce(old.promise)
-  await render(<CurrentMaterials key="A" libraryId="A" name="库A" />)
+  await render(<CurrentMaterials libraryId="A" name="库A" />)
   const signal = vi.mocked(api.materials).mock.calls[0][2]!
-  await render(<CurrentMaterials key="B" libraryId="B" name="库B" />)
+  const status = node.querySelector('.current-materials-title [role="status"]')
+  await render(<CurrentMaterials libraryId="B" name="库B" />)
+  expect(node.querySelector('.current-materials-title [role="status"]')).toBe(status)
   expect(signal.aborted).toBe(true)
   await act(async () => old.resolve({ items: [material('ocr')], next_cursor: null }))
   expect(node.textContent).toContain('库B')

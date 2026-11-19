@@ -45,7 +45,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   const [supplement, setSupplement] = useState(false)
   const [summaryMode, setSummaryMode] = useState(summary)
   const [selected, setSelected] = useState('')
-  const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([])
+  const [materialScope, setMaterialScope] = useState<{ libraryId?: string; ids: string[] }>({ ids: [] })
   const [uploadTarget, setUploadTarget] = useState<{ id: string; at: number } | null>(null)
   const [pasteOpen, setPasteOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -61,6 +61,8 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   const requestedLibrary = selected || preferredLibrary
   const currentLibrary = requestedLibrary ? libraries.find((library) => library.id === requestedLibrary) : libraries[0]
   const libraryId = currentLibrary?.id
+  if (materialScope.libraryId !== libraryId) setMaterialScope({ libraryId, ids: [] })
+  const selectedMaterialIds = materialScope.ids
   const modelReady = libraryId ? capabilities?.library_rag?.[libraryId] ?? capabilities?.rag : capabilities?.rag
   const active = chat.active?.conversationId === conversationId ? chat.active : null
   const pending = !demo && chat.pending && (chat.pending.body.conversation_id ?? undefined) === conversationId
@@ -81,10 +83,6 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   useEffect(() => {
     if (initialDraft) setDraft(initialDraft)
   }, [initialDraft])
-
-  useEffect(() => {
-    setSelectedMaterialIds([])
-  }, [libraryId])
 
   useEffect(() => {
     if (!reducedMotion) void import('./ComposerMetalSend')
@@ -287,13 +285,13 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
     </form>
     {!demo && user && libraryId && (
       <CurrentMaterials
-        key={`${user.id}:${libraryId}`}
+        key={user.id}
         libraryId={libraryId}
         name={libraries.find((library) => library.id === libraryId)!.name}
         reveal={uploadTarget?.id === libraryId ? uploadTarget.at : 0}
         summaryMode={summaryMode}
         selectedIds={selectedMaterialIds}
-        onSelectedChange={setSelectedMaterialIds}
+        onSelectedChange={(ids) => setMaterialScope({ libraryId, ids })}
       />
     )}
     <PasteTextDialog

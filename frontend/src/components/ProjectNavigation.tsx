@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Download, ExternalLink, Folder, MessageCircle, Pencil, Plus, SquarePen, Trash2 } from 'lucide-react'
+import { Copy, Download, ExternalLink, MessageCircle, Pencil, Plus, SquarePen, Trash2 } from 'lucide-react'
 import { NavLink, useLocation, useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import type { Conversation, KnowledgeBase, Page } from '@/api/types'
@@ -130,7 +130,7 @@ function ProjectFolder({ kb, openDialog }: { kb: KnowledgeBase; openDialog: (tar
   }
 
   return <div className="project-folder"><Accordion openIndex={open ? 0 : -1} onOpenChange={(index) => setOpen(index === 0)} items={[{
-    title: <span className="project-name"><Folder size={17} /><span>{kb.name}</span></span>,
+    title: <span className="project-name">{kb.name}</span>,
     headerAction: <Tooltip content="新建项目对话"><Button variant="ghost" size="sm" className="project-compose" loading={creating}
       aria-label={`在「${kb.name}」中新建对话`} onClick={() => void createConversation()}><SquarePen size={15} /></Button></Tooltip>,
     content: <div className="project-conversations">

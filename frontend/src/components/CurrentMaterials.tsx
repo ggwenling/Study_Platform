@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '@/api/client'
 import { allPages, errorMessage } from '@/api/ui'
 import type { Material } from '@/api/types'
@@ -13,7 +13,6 @@ const phases: Record<string, string> = {
 }
 const terminal = (row: Material) => ['ready', 'failed', 'cancelled'].includes(row.status)
 
-// Keyed by account and library at the composer: old requests cannot populate a new scope.
 export function CurrentMaterials({
   libraryId,
   name,
@@ -30,13 +29,31 @@ export function CurrentMaterials({
   onSelectedChange?: (ids: string[]) => void
 }) {
   const { revision, refresh, report, notify } = useWorkspace()
-  const [rows, setRows] = useState<Material[] | null>(null)
-  const [error, setError] = useState('')
+  const [data, setData] = useState<{ libraryId: string; rows: Material[] | null; error: string }>({ libraryId, rows: null, error: '' })
   const [attempt, setAttempt] = useState(0)
   const [busy, setBusy] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<Material | null>(null)
   const [open, setOpen] = useState(-1)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const [bodyHeight, setBodyHeight] = useState(0)
+  const { rows, error } = data
+  // Reset the scoped content before rendering the new library, while keeping the header mounted.
+  if (data.libraryId !== libraryId) {
+    setData({ libraryId, rows: null, error: '' })
+    setConfirmDelete(null)
+    setOpen(-1)
+  }
   useEffect(() => { if (reveal) setOpen(0) }, [reveal])
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    if (open < 0 || !body) return
+    const measure = () => setBodyHeight(body.offsetHeight)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(body)
+    return () => observer.disconnect()
+  }, [open])
   useEffect(() => {
     const controller = new AbortController()
     let timer: number | undefined
@@ -44,12 +61,11 @@ export function CurrentMaterials({
       try {
         const items = await allPages((cursor) => api.materials(libraryId, cursor, controller.signal))
         if (controller.signal.aborted) return
-        setRows(items)
-        setError('')
+        setData((current) => current.libraryId === libraryId ? { libraryId, rows: items, error: '' } : current)
         if (items.some((item) => !terminal(item))) timer = window.setTimeout(load, 2200)
       } catch (failure) {
         if (controller.signal.aborted) return
-        setError(errorMessage(failure))
+        setData((current) => current.libraryId === libraryId ? { ...current, error: errorMessage(failure) } : current)
         report(failure)
       }
     }
@@ -88,10 +104,16 @@ export function CurrentMaterials({
 
   return <section className="current-materials" aria-label={`当前知识库资料：${name}`}>
     <Accordion openIndex={open} onOpenChange={setOpen} items={[{
-      title: <span className="current-materials-title"><span>当前库资料 · {name}</span><small role="status" title={scopeSummary}>{scopeSummary}</small></span>,
+      title: <span className="current-materials-title">
+        <span>当前库资料 · {name}</span>
+        <small role="status" title={scopeSummary} data-loading={!rows && !error && !summaryMode ? '' : undefined}>
+          <span key={scopeSummary}>{scopeSummary}</span>
+        </small>
+      </span>,
       headerAction: selectedIds.length > 0 && <Button type="button" size="sm" variant="ghost" className="clear-material-scope"
         onClick={() => onSelectedChange?.([])}>清除限定</Button>,
-      content: <div className="current-materials-body">
+      // Keep the outgoing height while the accordion closes, even when a library switch replaces the rows with loading text.
+      content: <div ref={bodyRef} className="current-materials-body" style={open < 0 ? { minBlockSize: bodyHeight } : undefined}>
         {error ? <div role="alert"><p>{error}</p>{rows && <p className="muted">下方保留上次读取结果，当前状态尚未确认。</p>}<Button type="button" size="sm" variant="secondary" onClick={() => setAttempt((value) => value + 1)}>重新读取状态</Button></div>
           : rows === null ? <p role="status">正在读取资料…</p>
             : !rows.length ? <p>这个知识库还没有资料，请从输入区添加附件或图片。</p>
