@@ -706,6 +706,55 @@ def _card_dto(card: Flashcard, sources: list[dict[str, Any]], now: datetime) -> 
     }
 
 
+def _due_flashcards(owner_user_id: UUID, now: datetime, knowledge_base_id: UUID | None):
+    stmt = sa.select(Flashcard).join(FlashcardDeck, Flashcard.deck_id == FlashcardDeck.id).where(
+        FlashcardDeck.owner_user_id == owner_user_id,
+        FlashcardDeck.deleted_at.is_(None),
+        Flashcard.status == "active",
+        Flashcard.due_at <= now,
+    )
+    if knowledge_base_id is not None:
+        stmt = stmt.where(FlashcardDeck.course_id == knowledge_base_id)
+    return stmt
+
+
+def count_due_flashcards(
+    db: Session, owner_user_id: UUID, now: datetime, knowledge_base_id: UUID | None = None,
+) -> int:
+    due = _due_flashcards(owner_user_id, now, knowledge_base_id)
+    return db.scalar(due.with_only_columns(sa.func.count(), maintain_column_froms=True)) or 0
+
+
+def list_due_flashcards(
+    db: Session, owner_user_id: UUID, *, knowledge_base_id: UUID | None = None, limit: int,
+) -> dict[str, Any]:
+    now = _now()
+    due = _due_flashcards(owner_user_id, now, knowledge_base_id)
+    rows = db.execute(
+        due.add_columns(FlashcardDeck.course_id, FlashcardDeck.title, KnowledgeBase.name)
+        .outerjoin(KnowledgeBase, sa.and_(
+            KnowledgeBase.id == FlashcardDeck.course_id,
+            KnowledgeBase.owner_user_id == owner_user_id,
+            KnowledgeBase.deleted_at.is_(None),
+        ))
+        .order_by(Flashcard.due_at, Flashcard.created_at, Flashcard.id)
+        .limit(limit)
+    ).all()
+    sources = _load_flashcard_sources(db, [card.id for card, *_ in rows])
+    return {
+        "total_due": count_due_flashcards(db, owner_user_id, now, knowledge_base_id),
+        "items": [
+            {
+                **_card_dto(card, sources[card.id], now),
+                "knowledge_base_id": str(kb_id),
+                "knowledge_base_name": kb_name,
+                "deck_title": deck_title,
+            }
+            for card, kb_id, deck_title, kb_name in rows
+        ],
+    }
+
+
 def _load_flashcard_sources(
     db: Session, card_ids: list[UUID]
 ) -> dict[UUID, list[dict[str, Any]]]:

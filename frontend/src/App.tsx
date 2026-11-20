@@ -38,11 +38,11 @@ const navigation = [
 ]
 
 function LearningRoute({ notify }: { notify: (message: string) => void }) {
-  const { user, libraries, requireLogin } = useWorkspace()
+  const { user, libraries, overview, refresh, requireLogin } = useWorkspace()
   if (!user) {
     return <div className="placeholder-page"><EmptyState title="登录后使用学习" description="练习、拍照作答与错题本。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
   }
-  return <Learning knowledgeBases={libraries} notify={notify} />
+  return <Learning knowledgeBases={libraries} notify={notify} overview={overview} refreshOverview={refresh} />
 }
 
 function Placeholder({ title, description }: { title: string; description: string }) {

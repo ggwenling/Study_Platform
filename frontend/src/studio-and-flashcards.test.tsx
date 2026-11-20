@@ -3,7 +3,7 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api/client'
-import type { FlashcardDeckDetail, Material, StudyNote } from './api/types'
+import type { DueFlashcard, FlashcardDeckDetail, Material, StudyNote } from './api/types'
 import { FlashcardPanel } from './components/FlashcardPanel'
 import { LibraryStudio } from './components/LibraryStudio'
 import { ThemeProvider } from './Theme'
@@ -38,6 +38,7 @@ vi.mock('./api/client', () => ({
       flashcardDecks: vi.fn(),
       generateFlashcards: vi.fn(),
       flashcardDeck: vi.fn(),
+      dueFlashcards: vi.fn(),
       deleteFlashcardDeck: vi.fn(),
       reviewFlashcard: vi.fn(),
     },
@@ -108,6 +109,19 @@ const sampleDeck: FlashcardDeckDetail = {
   ],
 }
 
+const dueCard1: DueFlashcard = {
+  ...sampleDeck.cards[0],
+  deck_title: sampleDeck.title,
+  knowledge_base_id: 'kb-1',
+  knowledge_base_name: '高数资料库',
+}
+const dueCard2: DueFlashcard = {
+  ...sampleDeck.cards[1],
+  deck_title: sampleDeck.title,
+  knowledge_base_id: 'kb-1',
+  knowledge_base_name: '高数资料库',
+}
+
 async function render(view: ReactNode) {
   await act(async () => root.render(<ThemeProvider>{view}</ThemeProvider>))
 }
@@ -124,6 +138,10 @@ async function changeInput(input: HTMLInputElement | HTMLSelectElement, value: s
 
 function findBtn(text: string) {
   return [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes(text))
+}
+
+async function pressKey(key: string, code: string) {
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key, code, bubbles: true, cancelable: true })))
 }
 
 beforeEach(() => {
@@ -349,6 +367,147 @@ describe('Studio notes & Flashcard SM-2 review', () => {
       material_ids: ['material-1', 'material-2'],
       title: '我的线代卡组',
     })
+  })
+
+  it('starts the cross-deck due queue, guards keyboard shortcuts, and reviews weak cards again', async () => {
+    const onDueQueueStarted = vi.fn()
+    const onOverviewRefresh = vi.fn()
+    vi.mocked(api.studio.flashcardDecks).mockResolvedValue({ items: [] })
+    vi.mocked(api.studio.dueFlashcards).mockResolvedValue({ total_due: 1, items: [dueCard1] })
+    vi.mocked(api.studio.reviewFlashcard).mockResolvedValue({ ...dueCard1, is_due: false })
+    await render(
+      <FlashcardPanel
+        knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]}
+        defaultKbId="kb-1"
+        notify={vi.fn()}
+        startDueQueue
+        onDueQueueStarted={onDueQueueStarted}
+        onOverviewRefresh={onOverviewRefresh}
+      />,
+    )
+
+    expect(api.studio.dueFlashcards).toHaveBeenCalledWith(undefined, 100)
+    expect(onDueQueueStarted).toHaveBeenCalledOnce()
+    expect(node.textContent).toContain('高数资料库 · 高数资料库 · 记忆闪卡（2 张）')
+
+    const titleInput = document.querySelector<HTMLInputElement>('input[maxlength="255"]')!
+    titleInput.focus()
+    await pressKey(' ', 'Space')
+    expect(node.textContent).toContain('什么是正交矩阵？')
+    expect(node.textContent).not.toContain('满足 Q^T Q = I 的实方阵')
+
+    titleInput.blur()
+    await pressKey(' ', 'Space')
+    expect(node.textContent).toContain('满足 Q^T Q = I 的实方阵')
+    await act(async () => findBtn('去对话追问')!.click())
+    expect(navigateMock).toHaveBeenCalledWith('/', {
+      state: expect.objectContaining({
+        preferredLibrary: 'kb-1',
+        initialDraft: expect.stringContaining('闪卡问题：什么是正交矩阵？'),
+      }),
+    })
+    expect(navigateMock.mock.calls.at(-1)?.[1].state.initialDraft).toContain('卡片要点：满足 Q^T Q = I 的实方阵。')
+
+    titleInput.focus()
+    await pressKey('1', 'Digit1')
+    expect(api.studio.reviewFlashcard).not.toHaveBeenCalled()
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    document.body.append(dialog)
+    titleInput.blur()
+    await pressKey('1', 'Digit1')
+    expect(api.studio.reviewFlashcard).not.toHaveBeenCalled()
+    dialog.remove()
+
+    titleInput.blur()
+    await pressKey('1', 'Digit1')
+    expect(api.studio.reviewFlashcard).toHaveBeenCalledWith('card-1', 0, expect.any(String))
+    expect(node.textContent).toContain('本轮复习总结')
+    expect(node.textContent).toContain('重来 1')
+    expect(onOverviewRefresh).toHaveBeenCalledOnce()
+    await act(async () => findBtn('仅重刷本轮生疏卡（1 张）')!.click())
+    expect(node.textContent).toContain('重刷本轮生疏卡')
+    await act(async () => findBtn('翻转查看答案')!.click())
+    await act(async () => findBtn('熟练掌握')!.click())
+    expect(node.textContent).toContain('熟练掌握 1')
+    expect(node.textContent).toContain('重来 0')
+    expect(findBtn('仅重刷本轮生疏卡')).toBeUndefined()
+    expect(onOverviewRefresh).toHaveBeenCalledTimes(2)
+  })
+
+  it('continues a bounded due batch without repeating already reviewed cards', async () => {
+    vi.mocked(api.studio.flashcardDecks).mockResolvedValue({ items: [] })
+    vi.mocked(api.studio.dueFlashcards)
+      .mockResolvedValueOnce({ total_due: 2, items: [dueCard1] })
+      .mockResolvedValueOnce({ total_due: 2, items: [dueCard1, dueCard2] })
+    vi.mocked(api.studio.reviewFlashcard).mockImplementation(async (id, rating) => ({
+      ...(id === dueCard1.id ? dueCard1 : dueCard2),
+      is_due: rating === 0,
+    }))
+    await render(
+      <FlashcardPanel
+        knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]}
+        defaultKbId="kb-1"
+        notify={vi.fn()}
+        startDueQueue
+      />,
+    )
+
+    await act(async () => findBtn('翻转查看答案')!.click())
+    await act(async () => findBtn('重来（10分钟后）')!.click())
+    expect(findBtn('继续复习更多到期闪卡')).toBeDefined()
+    await act(async () => findBtn('继续复习更多到期闪卡')!.click())
+    expect(api.studio.dueFlashcards).toHaveBeenCalledTimes(2)
+    expect(node.textContent).toContain('正交矩阵的行列式取值？')
+
+    await act(async () => findBtn('翻转查看答案')!.click())
+    await act(async () => findBtn('良好')!.click())
+    expect(node.textContent).toContain('重来 1')
+    expect(node.textContent).toContain('良好 1')
+    expect(findBtn('继续复习更多到期闪卡')).toBeUndefined()
+  })
+
+  it('defaults a deck to due cards and offers free review when none are due', async () => {
+    vi.mocked(api.studio.flashcardDecks).mockResolvedValue({
+      items: [{ id: 'deck-1', knowledge_base_id: 'kb-1', knowledge_base_name: '高数资料库', title: sampleDeck.title, card_count: 2, due_count: 1, created_at: '' }],
+    })
+    vi.mocked(api.studio.flashcardDeck).mockResolvedValue({
+      ...sampleDeck,
+      due_count: 1,
+      cards: [sampleDeck.cards[0], { ...sampleDeck.cards[1], is_due: false }],
+    })
+    await render(
+      <FlashcardPanel
+        knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]}
+        defaultKbId="kb-1"
+        notify={vi.fn()}
+      />,
+    )
+    await act(async () => findBtn('开始翻转复习')!.click())
+    expect(node.textContent).toContain('第 1 / 1 张')
+    expect(node.textContent).not.toContain('正交矩阵的行列式取值？')
+    await act(async () => findBtn('重温全部（2）')!.click())
+    expect(node.textContent).toContain('第 1 / 2 张')
+    await act(async () => findBtn('下一张')!.click())
+    expect(node.textContent).toContain('正交矩阵的行列式取值？')
+
+    vi.mocked(api.studio.flashcardDeck).mockResolvedValue({
+      ...sampleDeck,
+      due_count: 0,
+      cards: sampleDeck.cards.map((card) => ({ ...card, is_due: false })),
+    })
+    await render(
+      <FlashcardPanel
+        knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]}
+        defaultKbId="kb-1"
+        notify={vi.fn()}
+        initialDeckId="deck-1"
+      />,
+    )
+    await act(async () => Promise.resolve())
+    expect(node.textContent).toContain('本组今日到期卡片已全部复习完毕')
+    await act(async () => findBtn('自由重温全部卡片')!.click())
+    expect(node.textContent).toContain('什么是正交矩阵？')
   })
 
 })

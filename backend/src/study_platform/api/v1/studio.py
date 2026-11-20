@@ -44,6 +44,32 @@ class ReviewFlashcardBody(BaseModel):
     idempotency_key: str | None = Field(default=None, max_length=128)
 
 
+class FlashcardSourceDTO(BaseModel):
+    title: str
+    availability: Literal["available", "unavailable"]
+
+
+class DueFlashcardDTO(BaseModel):
+    id: UUID
+    deck_id: UUID
+    deck_title: str
+    knowledge_base_id: UUID
+    knowledge_base_name: str | None
+    front: str
+    back: str
+    ease_factor: float
+    interval_days: int
+    repetition_count: int
+    due_at: str
+    is_due: bool
+    sources: list[FlashcardSourceDTO]
+
+
+class DueFlashcardsDTO(BaseModel):
+    total_due: int
+    items: list[DueFlashcardDTO]
+
+
 @router.get("/knowledge-bases/{kb_id}/notes")
 def list_kb_notes(
     kb_id: UUID,
@@ -209,3 +235,15 @@ def review_card(
     )
     db.commit()
     return dto
+
+
+@router.get("/flashcards/due", response_model=DueFlashcardsDTO)
+def list_due_cards(
+    knowledge_base_id: UUID | None = None,
+    limit: int = Query(default=30, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if knowledge_base_id is not None:
+        studio._owned_kb(db, user.id, knowledge_base_id)
+    return studio.list_due_flashcards(db, user.id, knowledge_base_id=knowledge_base_id, limit=limit)

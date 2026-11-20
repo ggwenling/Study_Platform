@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -626,7 +626,10 @@ def override_verdict(
 
 
 def _sync_wrong_book(db: Session, owner_user_id: UUID, item_id: UUID, response: QuizResponse) -> None:
-    item = db.get(QuizItem, item_id)
+    # Serialize first-wrong creation for the same quiz item before checking the unique row.
+    item = db.scalar(
+        sa.select(QuizItem).where(QuizItem.id == item_id).with_for_update()
+    )
     origin_wrong_id = None
     if item and isinstance(item.rubric, dict) and item.rubric.get("origin_wrong_id"):
         try:
@@ -640,7 +643,7 @@ def _sync_wrong_book(db: Session, owner_user_id: UUID, item_id: UUID, response: 
             sa.select(WrongQuestion).where(
                 WrongQuestion.id == origin_wrong_id,
                 WrongQuestion.owner_user_id == owner_user_id,
-            )
+            ).with_for_update()
         )
     if existing is None:
         existing = (
@@ -648,7 +651,7 @@ def _sync_wrong_book(db: Session, owner_user_id: UUID, item_id: UUID, response: 
                 sa.select(WrongQuestion).where(
                     WrongQuestion.owner_user_id == owner_user_id,
                     WrongQuestion.quiz_item_id == item_id,
-                )
+                ).with_for_update()
             )
             .scalars()
             .first()
@@ -664,6 +667,7 @@ def _sync_wrong_book(db: Session, owner_user_id: UUID, item_id: UUID, response: 
                     wrong_count=1,
                     status="open",
                     last_wrong_at=now,
+                    next_review_at=now,
                 )
             )
         else:
@@ -672,17 +676,21 @@ def _sync_wrong_book(db: Session, owner_user_id: UUID, item_id: UUID, response: 
                 existing.last_response_id = response.id
             existing.last_wrong_at = now
             existing.status = "open"
+            existing.next_review_at = now
     elif response.verdict == "correct" and existing is not None:
+        interval = 7 if existing.status == "reviewing" and existing.next_review_at is not None else 3
         existing.status = "reviewing"
+        existing.next_review_at = now + timedelta(days=interval)
 
 
-def list_attempts(
+def list_attempts_page(
     db: Session,
     owner_user_id: UUID,
     *,
     knowledge_base_id: UUID | None = None,
-    limit: int = 15,
-) -> list[dict]:
+    limit: int = 20,
+    cursor: UUID | None = None,
+) -> dict:
     stmt = (
         sa.select(QuizAttempt, Quiz, KnowledgeBase.name)
         .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
@@ -696,14 +704,38 @@ def list_attempts(
         )
         .where(
             QuizAttempt.owner_user_id == owner_user_id,
+            Quiz.owner_user_id == owner_user_id,
             Quiz.deleted_at.is_(None),
         )
     )
     if knowledge_base_id is not None:
         stmt = stmt.where(Quiz.course_id == knowledge_base_id)
-    rows = db.execute(stmt.order_by(QuizAttempt.updated_at.desc()).limit(limit)).all()
+    if cursor is not None:
+        cursor_stmt = (
+            sa.select(QuizAttempt.updated_at)
+            .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
+            .where(
+                QuizAttempt.id == cursor,
+                QuizAttempt.owner_user_id == owner_user_id,
+                Quiz.owner_user_id == owner_user_id,
+                Quiz.deleted_at.is_(None),
+            )
+        )
+        if knowledge_base_id is not None:
+            cursor_stmt = cursor_stmt.where(Quiz.course_id == knowledge_base_id)
+        cursor_updated_at = db.scalar(cursor_stmt)
+        if cursor_updated_at is None:
+            raise ApiError(400, "invalid_cursor", "Invalid cursor")
+        stmt = stmt.where(
+            sa.tuple_(QuizAttempt.updated_at, QuizAttempt.id) < (cursor_updated_at, cursor)
+        )
+    rows = db.execute(
+        stmt.order_by(QuizAttempt.updated_at.desc(), QuizAttempt.id.desc()).limit(limit + 1)
+    ).all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     if not rows:
-        return []
+        return {"items": [], "next_cursor": None}
     attempt_ids = [att.id for att, _, _ in rows]
     resp_rows = db.execute(
         sa.select(
@@ -734,7 +766,67 @@ def list_attempts(
                 "updated_at": att.updated_at.isoformat(),
             }
         )
-    return out
+    return {"items": out, "next_cursor": rows[-1][0].id if has_more else None}
+
+
+def list_attempts(
+    db: Session,
+    owner_user_id: UUID,
+    *,
+    knowledge_base_id: UUID | None = None,
+    limit: int = 15,
+) -> list[dict]:
+    """Compatibility wrapper for callers that still need the first history page as a list."""
+    return list_attempts_page(
+        db,
+        owner_user_id,
+        knowledge_base_id=knowledge_base_id,
+        limit=limit,
+    )["items"]
+
+
+def _wrong_due_condition(now: datetime):
+    return sa.and_(
+        WrongQuestion.status != "mastered",
+        sa.or_(
+            sa.and_(
+                WrongQuestion.next_review_at.is_not(None),
+                WrongQuestion.next_review_at <= now,
+            ),
+            sa.and_(
+                WrongQuestion.next_review_at.is_(None),
+                sa.or_(
+                    WrongQuestion.status == "open",
+                    sa.and_(
+                        WrongQuestion.status == "reviewing",
+                        WrongQuestion.last_wrong_at <= now - timedelta(days=3),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def _wrong_question_is_due(wrong: WrongQuestion, now: datetime) -> bool:
+    if wrong.status == "mastered":
+        return False
+    if wrong.next_review_at is not None:
+        return wrong.next_review_at <= now
+    if wrong.status == "open":
+        return True
+    return wrong.status == "reviewing" and wrong.last_wrong_at <= now - timedelta(days=3)
+
+
+def count_due_wrong_questions(db: Session, owner_user_id: UUID, now: datetime) -> int:
+    return int(
+        db.scalar(
+            sa.select(sa.func.count(WrongQuestion.id)).where(
+                WrongQuestion.owner_user_id == owner_user_id,
+                _wrong_due_condition(now),
+            )
+        )
+        or 0
+    )
 
 
 def list_wrong_questions(
@@ -742,7 +834,11 @@ def list_wrong_questions(
     owner_user_id: UUID,
     *,
     knowledge_base_id: UUID | None = None,
+    due_only: bool = False,
+    now: datetime | None = None,
 ) -> list[dict]:
+    now = now or datetime.now(UTC)
+    due_condition = _wrong_due_condition(now)
     stmt = (
         sa.select(WrongQuestion, QuizItem, Quiz, KnowledgeBase.name, QuizResponse)
         .join(QuizItem, QuizItem.id == WrongQuestion.quiz_item_id)
@@ -763,7 +859,15 @@ def list_wrong_questions(
     )
     if knowledge_base_id is not None:
         stmt = stmt.where(Quiz.course_id == knowledge_base_id)
-    rows = db.execute(stmt.order_by(WrongQuestion.last_wrong_at.desc())).all()
+    if due_only:
+        stmt = stmt.where(due_condition)
+    rows = db.execute(
+        stmt.order_by(
+            sa.case((due_condition, 0), else_=1),
+            WrongQuestion.last_wrong_at.desc(),
+            WrongQuestion.id.desc(),
+        )
+    ).all()
     item_ids = [item.id for _, item, *_ in rows]
     sources_map = _load_sources_by_item(db, item_ids)
     latest_retry_by_wrong: dict[str, QuizResponse] = {}
@@ -823,6 +927,8 @@ def list_wrong_questions(
                 "status": wrong.status,
                 "wrong_count": wrong.wrong_count,
                 "last_wrong_at": wrong.last_wrong_at.isoformat(),
+                "next_review_at": wrong.next_review_at.isoformat() if wrong.next_review_at else None,
+                "is_due": _wrong_question_is_due(wrong, now),
             }
         )
     return out
@@ -834,7 +940,10 @@ def retry_wrong_questions(
     owner_user_id: UUID,
     wrong_ids: list[UUID] | None = None,
     knowledge_base_id: UUID | None = None,
+    due_only: bool = False,
+    now: datetime | None = None,
 ) -> QuizAttempt:
+    now = now or datetime.now(UTC)
     stmt = (
         sa.select(WrongQuestion, QuizItem, Quiz)
         .join(QuizItem, QuizItem.id == WrongQuestion.quiz_item_id)
@@ -844,8 +953,10 @@ def retry_wrong_questions(
             WrongQuestion.status != "mastered",
         )
     )
-    if wrong_ids:
+    if wrong_ids is not None:
         stmt = stmt.where(WrongQuestion.id.in_(wrong_ids))
+    elif due_only:
+        stmt = stmt.where(_wrong_due_condition(now))
     if knowledge_base_id is not None:
         stmt = stmt.where(Quiz.course_id == knowledge_base_id)
     rows = db.execute(stmt.order_by(WrongQuestion.last_wrong_at.desc()).limit(20)).all()
@@ -918,7 +1029,7 @@ def mark_wrong_mastered(db: Session, owner_user_id: UUID, wrong_id: UUID) -> Non
             sa.select(WrongQuestion).where(
                 WrongQuestion.id == wrong_id,
                 WrongQuestion.owner_user_id == owner_user_id,
-            )
+            ).with_for_update()
         )
         .scalars()
         .first()
@@ -926,6 +1037,7 @@ def mark_wrong_mastered(db: Session, owner_user_id: UUID, wrong_id: UUID) -> Non
     if row is None:
         raise ApiError(404, "wrong_not_found", "错题记录不存在")
     row.status = "mastered"
+    row.next_review_at = None
     db.flush()
 
 
@@ -962,11 +1074,14 @@ def attempt_payload(db: Session, attempt_id: UUID, owner_user_id: UUID) -> dict:
     revealed_ids = {item.id for resp, item in responses if _reference_revealed(resp)}
     sources_map = _load_sources_by_item(db, item_ids, include_quotes=revealed_ids)
     origin_ids = []
+    origin_by_item: dict[UUID, str] = {}
     for _, item in responses:
         origin = (item.rubric or {}).get("origin_wrong_id")
         if origin:
             try:
-                origin_ids.append(UUID(str(origin)))
+                origin_id = UUID(str(origin))
+                origin_ids.append(origin_id)
+                origin_by_item[item.id] = str(origin_id)
             except ValueError:
                 pass
     origin_libraries = {
@@ -991,6 +1106,7 @@ def attempt_payload(db: Session, attempt_id: UUID, owner_user_id: UUID) -> dict:
         row = {
             "response_id": str(resp.id),
             "quiz_item_id": str(item.id),
+            "origin_wrong_id": origin_by_item.get(item.id),
             "knowledge_base_id": (
                 origin_libraries.get(str(item.rubric["origin_wrong_id"]))
                 if (item.rubric or {}).get("origin_wrong_id")

@@ -2,7 +2,7 @@
 
 import os
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,7 +21,10 @@ from study_platform.core.errors import ApiError, api_error_handler
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import (
     AiWorkflowRun,
+    Flashcard,
+    FlashcardDeck,
     IndexVersion,
+    KnowledgeBase,
     Material,
     MaterialChunk,
     MaterialVersion,
@@ -29,6 +32,7 @@ from study_platform.persistence.models import (
 )
 from study_platform.services import auth_limits
 from study_platform.services.chat import chunk_query
+from study_platform.services.learning_anchor import ensure_course_anchor
 
 pytestmark = pytest.mark.integration
 
@@ -77,6 +81,48 @@ def signup(http):
     assert result.status_code == 201
     http.headers["Authorization"] = "Bearer " + result.json()["access_token"]
     return UUID(result.json()["user"]["id"])
+
+
+def test_due_flashcards_across_decks_and_dashboard(resource_client):
+    http, db = resource_client
+    now = datetime.now(UTC)
+    owner = signup(http)
+
+    def deck(title, user=owner, *, deleted_at=None):
+        kb_id = UUID(http.post("/knowledge-bases", json={"name": title}).json()["id"])
+        ensure_course_anchor(db, db.get(KnowledgeBase, kb_id))
+        row = FlashcardDeck(owner_user_id=user, course_id=kb_id, title=title,
+                            source_scope={}, deleted_at=deleted_at)
+        db.add(row)
+        db.commit()
+        return row
+
+    first = deck("First")
+    second = deck("Second")
+    deleted = deck("Removed", deleted_at=now)
+    owner_headers = dict(http.headers)
+    foreign = deck("Private", signup(http))
+    http.headers.update(owner_headers)
+    db.add_all([
+        Flashcard(deck_id=first.id, front="Older", back="Answer", due_at=now - timedelta(days=2)),
+        Flashcard(deck_id=second.id, front="Newer", back="Answer", due_at=now - timedelta(days=1)),
+        Flashcard(deck_id=first.id, front="Future", back="Answer", due_at=now + timedelta(days=1)),
+        Flashcard(deck_id=first.id, front="Paused", back="Answer", due_at=now, status="suspended"),
+        Flashcard(deck_id=deleted.id, front="Removed", back="Answer", due_at=now),
+        Flashcard(deck_id=foreign.id, front="Private", back="Answer", due_at=now),
+    ])
+    db.commit()
+
+    due = http.get("/flashcards/due", params={"limit": 1}).json()
+    assert due["total_due"] == 2
+    assert [card["front"] for card in due["items"]] == ["Older"]
+    assert due["items"][0]["deck_title"] == due["items"][0]["knowledge_base_name"] == "First"
+    filtered = http.get("/flashcards/due", params={"knowledge_base_id": second.course_id}).json()
+    assert filtered["total_due"] == 1 and filtered["items"][0]["front"] == "Newer"
+    assert http.get("/flashcards/due", params={"knowledge_base_id": foreign.course_id}).status_code == 404
+    overview = http.get("/dashboard/overview").json()
+    assert overview["due_flashcard_count"] == 2
+    assert overview["due_wrong_question_count"] == 0
 
 
 def test_project_conversation_ownership_paging_and_library_deletion(resource_client):

@@ -1,4 +1,4 @@
-import type { LearningItem } from '@/api/types'
+import type { LearningAttempt, LearningItem, WrongQuestionItem } from '@/api/types'
 
 export function isReferenceRevealed(item: Pick<LearningItem, 'verdict' | 'answer' | 'reference_answer'>) {
   if (item.verdict) return true
@@ -36,6 +36,35 @@ const wrongQuestionStatusLabel: Record<string, string> = {
 
 export function labelWrongQuestionStatus(status: string) {
   return wrongQuestionStatusLabel[status] ?? status
+}
+
+export function wrongReviewLabel(question: Pick<WrongQuestionItem, 'is_due' | 'next_review_at' | 'last_wrong_at' | 'status'>) {
+  if (question.is_due || question.status === 'open') return '今日待重练'
+  const next = question.next_review_at
+    ? new Date(question.next_review_at)
+    : question.status === 'reviewing'
+      ? new Date(new Date(question.last_wrong_at).getTime() + 3 * 24 * 60 * 60 * 1000)
+      : null
+  if (!next || Number.isNaN(next.getTime())) return '未安排复习'
+  return `下次复习：${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
+}
+
+export function wrongIdsForAttempt(attempt: Pick<LearningAttempt, 'knowledge_base_id' | 'items'>, questions: WrongQuestionItem[]) {
+  const used = new Set<string>()
+  const ids: string[] = []
+  for (const item of attempt.items) {
+    if (item.verdict !== 'incorrect') continue
+    const itemKbId = item.knowledge_base_id ?? attempt.knowledge_base_id
+    const originId = item.origin_wrong_id ?? questions.find((question) =>
+      question.quiz_item_id === item.quiz_item_id &&
+      (!itemKbId || !question.knowledge_base_id || question.knowledge_base_id === itemKbId),
+    )?.id
+    if (originId && !used.has(originId)) {
+      used.add(originId)
+      ids.push(originId)
+    }
+  }
+  return ids
 }
 
 export function formatLearningTimestamp(iso: string) {

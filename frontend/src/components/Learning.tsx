@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, BookOpen, Camera, Check, ChevronRight, FileText, History, MessageCircle, RotateCcw, X } from 'lucide-react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { Accordion } from '@/components/arc/accordion/accordion'
 import { Button } from '@/components/arc/button/button'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
@@ -9,6 +9,7 @@ import { Textarea } from '@/components/arc/textarea/textarea'
 import { api } from '@/api/client'
 import type {
   KnowledgeBase,
+  Dashboard,
   LearningAttempt,
   LearningAttemptSummary,
   LearningResponseResult,
@@ -24,6 +25,8 @@ import {
   formatLearningTimestamp,
   isReferenceRevealed,
   labelWrongQuestionStatus,
+  wrongIdsForAttempt,
+  wrongReviewLabel,
 } from '@/learningUi'
 import { MarkdownContent } from './MarkdownContent'
 import { FlashcardPanel } from './FlashcardPanel'
@@ -31,6 +34,8 @@ import { FlashcardPanel } from './FlashcardPanel'
 type Props = {
   knowledgeBases: KnowledgeBase[]
   notify: (message: string) => void
+  overview: Dashboard | null
+  refreshOverview: () => void
 }
 
 const verdictLabel: Record<string, string> = {
@@ -74,12 +79,15 @@ function SourceList({ sources }: { sources?: LearningSource[] }) {
   )
 }
 
-export function Learning({ knowledgeBases, notify }: Props) {
+export function Learning({ knowledgeBases, notify, overview, refreshOverview }: Props) {
   const navigate = useNavigate()
-  const historyState = (typeof window !== 'undefined' ? window.history.state?.usr : null) as {
+  const location = useLocation()
+  const historyState = location.state as {
     tab?: 'practice' | 'history' | 'wrong' | 'flashcards'
     deckId?: string
     kbId?: string
+    startDueQueue?: boolean
+    wrongFilter?: 'all' | 'due'
   } | null
   const [kbId, setKbId] = useState<string>(historyState?.kbId ?? '')
   const [quizMode, setQuizMode] = useState<'short_answer' | 'mcq' | 'mixed'>('mixed')
@@ -92,12 +100,17 @@ export function Learning({ knowledgeBases, notify }: Props) {
   const [materialsRetry, setMaterialsRetry] = useState(0)
   const [attempt, setAttempt] = useState<LearningAttempt | null>(null)
   const [attempts, setAttempts] = useState<LearningAttemptSummary[]>([])
+  const [attemptsCursor, setAttemptsCursor] = useState<string | null>(null)
+  const [loadingMoreAttempts, setLoadingMoreAttempts] = useState(false)
   const [deckCount, setDeckCount] = useState(0)
   const [index, setIndex] = useState(0)
   const [textDrafts, setTextDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
   const [wrongs, setWrongs] = useState<WrongQuestionItem[]>([])
+  const dailyOverview = overview
   const [wrongKbFilter, setWrongKbFilter] = useState<string>('all')
+  const [wrongDueOnly, setWrongDueOnly] = useState(historyState?.wrongFilter === 'due')
+  const [startDueQueue, setStartDueQueue] = useState(Boolean(historyState?.startDueQueue))
   const [expandedWrongIds, setExpandedWrongIds] = useState<string[]>([])
   const [tab, setTab] = useState<'practice' | 'flashcards' | 'history' | 'wrong'>(historyState?.tab ?? 'practice')
 
@@ -114,10 +127,30 @@ export function Learning({ knowledgeBases, notify }: Props) {
     try {
       const page = await api.learning.attempts(undefined, 20)
       setAttempts(page.items)
+      setAttemptsCursor(page.next_cursor)
     } catch (error) {
       if (error instanceof ApiError) notify(errorMessage(error))
     }
   }, [notify])
+
+  const refreshDailyOverview = useCallback(() => refreshOverview(), [refreshOverview])
+
+  async function loadMoreAttempts() {
+    if (!attemptsCursor || loadingMoreAttempts) return
+    setLoadingMoreAttempts(true)
+    try {
+      const page = await api.learning.attempts(undefined, 20, attemptsCursor)
+      setAttempts((current) => {
+        const existing = new Set(current.map((row) => row.id))
+        return [...current, ...page.items.filter((row) => !existing.has(row.id))]
+      })
+      setAttemptsCursor(page.next_cursor)
+    } catch (error) {
+      if (error instanceof ApiError) notify(errorMessage(error))
+    } finally {
+      setLoadingMoreAttempts(false)
+    }
+  }
 
   useEffect(() => {
     if (!knowledgeBases.length) {
@@ -139,6 +172,14 @@ export function Learning({ knowledgeBases, notify }: Props) {
     void refreshWrongs()
     void refreshAttempts()
   }, [refreshWrongs, refreshAttempts])
+
+  useEffect(() => {
+    const state = location.state as typeof historyState
+    setTab(state?.tab ?? 'practice')
+    setStartDueQueue(Boolean(state?.startDueQueue))
+    setWrongDueOnly(state?.wrongFilter === 'due')
+    if (state?.kbId) setKbId(state.kbId)
+  }, [location.key])
 
   useEffect(() => {
     setSelectedMaterialIds([])
@@ -244,7 +285,7 @@ export function Learning({ knowledgeBases, notify }: Props) {
     try {
       const result = await api.learning.submitAnswerText(item.response_id, trimmed)
       applyResponseUpdate(item.response_id, result)
-      await Promise.all([refreshWrongs(), refreshAttempts()])
+      await Promise.all([refreshWrongs(), refreshAttempts(), refreshDailyOverview()])
     } catch (error) {
       notify(error instanceof ApiError ? errorMessage(error) : '提交失败')
     } finally {
@@ -259,7 +300,7 @@ export function Learning({ knowledgeBases, notify }: Props) {
     try {
       const result = await api.learning.submitAnswerImage(item.response_id, file)
       applyResponseUpdate(item.response_id, result)
-      await Promise.all([refreshWrongs(), refreshAttempts()])
+      await Promise.all([refreshWrongs(), refreshAttempts(), refreshDailyOverview()])
     } catch (error) {
       notify(error instanceof ApiError ? errorMessage(error) : '提交失败')
     } finally {
@@ -274,7 +315,7 @@ export function Learning({ knowledgeBases, notify }: Props) {
     try {
       const result = await api.learning.patchVerdict(item.response_id, { verdict })
       applyResponseUpdate(item.response_id, { ...result, verdict_source: 'user' })
-      await Promise.all([refreshWrongs(), refreshAttempts()])
+      await Promise.all([refreshWrongs(), refreshAttempts(), refreshDailyOverview()])
     } catch (error) {
       notify(error instanceof ApiError ? errorMessage(error) : '更新失败')
     } finally {
@@ -282,12 +323,17 @@ export function Learning({ knowledgeBases, notify }: Props) {
     }
   }
 
-  async function startWrongRetry(wrongIds?: string[], targetKb?: string) {
+  async function startWrongRetry(wrongIds?: string[], targetKb?: string, dueOnly = false) {
+    if (wrongIds && !wrongIds.length) {
+      notify('本轮错题尚未同步到错题本，暂时无法重练。')
+      return
+    }
     setBusy(true)
     try {
       const next = await api.learning.retryWrong({
         wrong_ids: wrongIds,
         knowledge_base_id: targetKb && targetKb !== 'all' ? targetKb : undefined,
+        ...(dueOnly ? { due_only: true } : {}),
       })
       setAttempt(next)
       setIndex(0)
@@ -306,7 +352,7 @@ export function Learning({ knowledgeBases, notify }: Props) {
     setBusy(true)
     try {
       await api.learning.masterWrong(wrongId)
-      await refreshWrongs()
+      await Promise.all([refreshWrongs(), refreshDailyOverview()])
       notify('已标记为掌握')
     } catch (error) {
       notify(error instanceof ApiError ? errorMessage(error) : '操作失败')
@@ -349,6 +395,15 @@ export function Learning({ knowledgeBases, notify }: Props) {
   const filteredWrongs = wrongKbFilter === 'all'
     ? wrongs
     : wrongs.filter((row) => row.knowledge_base_id === wrongKbFilter)
+  const visibleWrongs = wrongDueOnly ? filteredWrongs.filter((row) => row.is_due) : filteredWrongs
+  const currentWrongIds = attempt ? wrongIdsForAttempt(attempt, wrongs) : []
+  const completedAttempt = Boolean(attempt?.items.length && attempt.items.every((item) => Boolean(item.verdict)))
+  const recapCounts = attempt?.items.reduce((counts, item) => {
+    if (item.verdict === 'correct') counts.correct += 1
+    else if (item.verdict === 'incorrect') counts.incorrect += 1
+    else if (item.verdict === 'pending') counts.pending += 1
+    return counts
+  }, { correct: 0, incorrect: 0, pending: 0 })
 
   if (!knowledgeBases.length) {
     return (
@@ -373,6 +428,30 @@ export function Learning({ knowledgeBases, notify }: Props) {
         <h1>学习</h1>
         <p>基于所选知识库出题练习，支持在线选择/文字作答、拍照判题与错题复盘。</p>
       </header>
+
+      <section className="learning-daily-overview" aria-label="今日复习概览">
+        <div>
+          <strong>今日待复习</strong>
+          <span>闪卡 <b>{dailyOverview?.due_flashcard_count ?? '—'}</b></span>
+          <span>错题 <b>{dailyOverview?.due_wrong_question_count ?? '—'}</b></span>
+        </div>
+        <div className="learning-daily-actions">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={!dailyOverview || dailyOverview.due_flashcard_count === 0}
+            onClick={() => { setTab('flashcards'); setStartDueQueue(true) }}
+          >开始今日到期闪卡</Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={!dailyOverview || dailyOverview.due_wrong_question_count === 0}
+            onClick={() => void startWrongRetry(undefined, 'all', true)}
+          >重练今日到期错题</Button>
+        </div>
+      </section>
 
       <div className="learning-tabs" role="tablist" aria-label="学习视图">
         <button
@@ -684,6 +763,27 @@ export function Learning({ knowledgeBases, notify }: Props) {
             </div>
           </article>
         ) : null}
+        {attempt && completedAttempt && recapCounts && <section className="learning-practice-recap" aria-label="本轮练习复盘">
+          <h2>本轮练习复盘</h2>
+          <p role="status">正确 {recapCounts.correct} 题 · 错误 {recapCounts.incorrect} 题 · 待确认 {recapCounts.pending} 题</p>
+          <div className="learning-practice-recap-actions">
+            {recapCounts.incorrect > 0 && <Button
+              type="button"
+              variant="secondary"
+              disabled={busy || currentWrongIds.length !== recapCounts.incorrect}
+              onClick={() => void startWrongRetry(currentWrongIds, attempt.knowledge_base_id ?? undefined)}
+            >
+              {currentWrongIds.length === recapCounts.incorrect ? `立即重练本卷错题（${recapCounts.incorrect}）` : '本卷错题暂不可重练'}
+            </Button>}
+            {recapCounts.pending > 0 && <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setIndex(attempt.items.findIndex((item) => item.verdict === 'pending'))}
+            >查看待确认题目</Button>}
+            <Button type="button" variant="ghost" disabled={busy} onClick={() => void startPractice()}>再出一套新题</Button>
+          </div>
+          {recapCounts.incorrect > currentWrongIds.length && <p className="muted">部分本轮错题尚未同步到错题本，暂不发送不完整的重练范围。</p>}
+        </section>}
       </section>
 
       <section
@@ -699,6 +799,9 @@ export function Learning({ knowledgeBases, notify }: Props) {
           initialDeckId={historyState?.deckId}
           notify={notify}
           onDeckCountChange={setDeckCount}
+          startDueQueue={startDueQueue}
+          onDueQueueStarted={() => setStartDueQueue(false)}
+          onOverviewRefresh={refreshDailyOverview}
         />
       </section>
 
@@ -736,6 +839,13 @@ export function Learning({ knowledgeBases, notify }: Props) {
             ))}
           </ul>
         )}
+        {attemptsCursor && <Button
+          type="button"
+          variant="secondary"
+          loading={loadingMoreAttempts}
+          disabled={loadingMoreAttempts}
+          onClick={() => void loadMoreAttempts()}
+        >加载更多历史记录</Button>}
       </section>
 
       <section
@@ -756,23 +866,35 @@ export function Learning({ knowledgeBases, notify }: Props) {
                 ...knowledgeBases.map((kb) => ({ value: kb.id, label: kb.name })),
               ]}
             />
+            <Select
+              label="复习范围"
+              value={wrongDueOnly ? 'due' : 'all'}
+              onValueChange={(value) => setWrongDueOnly(value === 'due')}
+              options={[
+                { value: 'all', label: '全部未掌握' },
+                { value: 'due', label: '今日到期' },
+              ]}
+            />
             <Button
               type="button"
               variant="secondary"
               loading={busy}
-              disabled={busy || filteredWrongs.length === 0}
-              onClick={() => void startWrongRetry(undefined, wrongKbFilter)}
+              disabled={busy || visibleWrongs.length === 0}
+              onClick={() => void startWrongRetry(undefined, wrongKbFilter, wrongDueOnly)}
             >
-              <RotateCcw size={16} aria-hidden /> 错题重练（{filteredWrongs.length}）
+              <RotateCcw size={16} aria-hidden /> 错题重练（{visibleWrongs.length}）
             </Button>
           </div>
         )}
 
-        {filteredWrongs.length === 0 ? (
-          <EmptyState title="暂无错题" description="判错的题目会自动收录到这里，支持查看解析与错题重练。" />
+        {visibleWrongs.length === 0 ? (
+          <EmptyState
+            title={wrongDueOnly ? '今日没有待重练错题' : '暂无错题'}
+            description={wrongDueOnly ? '到期的错题会显示在这里。' : '判错的题目会自动收录到这里，支持查看解析与错题重练。'}
+          />
         ) : (
           <ul className="learning-wrong-list">
-            {filteredWrongs.map((row) => {
+            {visibleWrongs.map((row) => {
               const expanded = expandedWrongIds.includes(row.id)
               return (
                 <li key={row.id}>
@@ -781,7 +903,8 @@ export function Learning({ knowledgeBases, notify }: Props) {
                       <p>{row.stem}</p>
                       <span className="learning-wrong-meta">
                         {row.knowledge_base_name ? `${row.knowledge_base_name} · ` : ''}
-                        错 {row.wrong_count} 次 · {labelWrongQuestionStatus(row.status)}
+                        错 {row.wrong_count} 次 · <span className="pill">{labelWrongQuestionStatus(row.status)}</span>
+                        <span className="learning-review-schedule">{wrongReviewLabel(row)}</span>
                         <time dateTime={row.last_wrong_at}> · 最近 {formatLearningTimestamp(row.last_wrong_at)}</time>
                       </span>
                     </div>
