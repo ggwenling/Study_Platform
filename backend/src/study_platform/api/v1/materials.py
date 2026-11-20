@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -25,11 +25,13 @@ from study_platform.services.upload_validation import (
     expected_mime,
     validate_upload_content,
 )
+from study_platform.services.web_clip import fetch_public_webpage
 
 router = APIRouter()
 MIMES = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".txt": "text/plain",
     ".md": "text/markdown",
     ".markdown": "text/markdown",
@@ -46,10 +48,16 @@ class UploadResponse(BaseModel):
     status: str
 
 
+class WebClipRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+    title: str | None = Field(default=None, max_length=255)
+
+
 class MaterialResponse(BaseModel):
     id: UUID
     knowledge_base_id: UUID
     title: str
+    source_url: str | None = None
     mime_type: str | None
     byte_size: int | None
     status: str
@@ -183,6 +191,7 @@ def dto(db, material):
         "id": material.id,
         "knowledge_base_id": material.knowledge_base_id,
         "title": material.title,
+        "source_url": material.source_url,
         "mime_type": version.source_mime if version else None,
         "byte_size": version.byte_size if version else None,
         "status": state,
@@ -252,7 +261,7 @@ def upload(
         if text_validator:
             text_validator.finish()
         else:
-            validate_upload_content(header, mime, title)
+            validate_upload_content(header, mime, title, path=path)
         material = Material(
             id=uuid4(),
             owner_user_id=user.id,
@@ -270,6 +279,67 @@ def upload(
             source_mime=mime,
             source_sha256=digest.hexdigest(),
             byte_size=size,
+            object_key=f"{version_id}/source",
+            parse_status="pending",
+        )
+        db.add(material)
+        db.flush()
+        db.add(version)
+        db.flush()
+        job = create_job(db, user, version)
+        db.commit()
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return {
+        "material_id": material.id,
+        "version_id": version.id,
+        "job_id": job.id,
+        "status": "queued",
+    }
+
+
+@router.post(
+    "/knowledge-bases/{kb_id}/materials/web-clip",
+    status_code=202,
+    response_model=UploadResponse,
+)
+def web_clip(
+    kb_id: UUID,
+    body: WebClipRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    owned_kb(db, user, kb_id)
+    db.rollback()
+    clip = fetch_public_webpage(body.url)
+    title = (body.title or "").strip() or clip.title
+    content = clip.markdown.encode("utf-8")
+    version_id = uuid4()
+    path = source_path(version_id)
+    try:
+        owned_kb(db, user, kb_id, lock=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("xb") as source:
+            source.write(content)
+        material = Material(
+            id=uuid4(),
+            owner_user_id=user.id,
+            knowledge_base_id=kb_id,
+            course_id=None,
+            title=title[:512],
+            source_url=clip.final_url,
+            kind="other",
+            status="active",
+        )
+        version = MaterialVersion(
+            id=version_id,
+            material_id=material.id,
+            version_no=1,
+            is_current=True,
+            source_mime="text/markdown",
+            source_sha256=hashlib.sha256(content).hexdigest(),
+            byte_size=len(content),
             object_key=f"{version_id}/source",
             parse_status="pending",
         )

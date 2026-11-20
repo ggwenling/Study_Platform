@@ -73,6 +73,10 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                     inspector = sa.inspect(connection)
                     tables = set(inspector.get_table_names(schema="study")) - {"alembic_version"}
                     assert tables == (expected if upgraded else set())
+                    material_columns = {
+                        column["name"] for column in inspector.get_columns("materials", schema="study")
+                    } if upgraded else set()
+                    assert ("source_url" in material_columns) is upgraded
                     version = connection.scalar(
                         sa.text("SELECT version_num FROM study.alembic_version")
                     )
@@ -150,6 +154,9 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                     assert personal_id is None and binding["dimensions"] == 1024
                     assert binding["base_url"] == "https://platform.example/v1"
                     bindings[kb_id] = binding
+                assert connection.scalar(sa.text(
+                    "SELECT count(*) FROM study.materials WHERE source_url IS NULL"
+                )) == len(materials)
                 assert bindings[kb_ids[0]]["profile"] == "legacy-embedding:1024"
                 assert bindings[kb_ids[0]]["model"] == "legacy-embedding"
                 assert bindings[kb_ids[1]]["model"] == "platform-'quoted'"

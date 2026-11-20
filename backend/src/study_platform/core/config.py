@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     auth_rate_limit_per_minute: int = 30
     max_docx_uncompressed_bytes: int = 80 * 1024 * 1024
+    max_pptx_ocr_images: int = 10
+    max_web_clip_bytes: int = 5 * 1024 * 1024
+    web_clip_timeout_seconds: float = 15
     max_pdf_page_preview: int = 50
     login_detailed_errors: bool = False
     auth_jwt_secret: SecretStr = SecretStr("")

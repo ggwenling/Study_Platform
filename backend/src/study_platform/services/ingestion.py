@@ -7,6 +7,7 @@ import socket
 import zipfile
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from uuid import uuid4
 
 import sqlalchemy as sa
@@ -67,16 +68,16 @@ def ocr_image(image):
     )
 
 
-def ensure_docx_uncompressed_limit(path):
+def ensure_ooxml_uncompressed_limit(path):
     settings = get_settings()
     with zipfile.ZipFile(path) as archive:
         total = sum(info.file_size for info in archive.infolist())
         if total > settings.max_docx_uncompressed_bytes:
-            raise ValueError("DOCX uncompressed payload too large")
+            raise ValueError("OOXML uncompressed payload too large")
 
 
 def extract_docx(path, *, legacy_columns=False):
-    ensure_docx_uncompressed_limit(path)
+    ensure_ooxml_uncompressed_limit(path)
     from docx import Document
     from docx.table import Table
     from docx.text.paragraph import Paragraph
@@ -170,6 +171,81 @@ def extract_markdown(path):
         yield item
 
 
+def extract_pptx(path, version=None):
+    ensure_ooxml_uncompressed_limit(path)
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    settings = get_settings()
+    presentation = Presentation(path)
+    slide_count = len(presentation.slides)
+    if slide_count == 0:
+        raise ValueError("Invalid PPTX slide count")
+    if version is not None:
+        version.page_count = slide_count
+
+    def shape_contents(shapes):
+        for shape in shapes:
+            if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                yield from shape_contents(shape.shapes)
+            elif shape.has_table:
+                rows = [
+                    " | ".join(cell.text.strip() for cell in row.cells).strip()
+                    for row in shape.table.rows
+                ]
+                text = "\n".join(row for row in rows if row.strip())
+                if text:
+                    yield text
+            elif shape.has_text_frame and shape.text.strip():
+                yield shape.text.strip()
+
+    def pictures(shapes):
+        for shape in shapes:
+            if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                yield from pictures(shape.shapes)
+            elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                yield shape
+
+    ocr_count = 0
+    for slide_no, slide in enumerate(presentation.slides, 1):
+        heading_shape = slide.shapes.title
+        heading = heading_shape.text.strip() if heading_shape else ""
+        parts = list(shape_contents(slide.shapes))
+        visible_text = "\n\n".join(parts)
+        if visible_text:
+            locator = {"slide": slide_no}
+            if heading:
+                locator["heading"] = heading
+            yield visible_text, locator
+
+        if sum(char.isalnum() for char in visible_text) < 20:
+            ocr_text = []
+            for shape in pictures(slide.shapes):
+                if ocr_count >= settings.max_pptx_ocr_images:
+                    continue
+                image_part = shape.image
+                if image_part.content_type not in ("image/png", "image/jpeg"):
+                    continue
+                with Image.open(BytesIO(image_part.blob)) as image:
+                    if image.width * image.height > settings.max_image_pixels:
+                        raise ValueError("Invalid PPTX image")
+                    image.load()
+                    lines = ocr_image(image)
+                ocr_count += 1
+                if lines:
+                    ocr_text.append("\n".join(line["text"] for line in lines))
+            if ocr_text:
+                yield "\n\n".join(ocr_text), {"slide": slide_no, "ocr": True}
+
+        notes = ""
+        if slide.has_notes_slide:
+            notes_frame = slide.notes_slide.notes_text_frame
+            notes = notes_frame.text.strip() if notes_frame is not None else ""
+        if notes:
+            yield notes, {"slide": slide_no, "notes": True}
+
+
 def extract(version, output_dir, phase):
     """Yield text with original page/paragraph/line locators."""
     settings = get_settings()
@@ -184,6 +260,8 @@ def extract(version, output_dir, phase):
         yield from extract_markdown(path)
     elif mime.endswith("wordprocessingml.document"):
         yield from extract_docx(path)
+    elif mime.endswith("presentationml.presentation"):
+        yield from extract_pptx(path, version)
     elif mime == "application/pdf":
         import pypdfium2 as pdfium
 

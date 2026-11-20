@@ -29,6 +29,8 @@ dependencies = [
     "jieba>=0.42,<1",
     "cryptography>=44,<47",
     "httpcore>=1,<2",
+    "python-pptx>=1.0,<2",
+    "trafilatura>=2.0,<3",
 ]
 
 [dependency-groups]

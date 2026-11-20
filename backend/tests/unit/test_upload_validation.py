@@ -1,3 +1,5 @@
+import zipfile
+
 import pytest
 
 from study_platform.core.errors import ApiError
@@ -20,6 +22,40 @@ def test_validate_png_header():
 
 def test_validate_docx_zip_header():
     validation.validate_upload_content(b"PK\x03\x04", validation.EXTENSION_MIMES[".docx"], "a.docx")
+
+
+def test_pptx_requires_a_valid_zip_with_presentation_entry(tmp_path):
+    path = tmp_path / "lesson.pptx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("ppt/presentation.xml", "<presentation/>")
+    validation.validate_upload_content(
+        path.read_bytes()[:8192],
+        validation.EXTENSION_MIMES[".pptx"],
+        path.name,
+        path=path,
+    )
+
+    forged = tmp_path / "forged.pptx"
+    with zipfile.ZipFile(forged, "w") as archive:
+        archive.writestr("not-a-presentation.txt", "hello")
+    with pytest.raises(ApiError) as error:
+        validation.validate_upload_content(
+            forged.read_bytes()[:8192],
+            validation.EXTENSION_MIMES[".pptx"],
+            forged.name,
+            path=forged,
+        )
+    assert error.value.code == "invalid_file_content"
+
+
+def test_rejects_corrupt_pptx_zip(tmp_path):
+    path = tmp_path / "bad.pptx"
+    path.write_bytes(b"PK\x03\x04invalid")
+    with pytest.raises(ApiError) as error:
+        validation.validate_upload_content(
+            path.read_bytes(), validation.EXTENSION_MIMES[".pptx"], path.name, path=path
+        )
+    assert error.value.code == "invalid_file_content"
 
 
 def test_validate_markdown_extension_and_utf8_content():

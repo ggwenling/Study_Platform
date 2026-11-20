@@ -107,6 +107,7 @@ class CitationDTO(BaseModel):
     material_version_id: UUID
     knowledge_base_id: UUID
     title: str
+    source_url: str | None = None
     quote: str
     quote_status: Literal["verified", "unverified", "unavailable"] | None = None
     locator: dict

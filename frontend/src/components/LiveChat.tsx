@@ -4,7 +4,7 @@ import { BookmarkPlus, ChevronLeft, Copy, Download, Ellipsis, FileText, Folder, 
 import { Link, useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import type { Citation, Conversation, Message, Scope } from '@/api/types'
-import { allPages, errorMessage } from '@/api/ui'
+import { allPages, errorMessage, safeExternalUrl } from '@/api/ui'
 import { downloadMarkdownFile, formatConversationMarkdown, sanitizeMarkdownFilename, scopeSummaryText } from '@/conversationActions'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
@@ -166,23 +166,31 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
     <section className="source-section">
       <h3>已使用的资料</h3>
       {focused?.citations.length ? <div className="source-cards">
-        {focused.citations.map((citation) => <Button key={citation.id} variant="secondary" className="source-card" onClick={() => openSource(citation)}>
-          <span className="source-card-content">
-            <span className="source-card-title"><span className="source-badge">{citation.source_label}</span><FileText size={16} /><span>{citation.title}</span></span>
-            {citation.availability === 'available' && citation.quote && <span className="source-excerpt">{citation.quote}</span>}
-            <small>{citation.availability === 'available' ? citation.location_label : '来源已不可用'}
-              {citation.availability === 'available' && citation.quote_status === 'unavailable' && ' · 历史引文不可用'}
-            </small>
-          </span>
-        </Button>)}
+        {focused.citations.map((citation) => {
+          const sourceUrl = safeExternalUrl(citation.source_url)
+          return <div key={citation.id} className="source-card-item">
+            <Button variant="secondary" className="source-card" onClick={() => openSource(citation)}>
+              <span className="source-card-content">
+                <span className="source-card-title"><span className="source-badge">{citation.source_label}</span><FileText size={16} /><span>{citation.title}</span></span>
+                {citation.availability === 'available' && citation.quote && <span className="source-excerpt">{citation.quote}</span>}
+                <small>{citation.availability === 'available' ? citation.location_label : '来源已不可用'}
+                  {citation.availability === 'available' && citation.quote_status === 'unavailable' && ' · 历史引文不可用'}
+                </small>
+              </span>
+            </Button>
+            {sourceUrl && <a className="source-card-original" href={sourceUrl} target="_blank" rel="noopener noreferrer">打开原网页</a>}
+          </div>
+        })}
       </div> : <p>这轮还没有可查看的资料引用。</p>}
     </section>
   </>
 
+  const sourceDetailUrl = safeExternalUrl(source?.source_url)
   const sourceDetail = sourceError ? <p className="error-text" role="alert">{sourceError}</p> : source?.availability === 'unavailable'
     ? <p>此来源已不可访问。</p>
     : source ? <div className="source-detail">
       {source.quote_status === 'unavailable' ? <p>历史引文不可用。</p> : <p>{source.quote}</p>}
+      {sourceDetailUrl && <a href={sourceDetailUrl} target="_blank" rel="noopener noreferrer">打开原网页</a>}
       {source.preview_url?.includes('/pages/') && <MaterialPage key={source.preview_url} version={source.material_version_id} page={Number(source.preview_url.split('/').at(-1))} title={`${source.title} · ${source.location_label}`} />}
       {source.content_url && <DownloadMaterial version={source.material_version_id} title={source.title} />}
     </div> : <p role="status">正在核实来源…</p>

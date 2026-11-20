@@ -172,7 +172,7 @@ it('opens an inline citation in a mobile drawer and returns to the source list',
   const citation: Citation = {
     id: 'citation', source_label: 'S1', material_id: 'material', material_version_id: 'version',
     knowledge_base_id: 'library', title: '矩阵讲义', quote: '非零行列式说明矩阵可逆。', locator: { line: 1 },
-    location_label: '第 1 行', version_no: 1, availability: 'available',
+    location_label: '第 1 行', version_no: 1, availability: 'available', source_url: 'https://example.com/article',
   }
   vi.mocked(api.source).mockResolvedValue(citation)
   vi.mocked(api.messages).mockResolvedValue({ items: [messages[0], { ...messages[1], citations: [citation] }], next_cursor: null })
@@ -182,8 +182,15 @@ it('opens an inline citation in a mobile drawer and returns to the source list',
   const drawer = document.querySelector('#live-sources-drawer')!
   expect(drawer.getAttribute('role')).toBe('dialog')
   expect(drawer.textContent).toContain(citation.quote)
+  const originalLink = drawer.querySelector<HTMLAnchorElement>('.source-detail a')!
+  expect(originalLink.href).toBe(citation.source_url)
+  expect(originalLink.target).toBe('_blank')
+  expect(originalLink.rel).toContain('noopener')
   await act(async () => click('返回引用列表'))
   expect(drawer.textContent).toContain('本轮回答范围')
+  const cardLink = drawer.querySelector<HTMLAnchorElement>('.source-card-original')!
+  expect(cardLink.href).toBe(citation.source_url)
   await act(async () => drawer.querySelector<HTMLButtonElement>('.source-card')!.click())
   expect(drawer.textContent).toContain(citation.quote)
+  expect([...drawer.querySelectorAll('a')].some((link) => link.textContent?.includes('打开原网页'))).toBe(true)
 })

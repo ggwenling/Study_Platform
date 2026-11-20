@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DragEvent, FormEvent, ReactNode } from 'react'
-import { ChevronRight, CircleDashed, Ellipsis, FilePlus2, FileText, Folder, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, Trash2, TriangleAlert, Upload } from 'lucide-react'
+import { ChevronRight, CircleDashed, Ellipsis, FilePlus2, FileText, Folder, Globe, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, Trash2, TriangleAlert, Upload } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { api } from '@/api/client'
 import type { DocumentLocation, Fragment, KnowledgeBase, LibraryOverview, Material, MaterialPreview } from '@/api/types'
-import { allPages, errorMessage, locatorLabel } from '@/api/ui'
+import { allPages, errorMessage, locatorLabel, safeExternalUrl } from '@/api/ui'
 import { ApiError } from '@/api/stream'
 import { PasteTextDialog } from './PasteTextDialog'
+import { WebClipDialog } from './WebClipDialog'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
@@ -119,6 +120,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   const [busy, setBusy] = useState<string>()
   const [panel, setPanel] = useState<Panel>()
   const [pasteOpen, setPasteOpen] = useState(false)
+  const [webClipOpen, setWebClipOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [confirmMaterial, setConfirmMaterial] = useState<Material | null>(null)
   const [scope, setScope] = useState<DocumentScope>({})
@@ -333,6 +335,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         <div className="library-header-actions">
           <Button size="sm" variant="secondary" onClick={() => setPanel('edit')}><Pencil size={16} />编辑</Button>
           <Button size="sm" variant="secondary" loading={busy === 'sync'} disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步</Button>
+          <Button size="sm" variant="secondary" onClick={() => setWebClipOpen(true)}><Globe size={16} />导入网页</Button>
           <DropdownMenu label="知识库操作" icon={<Ellipsis size={17} />} iconOnly disabled={Boolean(busy)} items={[
             { label: '导入资料', icon: <Upload size={16} />, onSelect: () => fileInput.current?.click() },
             { label: '随手贴文本', icon: <FilePlus2 size={16} />, onSelect: () => setPasteOpen(true) },
@@ -342,7 +345,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
             { label: '删除知识库', icon: <Trash2 size={16} />, destructive: true, separatorBefore: true, onSelect: () => setPanel('deleteKb') },
           ]} />
         </div>
-        <input ref={fileInput} type="file" multiple hidden accept=".pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg" onChange={(event) => {
+        <input ref={fileInput} type="file" multiple hidden accept=".pdf,.docx,.pptx,.txt,.md,.markdown,.png,.jpg,.jpeg" onChange={(event) => {
           const files = event.target.files ? Array.from(event.target.files) : []
           event.target.value = ''
           if (files.length) addFiles(files)
@@ -508,8 +511,10 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
           <ul className="resource-list library-file-list">
             {panelMaterials.map((item) => {
               const inProgress = !['ready', 'failed', 'cancelled'].includes(item.status)
+              const sourceUrl = safeExternalUrl(item.source_url)
               return <li key={item.id}>
                 <div><strong>{item.title}</strong><p className="muted">{phases[item.status] ?? item.status}</p>
+                  {sourceUrl && <a href={sourceUrl} target="_blank" rel="noopener noreferrer">打开原网页</a>}
                   {item.error_message && <p className="error-text">{item.error_message}</p>}</div>
                 <div className="library-dialog-actions">
                   {item.status === 'ready' && item.version_id && <Button size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void openSource(item.version_id!, item.title)}>查看文字</Button>}
@@ -530,6 +535,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       libraryName={library.name}
       onSubmitFile={(file) => addFiles([file])}
     />
+    <WebClipDialog open={webClipOpen} onOpenChange={setWebClipOpen} libraryId={id} libraryName={library.name} />
   </section>
 }
 

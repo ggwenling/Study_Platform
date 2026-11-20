@@ -6,15 +6,16 @@ import { api, uploadMaterial } from './api/client'
 import type { Material, UploadResult } from './api/types'
 import { CurrentMaterials } from './components/CurrentMaterials'
 import { Composer } from './components/Composer'
-import { useUploadQueue } from './useUploadQueue'
+import { isSupportedUploadFile, useUploadQueue } from './useUploadQueue'
 import { clearAllChatDrafts } from './useChatDrafts'
-import { locatorLabel } from './api/ui'
+import { locatorLabel, safeExternalUrl } from './api/ui'
 import { PasteTextDialog } from './components/PasteTextDialog'
+import { WebClipDialog } from './components/WebClipDialog'
 import { ThemeProvider } from './Theme'
 
 const workspace = vi.hoisted(() => ({ value: {} as Record<string, any> }))
 vi.mock('./WorkspaceData', () => ({ useWorkspace: () => workspace.value }))
-vi.mock('./api/client', () => ({ api: { materials: vi.fn(), retryMaterial: vi.fn(), createKnowledgeBase: vi.fn() }, uploadMaterial: vi.fn() }))
+vi.mock('./api/client', () => ({ api: { materials: vi.fn(), retryMaterial: vi.fn(), createKnowledgeBase: vi.fn(), webClip: vi.fn() }, uploadMaterial: vi.fn() }))
 vi.mock('metal-fx', () => ({ BEND: {}, useMetalBend() {}, MetalFx: ({ children }: { children: ReactNode }) => <div>{children}</div> }))
 vi.mock('./components/FadingTextarea', () => ({ FadingTextarea: ({ label, ...props }: any) => <textarea aria-label={label} {...props} /> }))
 vi.mock('./components/arc/select/select', () => ({ Select: ({ label, options, value, onValueChange }: any) => <select aria-label={label} value={value} onChange={(event) => onValueChange(event.target.value)}>{options.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> }))
@@ -161,15 +162,16 @@ it('creates and selects the first library without leaving chat', async () => {
   expect(node.querySelector('select')?.value).toBe('C')
 })
 
-it('processes multi-file queue sequentially without blocking subsequent files on error and supports single-item retry', async () => {
+it('accepts PPTX files and processes the shared queue sequentially with single-item retry', async () => {
   const first = new File(['broken'], '一.txt', { type: 'text/plain' })
-  const second = new File(['# 笔记\n正文'], '二.md', { type: 'text/markdown' })
+  const second = new File(['presentation'], '二.pptx', { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' })
   vi.mocked(uploadMaterial)
     .mockRejectedValueOnce(new Error('network error'))
     .mockResolvedValue({ material_id: 'm2', version_id: 'v2', job_id: 'j2', status: 'queued' })
 
   await render(<Composer />)
   const input = node.querySelector<HTMLInputElement>('input[type=file]')!
+  expect(input.accept).toContain('.pptx')
   Object.defineProperty(input, 'files', { value: [first, second] })
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
   await act(async () => { await Promise.resolve(); await Promise.resolve() })
@@ -177,7 +179,7 @@ it('processes multi-file queue sequentially without blocking subsequent files on
   expect(uploadMaterial).toHaveBeenCalledTimes(2)
   expect(uploadMaterial).toHaveBeenNthCalledWith(1, 'A', first, undefined, expect.any(AbortSignal))
   expect(uploadMaterial).toHaveBeenNthCalledWith(2, 'A', second, undefined, expect.any(AbortSignal))
-  expect(node.textContent).toContain('「二.md」已提交至「库A」')
+  expect(node.textContent).toContain('「二.pptx」已提交至「库A」')
   expect(node.textContent).toContain('「一.txt」上传失败')
 
   await click('重试上传')
@@ -220,6 +222,49 @@ it('packages pasted Markdown note with auto-derived filename and formats Markdow
   expect(generated.name).toBe('矩阵特征值总结.md')
   expect(generated.type).toBe('text/markdown')
   expect(locatorLabel({ heading: '矩阵特征值总结', start_line: 1 })).toBe('矩阵特征值总结 · 第 1 行')
+  expect(locatorLabel({ slide: 3 })).toBe('第 3 页幻灯片')
+  expect(locatorLabel({ slide: 3, notes: true })).toBe('第 3 页幻灯片 · 备注')
+})
+
+it('only exposes absolute HTTP(S) source links and accepts PPTX queue extensions', () => {
+  expect(safeExternalUrl('https://example.com/path')).toBe('https://example.com/path')
+  expect(safeExternalUrl('javascript:alert(1)')).toBeNull()
+  expect(safeExternalUrl('http:example.com')).toBeNull()
+  expect(safeExternalUrl('/relative/path')).toBeNull()
+  expect(safeExternalUrl('https://user:pass@example.com')).toBeNull()
+  expect(isSupportedUploadFile('slides.PPTX')).toBe(true)
+  expect(isSupportedUploadFile('slides.ppt')).toBe(false)
+})
+
+it('submits a web clip through the shared queue and refreshes library status', async () => {
+  const onOpenChange = vi.fn()
+  vi.mocked(api.webClip).mockResolvedValue({ material_id: 'web', version_id: 'web-v', job_id: 'web-j', status: 'queued' })
+  await render(<WebClipDialog open onOpenChange={onOpenChange} libraryId="A" libraryName="库A" />)
+  const url = document.querySelector<HTMLInputElement>('input[name=url]')!
+  const title = document.querySelector<HTMLInputElement>('input[name=title]')!
+  url.value = 'https://example.com/article'
+  title.value = '文章标题'
+  const form = document.querySelector<HTMLFormElement>('[role=dialog] form')!
+  await act(async () => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+
+  expect(api.webClip).toHaveBeenCalledWith('A', { url: 'https://example.com/article', title: '文章标题' })
+  expect(onOpenChange).toHaveBeenCalledWith(false)
+  expect(workspace.value.refresh).toHaveBeenCalled()
+  expect(workspace.value.notify).toHaveBeenCalledWith('网页已提交至「库A」，正在处理。')
+  expect(workspace.value.uploadQueue.lastUploaded?.libraryId).toBe('A')
+})
+
+it('keeps a failed web clip in the dialog with an accessible error', async () => {
+  vi.mocked(api.webClip).mockRejectedValue(new Error('未能读取网页'))
+  await render(<WebClipDialog open onOpenChange={vi.fn()} libraryId="A" libraryName="库A" />)
+  const url = document.querySelector<HTMLInputElement>('input[name=url]')!
+  url.value = 'https://example.com/article'
+  const form = document.querySelector<HTMLFormElement>('[role=dialog] form')!
+  await act(async () => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+
+  expect(document.querySelector('[role=alert]')?.textContent).toBe('请求失败，请检查连接后重试。')
+  expect(workspace.value.refresh).not.toHaveBeenCalled()
+  expect(workspace.value.notify).not.toHaveBeenCalled()
 })
 
 

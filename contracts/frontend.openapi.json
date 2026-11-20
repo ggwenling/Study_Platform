@@ -1459,6 +1459,64 @@
         }
       }
     },
+    "/api/v1/knowledge-bases/{kb_id}/materials/web-clip": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Web Clip",
+        "operationId": "web_clip_api_v1_knowledge_bases__kb_id__materials_web_clip_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebClipRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/materials/{material_id}": {
       "get": {
         "tags": [
@@ -4781,6 +4839,17 @@
             "type": "string",
             "title": "Title"
           },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
           "quote": {
             "type": "string",
             "title": "Quote"
@@ -6498,6 +6567,17 @@
             "type": "string",
             "title": "Title"
           },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
           "mime_type": {
             "anyOf": [
               {
@@ -7438,6 +7518,33 @@
           "verdict"
         ],
         "title": "VerdictBody"
+      },
+      "WebClipRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 8,
+            "title": "Url"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "WebClipRequest"
       }
     },
     "securitySchemes": {

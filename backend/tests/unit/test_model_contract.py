@@ -12,7 +12,7 @@ FIELD_CONTRACT = """
 users: id email password_hash display_name role status email_verified_at last_login_at created_at updated_at deleted_at
 user_sessions: id user_id refresh_token_hash csrf_secret_hash user_agent_hash access_generation expires_at revoked_at created_at updated_at
 courses: id owner_user_id name subject description language settings created_at updated_at deleted_at
-materials: id owner_user_id course_id title kind status created_at updated_at deleted_at
+materials: id owner_user_id course_id title source_url kind status created_at updated_at deleted_at
 material_versions: id material_id version_no is_current source_mime source_sha256 byte_size object_key page_count parser_profile parse_status failure_code created_at updated_at
 material_sections: id material_version_id parent_section_id ordinal heading level text locator confidence created_at
 index_versions: id material_version_id generation pipeline_profile embedding_profile embedding_dim status is_active chunk_count manifest_sha256 failure_code ready_at created_at updated_at

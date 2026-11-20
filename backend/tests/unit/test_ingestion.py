@@ -237,5 +237,5 @@ def test_docx_uncompressed_limit_rejects_oversized_archive(tmp_path, monkeypatch
         "get_settings",
         lambda: SimpleNamespace(max_docx_uncompressed_bytes=80 * 1024 * 1024),
     )
-    with pytest.raises(ValueError, match="DOCX uncompressed"):
-        ingestion.ensure_docx_uncompressed_limit(path)
+    with pytest.raises(ValueError, match="OOXML uncompressed"):
+        ingestion.ensure_ooxml_uncompressed_limit(path)

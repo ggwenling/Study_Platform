@@ -40,7 +40,11 @@ def citation_dto(db, citation) -> dict:
     elif not index or index.status not in ("ready", "retired"):
         availability = "index_unavailable"
     locator = citation.locator or {}
-    if locator.get("heading"):
+    if isinstance(locator.get("slide"), int) and locator["slide"] > 0:
+        label = f"第 {locator['slide']} 页幻灯片"
+        if locator.get("notes"):
+            label += " · 备注"
+    elif locator.get("heading"):
         line_no = locator.get("start_line")
         label = (
             f"{locator['heading']} · 第 {line_no} 行"
@@ -86,6 +90,7 @@ def citation_dto(db, citation) -> dict:
         "material_version_id": version.id,
         "knowledge_base_id": kb.id,
         "title": material.title,
+        "source_url": material.source_url,
         "quote": quote,
         "quote_status": quote_status,
         "locator": locator if availability == "available" else {},

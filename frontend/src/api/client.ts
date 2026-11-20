@@ -186,6 +186,7 @@ export const api = {
   confirmClassification: (id: string, material: string, body: ClassificationDecision) =>
     request<ClassificationState>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/classification`, json('PATCH', body)),
   materials: (id: string, cursor?: string, signal?: AbortSignal) => request<Page<Material>>(`/knowledge-bases/${pathId(id)}/materials` + query({ cursor }), { signal }),
+  webClip: (id: string, body: { url: string; title?: string }) => request<UploadResult>(`/knowledge-bases/${pathId(id)}/materials/web-clip`, json('POST', body)),
   material: (id: string) => request<Material>(`/materials/${pathId(id)}`),
   deleteMaterial: (id: string) => request<void>(`/materials/${pathId(id)}`, json('DELETE')),
   retryMaterial: (id: string) => request<UploadResult>(`/materials/${pathId(id)}/retry`, json('POST')),

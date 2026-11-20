@@ -392,6 +392,8 @@ button.inline-citation:hover {
 .source-section p, .source-disclaimer { color: var(--dim); font-size: var(--text-xs); }
 .source-section { --heatmap-surface: light-dark(#f6f6f6, #0d0d0d); }
 .source-cards { display: grid; gap: 10px; }
+.source-card-item { display: grid; justify-items: start; gap: 6px; }
+.source-card-original { margin-inline-start: 10px; font-size: var(--text-xs); }
 .source-card:is(button) { display: block; height: auto; width: 100%; min-width: 0; padding: clamp(12px, .9vw, 20px); background: light-dark(#f3f3f3, #141414); border-color: var(--line); border-radius: 12px; text-align: left; font-weight: 400; }
 .source-card > span, .source-card > span > span, .source-card > span > span > span { width: 100% !important; }
 .source-card-content { display: grid; width: 100%; gap: 8px; white-space: normal; overflow-wrap: anywhere; }

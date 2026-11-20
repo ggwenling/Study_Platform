@@ -8,10 +8,15 @@ from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
+from study_platform.api.v1 import materials
+from study_platform.api.v1.auth import get_current_user
+from study_platform.persistence.database import get_db
 from study_platform.persistence.models.identity import Material, User
 from study_platform.persistence.models.knowledge import KnowledgeBase
 from study_platform.persistence.models.materials import (
@@ -22,6 +27,7 @@ from study_platform.persistence.models.materials import (
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
 from study_platform.services import ingestion
 from study_platform.services.storage import source_path
+from study_platform.services.web_clip import WebClip
 
 pytestmark = pytest.mark.integration
 
@@ -121,6 +127,33 @@ def test_worker_publishes_text_and_vector(state):
             )
             == "hello"
         )
+
+
+def test_web_clip_persists_source_and_publishes_markdown(state, monkeypatch):
+    factory, job_id, _, material_id, kb_id = state
+    with factory() as db:
+        owner = db.get(Material, material_id).owner_user_id
+        db.get(AiJob, job_id).status = "cancelled"
+        db.commit()
+        url = "https://example.com/article"
+        markdown = "## A heading\n\nA public page imported for research."
+        monkeypatch.setattr(materials, "fetch_public_webpage", lambda _: WebClip("Article", markdown, url))
+        app = FastAPI()
+        app.include_router(materials.router)
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=owner)
+        app.dependency_overrides[get_db] = lambda: db
+        with TestClient(app) as http:
+            accepted = http.post(f"/knowledge-bases/{kb_id}/materials/web-clip", json={"url": url})
+            assert accepted.status_code == 202, accepted.text
+            result = accepted.json()
+            db.expire_all()
+            assert source_path(result["version_id"]).read_text(encoding="utf-8") == markdown
+            assert ingestion.run_once()
+            db.expire_all()
+            assert http.get(f"/jobs/{result['job_id']}").json()["status"] == "succeeded"
+            item = http.get(f"/materials/{result['material_id']}").json()
+            assert item["source_url"] == url and item["title"] == "Article"
+            assert item["mime_type"] == "text/markdown" and item["status"] == "ready"
 
 
 def test_staging_permission_failure_marks_job_failed_without_killing_worker(state, monkeypatch):

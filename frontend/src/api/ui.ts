@@ -24,6 +24,7 @@ export function errorMessage(error: unknown) {
 }
 
 export function locatorLabel(locator: Record<string, unknown>) {
+  if (typeof locator.slide === 'number') return `第 ${locator.slide} 页幻灯片${locator.notes === true ? ' · 备注' : ''}`
   if (typeof locator.heading === 'string' && locator.heading) {
     return typeof locator.start_line === 'number' ? `${locator.heading} · 第 ${locator.start_line} 行` : locator.heading
   }
@@ -38,4 +39,17 @@ export function locatorLabel(locator: Record<string, unknown>) {
   if (typeof locator.line_start === 'number') return `第 ${locator.line_start} 行`
   if (typeof locator.line === 'number') return `第 ${locator.line} 行`
   return '—'
+}
+
+export function safeExternalUrl(value?: string | null) {
+  if (!value) return null
+  try {
+    const source = value.trim()
+    if (!/^https?:\/\//i.test(source)) return null
+    const url = new URL(source)
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return null
+    return url.href
+  } catch {
+    return null
+  }
 }

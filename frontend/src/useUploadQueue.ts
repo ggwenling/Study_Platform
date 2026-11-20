@@ -12,7 +12,7 @@ export type UploadQueueItem = {
 
 export type UploadTarget = { libraryId: string; at: number }
 
-const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.txt', '.md', '.markdown', '.png', '.jpg', '.jpeg'])
+const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.pptx', '.txt', '.md', '.markdown', '.png', '.jpg', '.jpeg'])
 
 export function isSupportedUploadFile(filename: string): boolean {
   const dot = filename.lastIndexOf('.')
@@ -111,7 +111,7 @@ export function useUploadQueue({
     const accepted: UploadQueueItem[] = []
     for (const file of incoming) {
       if (!isSupportedUploadFile(file.name)) {
-        callbacks.current.notify(`不支持的文件类型：「${file.name}」（支持 PDF、DOCX、TXT、MD、PNG、JPG）。`)
+        callbacks.current.notify(`不支持的文件类型：「${file.name}」（支持 PDF、DOCX、PPTX、TXT、MD、PNG、JPG）。`)
         continue
       }
       if (maxUploadBytes && file.size > maxUploadBytes) {
@@ -146,6 +146,10 @@ export function useUploadQueue({
     ))
   }, [])
 
+  const markSubmitted = useCallback((target: { id: string; name: string }) => {
+    setLastUploaded({ libraryId: target.id, at: Date.now() })
+  }, [])
+
   const cancelItem = useCallback((id: string) => {
     if (activeController.current?.id === id) {
       activeController.current.controller.abort()
@@ -178,5 +182,5 @@ export function useUploadQueue({
     return ''
   })()
 
-  return { items, uploading, latestNote, lastUploaded, enqueue, retryItem, cancelItem, dismissFinished }
+  return { items, uploading, latestNote, lastUploaded, enqueue, markSubmitted, retryItem, cancelItem, dismissFinished }
 }
