@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react'
+import { act, cloneElement, isValidElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { api, uploadMaterial } from './api/client'
 import type { Material, UploadResult } from './api/types'
 import { CurrentMaterials } from './components/CurrentMaterials'
 import { Composer } from './components/Composer'
+import { useUploadQueue } from './useUploadQueue'
 import { locatorLabel } from './api/ui'
 import { PasteTextDialog } from './components/PasteTextDialog'
 import { ThemeProvider } from './Theme'
@@ -27,7 +28,19 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done })
   return { promise, resolve }
 }
-async function render(view: ReactNode) { await act(async () => root.render(<ThemeProvider>{view}</ThemeProvider>)) }
+function SharedQueue({ children }: { children: ReactNode }) {
+  const queue = useUploadQueue({
+    userId: workspace.value.user?.id,
+    maxUploadBytes: workspace.value.capabilities?.max_upload_bytes,
+    refresh: workspace.value.refresh,
+    notify: workspace.value.notify,
+    report: workspace.value.report,
+  })
+  workspace.value.uploadQueue = queue
+  workspace.value.libraryUploadQueue = queue
+  return isValidElement(children) ? cloneElement(children) : children
+}
+async function render(view: ReactNode) { await act(async () => root.render(<ThemeProvider><SharedQueue>{view}</SharedQueue></ThemeProvider>)) }
 async function click(text: string) {
   const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === text)!
   expect(button).toBeTruthy()

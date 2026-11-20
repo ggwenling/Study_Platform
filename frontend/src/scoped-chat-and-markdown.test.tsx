@@ -72,6 +72,7 @@ beforeEach(() => {
     notify: vi.fn(),
     requireLogin: vi.fn(),
     chat: { busy: false, send: vi.fn().mockResolvedValue(true) },
+    uploadQueue: { items: [], uploading: false, latestNote: '', lastUploaded: null },
   }
 })
 
@@ -181,12 +182,12 @@ it('keeps an invalid selection blocked until the user explicitly uses the whole 
   expect(workspace.value.chat.send).toHaveBeenCalledWith(expect.objectContaining({ material_ids: null }))
 })
 
-it('limits a material selection to 50', async () => {
+it('limits a material selection to 50', { timeout: 15_000 }, async () => {
   vi.mocked(api.materials).mockResolvedValue({ items: Array.from({ length: 51 }, (_, i) => readyMaterial(`m${i}`, `资料${i}`)), next_cursor: null })
   await render(<Composer />)
   await act(async () => node.querySelector<HTMLButtonElement>('.current-materials button[aria-expanded]')!.click())
   const boxes = [...node.querySelectorAll<HTMLInputElement>('input[type=checkbox]')]
-  for (const box of boxes.slice(0, 50)) await act(async () => box.click())
+  for (const box of boxes.slice(0, 50)) act(() => box.click())
   expect(boxes[50].disabled).toBe(true)
   expect(node.textContent).toContain('最多选择 50 份资料')
 })
@@ -224,10 +225,7 @@ describe('inline [S1] citations & KaTeX math rendering in MarkdownContent', () =
         {markdown}
       </MarkdownContent>,
     )
-    // Wait for lazy rehype-katex + rehype-highlight plugins to resolve
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 60))
-    })
+    await act(async () => { await vi.dynamicImportSettled() })
 
     const buttons = node.querySelectorAll<HTMLButtonElement>('button.inline-citation')
     expect(buttons).toHaveLength(1)

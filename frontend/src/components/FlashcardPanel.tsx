@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BrainCircuit, ChevronRight, RotateCw, Trash2 } from 'lucide-react'
 import { api } from '@/api/client'
-import type { FlashcardDeckDetail, FlashcardDeckSummary, KnowledgeBase } from '@/api/types'
+import type { FlashcardDeckDetail, FlashcardDeckSummary, KnowledgeBase, Material } from '@/api/types'
 import { ApiError } from '@/api/stream'
-import { errorMessage } from '@/api/ui'
+import { allPages, errorMessage } from '@/api/ui'
 import { Button } from '@/components/arc/button/button'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
+import { Accordion } from '@/components/arc/accordion/accordion'
+import { Input } from '@/components/arc/input/input'
 import { Select } from '@/components/arc/select/select'
 import { MarkdownContent } from './MarkdownContent'
 
@@ -13,6 +15,7 @@ const deckCountOptions = [
   { value: '5', label: '5 张闪卡' },
   { value: '8', label: '8 张闪卡' },
   { value: '12', label: '12 张闪卡' },
+  { value: '16', label: '16 张闪卡' },
 ]
 
 export function FlashcardPanel({
@@ -30,6 +33,13 @@ export function FlashcardPanel({
 }) {
   const [kbId, setKbId] = useState(defaultKbId || knowledgeBases[0]?.id || '')
   const [cardCount, setCardCount] = useState('8')
+  const [deckTitle, setDeckTitle] = useState('')
+  const [materials, setMaterials] = useState<Material[]>([])
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([])
+  const [scoped, setScoped] = useState(false)
+  const [materialsStatus, setMaterialsStatus] = useState<{ kbId: string; ready: boolean }>({ kbId: '', ready: false })
+  const [materialsError, setMaterialsError] = useState('')
+  const [materialsRetry, setMaterialsRetry] = useState(0)
   const [decks, setDecks] = useState<FlashcardDeckSummary[]>([])
   const [activeDeck, setActiveDeck] = useState<FlashcardDeckDetail | null>(null)
   const [cardIndex, setCardIndex] = useState(0)
@@ -86,11 +96,55 @@ export function FlashcardPanel({
     if (initialDeckId) void openDeck(initialDeckId)
   }, [initialDeckId, openDeck])
 
+  useEffect(() => {
+    setSelectedMaterialIds([])
+    setScoped(false)
+  }, [kbId])
+
+  useEffect(() => {
+    setMaterialsStatus({ kbId, ready: false })
+    setMaterialsError('')
+    setMaterials([])
+    if (!kbId) {
+      return
+    }
+    const controller = new AbortController()
+    void allPages((cursor) => api.materials(kbId, cursor, controller.signal)).then(
+      (rows) => {
+        if (!controller.signal.aborted) {
+          setMaterials(rows.filter((item) => item.status === 'ready'))
+          setMaterialsStatus({ kbId, ready: true })
+        }
+      },
+      (error: unknown) => {
+        if (!controller.signal.aborted) setMaterialsError(errorMessage(error))
+      },
+    )
+    return () => controller.abort()
+  }, [kbId, materialsRetry])
+
+  const readyMaterials = materialsStatus.kbId === kbId && materialsStatus.ready ? materials : []
+  const invalidMaterialScope = scoped && (
+    materialsStatus.kbId !== kbId ||
+    !materialsStatus.ready ||
+    !selectedMaterialIds.length ||
+    selectedMaterialIds.length > 50 ||
+    selectedMaterialIds.some((id) => !readyMaterials.some((row) => row.id === id))
+  )
+
   async function generateDeck() {
     if (!kbId || busy) return
+    if (invalidMaterialScope) {
+      notify('所选资料范围尚未确认，请检查资料状态或选择使用全库。')
+      return
+    }
     setBusy(true)
     try {
-      const created = await api.studio.generateFlashcards(kbId, { count: Number(cardCount) || 8 })
+      const created = await api.studio.generateFlashcards(kbId, {
+        count: Number(cardCount) || 8,
+        material_ids: scoped ? selectedMaterialIds : null,
+        title: deckTitle.trim() || null,
+      })
       setActiveDeck(created)
       setCardIndex(0)
       setFlipped(false)
@@ -172,9 +226,88 @@ export function FlashcardPanel({
             onValueChange={setCardCount}
             options={deckCountOptions}
           />
+          <Input
+            label="卡组标题"
+            maxLength={255}
+            placeholder="留空则自动命名"
+            value={deckTitle}
+            onChange={(event) => setDeckTitle(event.target.value)}
+          />
         </div>
+        {materialsError && <div role="alert">资料状态读取失败：{materialsError} <Button type="button" size="sm" variant="ghost" onClick={() => setMaterialsRetry((value) => value + 1)}>重新读取资料</Button></div>}
+        <Accordion
+          defaultOpen={-1}
+          items={[
+            {
+              title: scoped
+                ? `出卡资料范围 · 已勾选 ${selectedMaterialIds.length} 份`
+                : `出卡资料范围 · 默认全库（共 ${readyMaterials.length} 份就绪资料）`,
+              content: (
+                <div className="learning-material-picker">
+                  <p className="muted">最多选择 50 份资料。{readyMaterials.length > 50 ? '资料超过上限，请手动选择。' : ''}{scoped && !selectedMaterialIds.length ? '请重新选择资料或使用全库。' : ''}</p>
+                  {scoped && (
+                    <Button type="button" size="sm" variant="ghost" onClick={() => { setSelectedMaterialIds([]); setScoped(false) }}>
+                      使用全库
+                    </Button>
+                  )}
+                  <div className="learning-config-actions">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={!readyMaterials.length || readyMaterials.length > 50 || selectedMaterialIds.length >= readyMaterials.length}
+                      onClick={() => { setScoped(true); setSelectedMaterialIds(readyMaterials.map((row) => row.id)) }}
+                    >
+                      全选资料
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={!selectedMaterialIds.length}
+                      onClick={() => { setScoped(true); setSelectedMaterialIds([]) }}
+                    >
+                      清空选择
+                    </Button>
+                  </div>
+                  {(materialsStatus.kbId !== kbId || !materialsStatus.ready) && !materialsError && <p role="status">正在读取资料…</p>}
+                  {materialsStatus.kbId === kbId && materialsStatus.ready && !readyMaterials.length && <p>当前知识库没有已就绪资料。</p>}
+                  <ul>
+                    {readyMaterials.map((mat) => (
+                      <li key={mat.id}>
+                        <label>
+                          <input
+                            type="checkbox"
+                            className="material-scope-checkbox"
+                            aria-label={`限定资料：${mat.title}`}
+                            checked={selectedMaterialIds.includes(mat.id)}
+                            disabled={!selectedMaterialIds.includes(mat.id) && selectedMaterialIds.length >= 50}
+                            onChange={(event) => {
+                              if (event.target.checked) {
+                                setScoped(true)
+                                setSelectedMaterialIds((prev) => prev.length < 50 ? [...prev, mat.id] : prev)
+                              } else {
+                                setSelectedMaterialIds((prev) => prev.filter((id) => id !== mat.id))
+                              }
+                            }}
+                          />
+                          <span>{mat.title}</span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ),
+            },
+          ]}
+        />
         <div className="learning-config-actions">
-          <Button type="button" loading={busy} disabled={busy || Boolean(pendingReview) || !kbId} onClick={() => void generateDeck()}>
+          <Button
+            type="button"
+            loading={busy}
+            disabled={busy || Boolean(pendingReview) || !kbId || invalidMaterialScope}
+            onClick={() => void generateDeck()}
+          >
             <BrainCircuit size={16} aria-hidden /> 从当前库生成闪卡
           </Button>
         </div>

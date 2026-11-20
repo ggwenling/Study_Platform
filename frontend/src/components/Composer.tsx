@@ -7,7 +7,7 @@ const ComposerMetalSend = lazy(() =>
 )
 import { api } from '@/api/client'
 import { errorMessage } from '@/api/ui'
-import { clipboardImageFiles, useUploadQueue } from '../useUploadQueue'
+import { clipboardImageFiles } from '../useUploadQueue'
 import { useWorkspace } from '../WorkspaceData'
 import { Button } from '@/components/arc/button/button'
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
@@ -40,7 +40,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   summary?: boolean
   ref?: Ref<ComposerHandle>
 }) {
-  const { user, libraries, capabilities, chat, notify, report, requireLogin, refresh } = useWorkspace()
+  const { user, libraries, capabilities, chat, notify, report, requireLogin, refresh, uploadQueue } = useWorkspace()
   const [draft, setDraft] = useState(initialDraft ?? '')
   const [supplement, setSupplement] = useState(false)
   const [summaryMode, setSummaryMode] = useState(summary)
@@ -50,7 +50,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   const reportScope = useCallback((libraryId: string, ids: string[], valid: boolean) => {
     setScopeStatus({ libraryId, ids, valid })
   }, [])
-  const [uploadTarget, setUploadTarget] = useState<{ id: string; at: number } | null>(null)
+  const [panelReveal, setPanelReveal] = useState<{ id: string; at: number } | null>(null)
   const [pasteOpen, setPasteOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -71,15 +71,6 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   const active = chat.active?.conversationId === conversationId ? chat.active : null
   const pending = !demo && chat.pending && (chat.pending.body.conversation_id ?? undefined) === conversationId
 
-  const uploadQueue = useUploadQueue({
-    userId: user?.id,
-    maxUploadBytes: capabilities?.max_upload_bytes,
-    refresh,
-    notify,
-    report,
-    onUploadedToLibrary: (targetId) => setUploadTarget({ id: targetId, at: Date.now() }),
-  })
-
   useEffect(() => {
     setSummaryMode(summary)
   }, [summary])
@@ -95,7 +86,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   function applySummaryMode(enabled: boolean) {
     setSummaryMode(enabled)
     if (enabled && libraryId && !selectedMaterialIds.length) {
-      setUploadTarget({ id: libraryId, at: Date.now() })
+      setPanelReveal({ id: libraryId, at: Date.now() })
     }
   }
 
@@ -108,7 +99,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
     if (modelReady === false) return notify('当前模型不可用，请在设置的「模型连接」中配置或测试连接。')
     if (materialScope.scoped && (!scopeStatus?.valid || scopeStatus.libraryId !== libraryId || scopeStatus.ids !== selectedMaterialIds)) return notify('所选资料范围尚未确认，请检查资料状态或选择使用全库。')
     if (summaryMode && selectedMaterialIds.length === 0) {
-      setUploadTarget({ id: libraryId, at: Date.now() })
+      setPanelReveal({ id: libraryId, at: Date.now() })
       return notify('请先在下方「当前库资料」中勾选要提炼的已就绪资料。')
     }
     if (pending) return notify('请先重发上次请求，确认发送结果。')
@@ -293,7 +284,10 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
         key={user.id}
         libraryId={libraryId}
         name={libraries.find((library) => library.id === libraryId)!.name}
-        reveal={uploadTarget?.id === libraryId ? uploadTarget.at : 0}
+        reveal={Math.max(
+          uploadQueue.lastUploaded?.libraryId === libraryId ? uploadQueue.lastUploaded.at : 0,
+          panelReveal?.id === libraryId ? panelReveal.at : 0,
+        )}
         summaryMode={summaryMode}
         selectedIds={selectedMaterialIds}
         scoped={Boolean(materialScope.scoped)}

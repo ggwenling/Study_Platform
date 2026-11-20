@@ -4,12 +4,13 @@ import { BookMarked, BrainCircuit, Download, FilePlus2, GitBranch, Layers, Penci
 import { useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import { ApiError } from '@/api/stream'
-import type { Citation, StudioArtifactKind, StudyNote } from '@/api/types'
+import type { Citation, Material, StudioArtifactKind, StudyNote } from '@/api/types'
 import { errorMessage } from '@/api/ui'
 import { downloadMarkdownFile, sanitizeMarkdownFilename } from '@/conversationActions'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { Input } from '@/components/arc/input/input'
+import { Select } from '@/components/arc/select/select'
 import { Textarea } from '@/components/arc/textarea/textarea'
 import { useWorkspace } from '../WorkspaceData'
 import { MarkdownContent } from './MarkdownContent'
@@ -22,10 +23,18 @@ const artifactBadgeLabel: Record<string, string> = {
   note: '研究笔记',
 }
 
+const generationLabel: Record<StudioArtifactKind | 'flashcards', string> = {
+  study_guide: '学习指南',
+  mindmap: '知识导图',
+  formula_sheet: '概念公式速查',
+  flashcards: '记忆闪卡',
+}
+
 export function LibraryStudio({
   kbId,
   kbName,
   readyCount,
+  readyMaterials,
   revision,
   initialNotes,
   onIngested,
@@ -36,6 +45,7 @@ export function LibraryStudio({
   kbId: string
   kbName: string
   readyCount: number
+  readyMaterials: Material[]
   revision: number
   initialNotes?: StudyNote[]
   onIngested: () => void
@@ -51,6 +61,10 @@ export function LibraryStudio({
   const notesRequest = useRef<AbortController | null>(null)
   const reportNotesFailure = useEffectEvent(report)
   const [busy, setBusy] = useState<string | null>(null)
+  const [generationTarget, setGenerationTarget] = useState<StudioArtifactKind | 'flashcards' | null>(null)
+  const [allReadyMaterials, setAllReadyMaterials] = useState(true)
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([])
+  const [flashcardCount, setFlashcardCount] = useState('8')
   const [activeNote, setActiveNote] = useState<StudyNote | null>(null)
   const [editing, setEditing] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -102,21 +116,48 @@ export function LibraryStudio({
     setNotesRetry((value) => value + 1)
   }
 
-  async function generateArtifact(kind: StudioArtifactKind) {
+  function openGenerationConfig(target: StudioArtifactKind | 'flashcards') {
     if (busy) return
     if (readyCount === 0) {
       notify('请先导入并完成至少 1 份资料的索引。')
       return
     }
-    setBusy(kind)
+    setGenerationTarget(target)
+    setAllReadyMaterials(true)
+    setSelectedMaterialIds([])
+    setFlashcardCount('8')
+  }
+
+  async function submitGeneration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const target = generationTarget
+    if (!target || busy) return
+    const materialIds = allReadyMaterials ? null : selectedMaterialIds
+    if (!materialIds && !readyCount) return
+    if (materialIds && !materialIds.length) return
+    const form = new FormData(event.currentTarget)
+    const title = String(form.get('title') ?? '').trim() || null
+    const kind: StudioArtifactKind | null = target === 'flashcards' ? null : target
+    setBusy(target)
     try {
-      const created = await api.studio.generateNote(kbId, { kind })
-      reloadNotes()
-      setNotes((prev) => [created, ...(prev ?? []).filter((item) => item.id !== created.id)])
-      setActiveNote(created)
-      setEditing(false)
-      setConfirmDelete(false)
-      notify(`已生成「${created.title}」。`)
+      if (kind) {
+        const created = await api.studio.generateNote(kbId, { kind, material_ids: materialIds, title })
+        reloadNotes()
+        setNotes((prev) => [created, ...(prev ?? []).filter((item) => item.id !== created.id)])
+        setActiveNote(created)
+        setEditing(false)
+        setConfirmDelete(false)
+        notify(`已生成「${created.title}」。`)
+      } else {
+        const deck = await api.studio.generateFlashcards(kbId, {
+          count: Number(flashcardCount),
+          material_ids: materialIds,
+          title,
+        })
+        notify(`已生成 ${deck.card_count} 张记忆闪卡，可在学习页翻转复习。`)
+        void navigate('/learning', { state: { tab: 'flashcards', deckId: deck.id, kbId } })
+      }
+      setGenerationTarget(null)
     } catch (error) {
       report(error)
     } finally {
@@ -124,22 +165,11 @@ export function LibraryStudio({
     }
   }
 
-  async function generateFlashcards() {
-    if (busy) return
-    if (readyCount === 0) {
-      notify('请先导入并完成至少 1 份资料的索引。')
-      return
-    }
-    setBusy('flashcards')
-    try {
-      const deck = await api.studio.generateFlashcards(kbId, { count: 8 })
-      notify(`已生成 ${deck.card_count} 张记忆闪卡，可在学习页翻转复习。`)
-      void navigate('/learning', { state: { tab: 'flashcards', deckId: deck.id, kbId } })
-    } catch (error) {
-      report(error)
-    } finally {
-      setBusy(null)
-    }
+  function toggleMaterial(id: string, checked: boolean) {
+    setSelectedMaterialIds((current) => {
+      if (checked) return current.includes(id) || current.length >= 50 ? current : [...current, id]
+      return current.filter((materialId) => materialId !== id)
+    })
   }
 
   async function submitCreateNote(event: FormEvent<HTMLFormElement>) {
@@ -239,7 +269,7 @@ export function LibraryStudio({
           variant="secondary"
           loading={busy === 'study_guide'}
           disabled={Boolean(busy)}
-          onClick={() => void generateArtifact('study_guide')}
+          onClick={() => openGenerationConfig('study_guide')}
         >
           <BookMarked size={15} /> 生成学习指南
         </Button>
@@ -249,7 +279,7 @@ export function LibraryStudio({
           variant="secondary"
           loading={busy === 'mindmap'}
           disabled={Boolean(busy)}
-          onClick={() => void generateArtifact('mindmap')}
+          onClick={() => openGenerationConfig('mindmap')}
         >
           <GitBranch size={15} /> 生成知识导图
         </Button>
@@ -259,7 +289,7 @@ export function LibraryStudio({
           variant="secondary"
           loading={busy === 'formula_sheet'}
           disabled={Boolean(busy)}
-          onClick={() => void generateArtifact('formula_sheet')}
+          onClick={() => openGenerationConfig('formula_sheet')}
         >
           <Sparkles size={15} /> 概念公式速查
         </Button>
@@ -269,7 +299,7 @@ export function LibraryStudio({
           variant="secondary"
           loading={busy === 'flashcards'}
           disabled={Boolean(busy)}
-          onClick={() => void generateFlashcards()}
+          onClick={() => openGenerationConfig('flashcards')}
         >
           <BrainCircuit size={15} /> 生成记忆闪卡
         </Button>
@@ -283,6 +313,79 @@ export function LibraryStudio({
           <FilePlus2 size={15} /> 新建笔记
         </Button>
       </div>
+
+      <Dialog open={Boolean(generationTarget)} onOpenChange={(open) => { if (!open && !busy) setGenerationTarget(null) }}>
+        {generationTarget && <DialogContent
+          title={`生成${generationLabel[generationTarget]}`}
+          description={`选择「${kbName}」中的资料范围并设置生成标题。`}
+          closeLabel="关闭生成配置"
+        >
+          <form className="studio-generation-form" onSubmit={(event) => void submitGeneration(event)}>
+            <Input label="自定义标题（可选）" name="title" maxLength={255} placeholder="留空则自动命名" />
+            {generationTarget === 'flashcards' && <Select
+              label="闪卡数量"
+              value={flashcardCount}
+              onValueChange={setFlashcardCount}
+              options={[
+                { value: '5', label: '5 张' },
+                { value: '8', label: '8 张' },
+                { value: '12', label: '12 张' },
+                { value: '16', label: '16 张' },
+              ]}
+            />}
+            <fieldset className="studio-generation-scope">
+              <legend>资料范围</legend>
+              <div className="studio-generation-scope-options">
+                <label>
+                  <input
+                    type="radio"
+                    name="studio-material-scope"
+                    value="all"
+                    checked={allReadyMaterials}
+                    onChange={() => setAllReadyMaterials(true)}
+                  />
+                  全部已就绪资料（共 {readyCount} 份）
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="studio-material-scope"
+                    value="selected"
+                    checked={!allReadyMaterials}
+                    onChange={() => setAllReadyMaterials(false)}
+                  />
+                  指定资料
+                </label>
+              </div>
+              {!allReadyMaterials && <div className="learning-material-picker studio-generation-materials">
+                <p className="muted">最多选择 50 份资料。{!selectedMaterialIds.length && '请至少选择 1 份资料。'}</p>
+                <ul>
+                  {readyMaterials.map((material) => <li key={material.id}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        className="material-scope-checkbox"
+                        aria-label={`选择资料：${material.title}`}
+                        checked={selectedMaterialIds.includes(material.id)}
+                        disabled={!selectedMaterialIds.includes(material.id) && selectedMaterialIds.length >= 50}
+                        onChange={(event) => toggleMaterial(material.id, event.target.checked)}
+                      />
+                      <span>{material.title}</span>
+                    </label>
+                  </li>)}
+                </ul>
+              </div>}
+              {!allReadyMaterials && !selectedMaterialIds.length && <p className="studio-generation-scope-error" role="status">请选择至少 1 份资料，或切换为全部已就绪资料。</p>}
+            </fieldset>
+            <div className="form-actions">
+              <Button type="submit" loading={busy === generationTarget} disabled={!allReadyMaterials && !selectedMaterialIds.length}>
+                确认生成
+              </Button>
+              <Button type="button" variant="ghost" disabled={Boolean(busy)} onClick={() => setGenerationTarget(null)}>取消</Button>
+            </div>
+          </form>
+        </DialogContent>}
+      </Dialog>
 
       {notesError && <div role="alert">笔记读取失败：{notesError} <Button type="button" size="sm" variant="ghost" onClick={reloadNotes}>重试读取笔记</Button></div>}
       {!notes?.length ? (

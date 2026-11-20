@@ -21,6 +21,7 @@ type Data = {
   report: (error: unknown) => void
   requireLogin: () => void
   chat: ChatController
+  uploadQueue: ReturnType<typeof useUploadQueue>
   libraryUploadQueue: ReturnType<typeof useUploadQueue>
 }
 
@@ -76,7 +77,7 @@ export function WorkspaceData({ user, notify, requireLogin, onExpired, children 
   }, [user, revision])
 
   return (
-    <Workspace.Provider value={{ user, libraries, recent, overview, capabilities, revision, loading, refresh, notify, report, requireLogin, chat, libraryUploadQueue }}>
+    <Workspace.Provider value={{ user, libraries, recent, overview, capabilities, revision, loading, refresh, notify, report, requireLogin, chat, uploadQueue: libraryUploadQueue, libraryUploadQueue }}>
       {children}
     </Workspace.Provider>
   )
