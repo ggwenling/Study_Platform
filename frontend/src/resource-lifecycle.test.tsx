@@ -109,7 +109,7 @@ beforeEach(() => {
     notify: vi.fn(),
     report: vi.fn(),
     requireLogin: vi.fn(),
-    chat: { active: null, pending: null, busy: false, send: vi.fn(), stop: vi.fn(), resend: vi.fn() },
+    chat: { activeFor: () => null, pendingFor: () => null, isBusy: () => false, send: vi.fn(), stop: vi.fn(), resend: vi.fn() },
     libraryUploadQueue: { items: [], uploading: false, latestNote: '', enqueue: vi.fn(), retryItem: vi.fn(), cancelItem: vi.fn(), dismissFinished: vi.fn() },
   }
   workspace.value.uploadQueue = workspace.value.libraryUploadQueue

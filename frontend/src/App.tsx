@@ -19,6 +19,7 @@ import { api } from './api/client'
 import { ApiError } from './api/stream'
 import type { User, Conversation } from './api/types'
 import { allPages, errorMessage } from './api/ui'
+import { clearAllChatDrafts } from './useChatDrafts'
 
 const Home = lazy(() => import('./components/Home').then((m) => ({ default: m.Home })))
 const Account = lazy(() => import('./components/Account').then((m) => ({ default: m.Account })))
@@ -106,10 +107,12 @@ export function App() {
   useEffect(() => {
     let active = true
     void api.refresh().then(
-      (account) => { if (active) { setUser(account); setSessionState('ready') } },
+      (account) => { if (active) { clearAllChatDrafts(account.id); setUser(account); setSessionState('ready') } },
       (error) => {
         if (!active) return
-        setSessionState(error instanceof ApiError && error.status === 401 ? 'ready' : 'error')
+        const expired = error instanceof ApiError && error.status === 401
+        if (expired) { clearAllChatDrafts(); setUser(null) }
+        setSessionState(expired ? 'ready' : 'error')
       },
     )
     return () => { active = false }
@@ -128,7 +131,7 @@ export function App() {
       setMode(reset ? 'reset' : auth === 'google_link' ? 'google_link' : 'login')
       setAuthError(auth === 'google_error' ? 'Google 登录未完成，请重试。' : '')
       setLoginOpen(true)
-      if (reset) { setUser(null); api.clearSession(); setSessionState('ready') }
+      if (reset) { clearAllChatDrafts(); setUser(null); api.clearSession(); setSessionState('ready') }
       void navigate('/', { replace: true })
     } else if (!user && privatePage && sessionState === 'ready') {
       destination.current = path
@@ -138,6 +141,7 @@ export function App() {
   }, [location, user, sessionState])
 
   function signedIn(account: User) {
+    clearAllChatDrafts(user && user.id !== account.id ? undefined : account.id)
     setUser(account)
     setSessionState('ready')
     setLoginOpen(false)
@@ -147,8 +151,8 @@ export function App() {
   }
 
   return <>
-    <WorkspaceData key={user?.id ?? 'guest'} user={user} notify={notify} requireLogin={requireLogin} onExpired={() => { api.clearSession(); closeNotice(); setUser(null) }}>
-      <Shell onLogout={() => { closeNotice(); setUser(null) }} onPrivateLink={requireLogin} privatePage={privatePage && !user} sessionState={sessionState}
+    <WorkspaceData key={user?.id ?? 'guest'} user={user} notify={notify} requireLogin={requireLogin} onExpired={() => { clearAllChatDrafts(); api.clearSession(); closeNotice(); setUser(null) }}>
+      <Shell onLogout={() => { clearAllChatDrafts(); closeNotice(); setUser(null) }} onPrivateLink={requireLogin} privatePage={privatePage && !user} sessionState={sessionState}
         retrySession={() => { setSessionState('loading'); setSessionAttempt((value) => value + 1) }} />
     </WorkspaceData>
     {loginOpen && (

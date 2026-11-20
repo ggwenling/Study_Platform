@@ -3,10 +3,12 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api/client'
-import type { Citation, Material } from './api/types'
+import type { Citation, Material, Scope } from './api/types'
 import { Composer } from './components/Composer'
+import type { ComposerHandle } from './components/Composer'
 import { MarkdownContent } from './components/MarkdownContent'
 import { ThemeProvider } from './Theme'
+import { clearAllChatDrafts } from './useChatDrafts'
 
 const workspace = vi.hoisted(() => ({ value: {} as Record<string, any> }))
 
@@ -52,8 +54,18 @@ async function render(view: ReactNode) {
   await act(async () => root.render(<ThemeProvider>{view}</ThemeProvider>))
 }
 
+async function enterText(text: string) {
+  const textarea = node.querySelector('textarea')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, text)
+    textarea.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
 beforeEach(() => {
+  clearAllChatDrafts()
   vi.resetAllMocks()
+  sessionStorage.clear()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('matchMedia', () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }))
@@ -71,7 +83,15 @@ beforeEach(() => {
     report: vi.fn(),
     notify: vi.fn(),
     requireLogin: vi.fn(),
-    chat: { busy: false, send: vi.fn().mockResolvedValue(true) },
+    chat: {
+      busy: false,
+      send: vi.fn().mockResolvedValue(true),
+      isBusy: vi.fn().mockReturnValue(false),
+      activeFor: vi.fn().mockReturnValue(null),
+      pendingFor: vi.fn().mockReturnValue(null),
+      resend: vi.fn().mockResolvedValue(false),
+      stop: vi.fn(),
+    },
     uploadQueue: { items: [], uploading: false, latestNote: '', lastUploaded: null },
   }
 })
@@ -180,6 +200,143 @@ it('keeps an invalid selection blocked until the user explicitly uses the whole 
   await act(async () => [...node.querySelectorAll('button')].find((button) => button.textContent === '使用全库')!.click())
   await submit()
   expect(workspace.value.chat.send).toHaveBeenCalledWith(expect.objectContaining({ material_ids: null }))
+})
+
+it('restores drafts per user and conversation with their library and answer options', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  await render(<Composer conversationId="conv-1" />)
+  await enterText('保留的草稿')
+  await act(async () => {
+    const select = node.querySelector<HTMLSelectElement>('select[aria-label="知识库"]')!
+    select.value = 'B'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await act(async () => node.querySelector<HTMLButtonElement>('button[aria-label="通用知识补充"]')!.click())
+  await act(async () => node.querySelector<HTMLButtonElement>('button[aria-label="摘要模式"]')!.click())
+
+  await act(async () => root.render(null))
+  await render(<Composer conversationId="conv-2" />)
+  expect(node.querySelector('textarea')!.value).toBe('')
+  await act(async () => root.render(null))
+  await render(<Composer conversationId="conv-1" />)
+
+  expect(node.querySelector('textarea')!.value).toBe('保留的草稿')
+  expect(node.querySelector<HTMLSelectElement>('select[aria-label="知识库"]')!.value).toBe('B')
+  expect(node.querySelector<HTMLButtonElement>('button[aria-label="通用知识补充"]')!.getAttribute('aria-pressed')).toBe('true')
+  expect(node.querySelector<HTMLButtonElement>('button[aria-label="摘要模式"]')!.getAttribute('aria-pressed')).toBe('true')
+})
+
+it('keeps a newer edit when the sent text is accepted and clears accepted text after unmount', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  let resolveSend!: (accepted: boolean) => void
+  workspace.value.chat.send.mockImplementation(() => new Promise<boolean>((resolve) => { resolveSend = resolve }))
+  await render(<Composer conversationId="conv-1" />)
+  await enterText('发送中的问题')
+  await act(async () => node.querySelector<HTMLFormElement>('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  await enterText('发送期间的新修改')
+  await act(async () => { resolveSend(true); await Promise.resolve() })
+
+  expect(node.querySelector('textarea')!.value).toBe('发送期间的新修改')
+  const stored = JSON.parse(sessionStorage.getItem('knowloop:drafts:u1')!)
+  expect(stored['conv-1'].text).toBe('发送期间的新修改')
+
+  await act(async () => root.render(null))
+  await render(<Composer conversationId="conv-1" />)
+  await enterText('离开页面前发送')
+  let resolveUnmountedSend!: (accepted: boolean) => void
+  workspace.value.chat.send.mockImplementationOnce(() => new Promise<boolean>((resolve) => { resolveUnmountedSend = resolve }))
+  await act(async () => node.querySelector<HTMLFormElement>('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  await act(async () => root.render(null))
+  await render(<Composer conversationId="conv-1" />)
+  expect(node.querySelector('textarea')!.value).toBe('离开页面前发送')
+  await act(async () => { resolveUnmountedSend(true); await Promise.resolve() })
+  const afterUnmountedSend = JSON.parse(sessionStorage.getItem('knowloop:drafts:u1')!)
+  expect(afterUnmountedSend['conv-1'].text).toBe('')
+  expect(node.querySelector('textarea')!.value).toBe('')
+})
+
+it('caps the per-user draft LRU at 30 conversations and clears it on auth reset', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  for (let index = 0; index < 31; index += 1) {
+    await render(<Composer conversationId={`conv-${index}`} />)
+    await enterText(`草稿${index}`)
+    await act(async () => root.render(null))
+  }
+
+  const drafts = JSON.parse(sessionStorage.getItem('knowloop:drafts:u1')!)
+  expect(Object.keys(drafts)).toHaveLength(30)
+  expect(drafts['conv-0']).toBeUndefined()
+  expect(drafts['conv-30'].text).toBe('草稿30')
+  sessionStorage.setItem('unrelated', 'keep')
+  clearAllChatDrafts()
+  expect(sessionStorage.getItem('knowloop:drafts:u1')).toBeNull()
+  expect(sessionStorage.getItem('unrelated')).toBe('keep')
+})
+
+it('does not share the home draft with demo chat', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  await render(<Composer />)
+  await enterText('私人的首页草稿')
+  await act(async () => root.render(null))
+  await render(<Composer demo />)
+  expect(node.querySelector('textarea')!.value).toBe('')
+  await enterText('示例消息')
+  const stored = JSON.parse(sessionStorage.getItem('knowloop:drafts:u1')!)
+  expect(stored.home.text).toBe('私人的首页草稿')
+})
+
+it('retains the draft in memory if sessionStorage cannot be written', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  const blocked = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage disabled') })
+  try {
+    await render(<Composer conversationId="blocked-storage" />)
+    await enterText('本次会话草稿')
+    await act(async () => root.render(null))
+    await render(<Composer conversationId="blocked-storage" />)
+    expect(node.querySelector('textarea')!.value).toBe('本次会话草稿')
+  } finally {
+    blocked.mockRestore()
+  }
+})
+
+it('requires explicit scope recovery for historical questions and blocks invalid materials', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [readyMaterial('m1', '第一章.md')], next_cursor: null })
+  const composer = { current: null as ComposerHandle | null }
+  await render(<Composer ref={(value) => { composer.current = value }} />)
+  await act(async () => composer.current!.editAsNew('无范围历史问题', null))
+  await act(async () => node.querySelector<HTMLFormElement>('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(workspace.value.chat.send).not.toHaveBeenCalled()
+  expect(workspace.value.notify).toHaveBeenCalledWith('请先显式选择知识库，再决定是否限定资料范围。')
+
+  const invalidMaterialScope: Scope = {
+    knowledge_base_id: 'A',
+    knowledge_base_name: '库A',
+    answer_mode: 'with_general',
+    intent: 'qa',
+    selected_material_ids: ['removed-material'],
+    index_version_ids: [],
+  }
+  await act(async () => composer.current!.editAsNew('恢复原始范围的问题', invalidMaterialScope))
+  await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  await act(async () => node.querySelector<HTMLFormElement>('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(workspace.value.chat.send).not.toHaveBeenCalled()
+  expect(workspace.value.notify).toHaveBeenCalledWith('所选资料范围尚未确认，请检查资料状态或选择使用全库。')
+})
+
+it('does not widen a historical question when its original library is unavailable', async () => {
+  const composer = { current: null as ComposerHandle | null }
+  await render(<Composer ref={(value) => { composer.current = value }} />)
+  await act(async () => composer.current!.editAsNew('原库已删除的问题', {
+    knowledge_base_id: 'deleted-library',
+    knowledge_base_name: '已删除库',
+    answer_mode: 'knowledge_only',
+    intent: 'qa',
+    selected_material_ids: null,
+    index_version_ids: [],
+  }))
+  await act(async () => node.querySelector<HTMLFormElement>('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(workspace.value.chat.send).not.toHaveBeenCalled()
+  expect(workspace.value.notify).toHaveBeenCalledWith('原知识库不可用，请重新选择知识库。')
 })
 
 it('limits a material selection to 50', { timeout: 15_000 }, async () => {

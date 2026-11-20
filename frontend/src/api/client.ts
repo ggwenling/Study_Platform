@@ -208,7 +208,8 @@ export const api = {
   ),
   capabilities: () => request<Capabilities>('/capabilities'),
   turn: (conversationId: string, turnId: string, signal?: AbortSignal) => request<Turn>(turnPath(conversationId, turnId), { signal }),
-  cancelTurn: (conversationId: string, turnId: string) => request<Turn>(turnPath(conversationId, turnId) + '/cancel', json('POST')),
+  cancelTurn: (conversationId: string, turnId: string, signal?: AbortSignal) =>
+    request<Turn>(turnPath(conversationId, turnId) + '/cancel', { ...json('POST'), signal }),
   learning: {
     generateQuiz: (
       knowledgeBaseId: string,
@@ -345,6 +346,7 @@ async function* stream(path: string, body: unknown, idempotencyKey?: string, sig
 }
 export function streamChat(body: ChatRequest, idempotencyKey: string, signal?: AbortSignal) { return stream('/chat/stream', body, idempotencyKey, signal) }
 export function retryTurn(conversationId: string, turnId: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/retry', {}, undefined, signal) }
+export function editTurn(conversationId: string, turnId: string, content: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/edit', { content }, undefined, signal) }
 
 export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal): Promise<UploadResult> {
   return authorized((token) => new Promise((resolve, reject) => {

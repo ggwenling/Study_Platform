@@ -2805,6 +2805,70 @@
         }
       }
     },
+    "/api/v1/conversations/{conversation_id}/turns/{turn_id}/edit": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Edit Turn",
+        "operationId": "edit_turn_api_v1_conversations__conversation_id__turns__turn_id__edit_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Turn Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditTurnBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/learning/knowledge-bases/{kb_id}/quizzes/generate": {
       "post": {
         "tags": [
@@ -4622,6 +4686,12 @@
       },
       "ChatRequest": {
         "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Content"
+          },
           "conversation_id": {
             "anyOf": [
               {
@@ -4657,12 +4727,6 @@
             "title": "Intent",
             "default": "qa"
           },
-          "content": {
-            "type": "string",
-            "maxLength": 8000,
-            "minLength": 1,
-            "title": "Content"
-          },
           "material_ids": {
             "anyOf": [
               {
@@ -4682,8 +4746,8 @@
         },
         "type": "object",
         "required": [
-          "knowledge_base_id",
-          "content"
+          "content",
+          "knowledge_base_id"
         ],
         "title": "ChatRequest"
       },
@@ -5540,6 +5604,21 @@
           "items"
         ],
         "title": "DueFlashcardsDTO"
+      },
+      "EditTurnBody": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "EditTurnBody"
       },
       "FlashcardSourceDTO": {
         "properties": {

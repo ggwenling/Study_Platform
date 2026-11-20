@@ -7,6 +7,7 @@ import type { Material, UploadResult } from './api/types'
 import { CurrentMaterials } from './components/CurrentMaterials'
 import { Composer } from './components/Composer'
 import { useUploadQueue } from './useUploadQueue'
+import { clearAllChatDrafts } from './useChatDrafts'
 import { locatorLabel } from './api/ui'
 import { PasteTextDialog } from './components/PasteTextDialog'
 import { ThemeProvider } from './Theme'
@@ -48,13 +49,14 @@ async function click(text: string) {
 }
 
 beforeEach(() => {
+  clearAllChatDrafts()
   vi.useFakeTimers()
   vi.resetAllMocks()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('matchMedia', () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }))
   node = document.body.appendChild(document.createElement('div'))
   root = createRoot(node)
-  workspace.value = { user: { id: 'one' }, libraries: [library('A'), library('B')], revision: 0, capabilities: { rag: true, max_upload_bytes: 1000 }, refresh: vi.fn(), report: vi.fn(), notify: vi.fn(), requireLogin: vi.fn(), chat: { busy: false, send: vi.fn() } }
+  workspace.value = { user: { id: 'one' }, libraries: [library('A'), library('B')], revision: 0, capabilities: { rag: true, max_upload_bytes: 1000 }, refresh: vi.fn(), report: vi.fn(), notify: vi.fn(), requireLogin: vi.fn(), chat: { isBusy: () => false, activeFor: () => null, pendingFor: () => null, send: vi.fn() } }
   vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
 })
 afterEach(async () => { await act(async () => root.unmount()); node.remove(); vi.useRealTimers(); vi.unstubAllGlobals() })

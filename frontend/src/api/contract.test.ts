@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import contractText from '../../../contracts/frontend.openapi.json?raw'
-import { api, retryTurn, streamChat, uploadMaterial } from './client'
+import { api, editTurn, retryTurn, streamChat, uploadMaterial } from './client'
 
 const contract = JSON.parse(contractText) as { paths: Record<string, Record<string, unknown>>; components: { schemas: Record<string, { required?: string[]; properties: Record<string, unknown> }> } }
 
@@ -12,7 +12,7 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   const calls: [string, string][] = []
   vi.stubGlobal('fetch', vi.fn(async (url: string, options: RequestInit = {}) => {
     calls.push([url.split('?')[0], (options.method ?? 'GET').toLowerCase()])
-    if (url.endsWith('/stream') || url.endsWith('/retry') && url.includes('/turns/')) {
+    if (url.endsWith('/stream') || url.includes('/turns/') && (url.endsWith('/retry') || url.endsWith('/edit'))) {
       return new Response('data: {"type":"stopped","turn_id":"t"}\n\n')
     }
     return new Response('{}')
@@ -45,7 +45,8 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.testModelConnection('id'); await api.defaultModelConnection('llm', 'id'); await api.deleteModelConnection('id')
   for await (const _ of streamChat({ knowledge_base_id: 'id', answer_mode: 'knowledge_only', intent: 'qa', content: 'x' }, 'key')) { /* consume */ }
   for await (const _ of retryTurn('id', 'id')) { /* consume */ }
-  expect(calls).toHaveLength(50)
+  for await (const _ of editTurn('id', 'id', 'edited')) { /* consume */ }
+  expect(calls).toHaveLength(51)
   for (const [url, method] of calls) {
     const path = Object.keys(contract.paths).find((template) => new RegExp('^' + template.replace(/\{[^}]+\}/g, '[^/]+') + '$').test(url))
     expect(path, `${method.toUpperCase()} ${url}`).toBeDefined()
@@ -81,6 +82,7 @@ it('publishes the fields consumed by the frontend', () => {
     ActivityDTO: ['date', 'count'],
     CapabilitiesDTO: ['rag', 'ocr', 'answer_modes', 'upload_mime_types', 'max_upload_bytes'],
     ChatRequest: ['knowledge_base_id', 'content'],
+    EditTurnBody: ['content'],
     RegisterBody: ['email', 'password', 'display_name'],
     LoginBody: ['email', 'password'],
     NameBody: ['name'],

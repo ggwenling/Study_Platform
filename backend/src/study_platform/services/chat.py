@@ -230,7 +230,7 @@ def cancel(owner, conversation_id, turn_id):
     return turn(owner, conversation_id, turn_id)
 
 
-def retry(owner, conversation_id, turn_id):
+def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None):
     with session_factory()() as db:
         run = db.get(AiWorkflowRun, turn_id)
         if (not run or run.owner_user_id != owner or run.conversation_id != conversation_id
@@ -246,17 +246,22 @@ def retry(owner, conversation_id, turn_id):
         owned_conversation(db, owner, conversation_id, lock=True)
         expire_runs(db, conversation_id)
         db.refresh(run)
-        latest = db.scalar(sa.select(Message.workflow_run_id).where(
+        latest = db.scalar(sa.select(Message).where(
             Message.conversation_id == conversation_id, Message.role == "user",
         ).order_by(Message.sequence_no.desc()).limit(1))
-        if latest != run.id or run.status not in ("failed", "cancelled"):
-            raise ApiError(409, "retry_not_allowed", "只允许重试最后一个失败或停止的轮次")
+        if latest is None or latest.workflow_run_id != run.id or run.status not in (
+            "completed", "failed", "cancelled",
+        ):
+            raise ApiError(409, "retry_not_allowed", "只允许重新生成已完成、失败或停止的最后一轮")
         selected = run.source_scope.get("material_ids")
         current = visible_indices(db, owner, kb.id,
                                   [UUID(x) for x in selected] if selected else None,
                                   index_ids=run.source_scope["index_version_ids"])
         if not set(run.source_scope["index_version_ids"]).issubset(current):
             raise ApiError(409, "scope_unavailable", "原资料版本已不可用，请开始新轮次")
+        if edited_content is not None:
+            latest.content = edited_content
+            run.source_scope = {**run.source_scope, "content": edited_content}
         run.status = "running"
         run.fencing += 1
         run.failure_code = None
