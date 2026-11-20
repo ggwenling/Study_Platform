@@ -38,6 +38,7 @@ from study_platform.services.chat import chunk_dto, chunk_query, visible_indices
 from study_platform.services.citations import citation_dto, citation_quote
 from study_platform.services.learning_anchor import ensure_course_anchor
 from study_platform.services.learning_llm import strip_json_fence
+from study_platform.services.lexical import lexical_column_values
 from study_platform.services.model_calls import invoke_chat
 from study_platform.services.model_connections import llm_available
 from study_platform.services.model_task import learning_task
@@ -388,6 +389,7 @@ def create_note(
         title=cleaned_title,
         note_type=note_type,
         content_md=cleaned_body,
+        lexical=lexical_column_values(f"{cleaned_title}\n{cleaned_body}")["lexical"],
         generated_content_md=cleaned_body,
         edit_revision=0,
         status="ready",
@@ -449,6 +451,7 @@ def append_note(
         raise ApiError(422, "note_too_long", "笔记合并后内容超过 200000 字符")
 
     note.content_md = merged
+    note.lexical = lexical_column_values(f"{note.title}\n{merged}")["lexical"]
     now = _now()
     note.edit_revision = (note.edit_revision or 0) + 1
     note.edited_at = now
@@ -483,6 +486,7 @@ def update_note(
         if not cleaned_body:
             raise ApiError(422, "validation_error", "笔记正文不能为空")
         note.content_md = cleaned_body
+    note.lexical = lexical_column_values(f"{note.title}\n{note.content_md}")["lexical"]
     note.edit_revision = (note.edit_revision or 0) + 1
     note.edited_at = _now()
     note.updated_at = _now()
@@ -684,6 +688,7 @@ def generate_studio_artifact(
         title=final_title,
         note_type=note_type,
         content_md=content_md,
+        lexical=lexical_column_values(f"{final_title}\n{content_md}")["lexical"],
         generated_content_md=content_md,
         edit_revision=0,
         status="ready",

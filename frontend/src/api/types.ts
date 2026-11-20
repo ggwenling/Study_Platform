@@ -26,6 +26,7 @@ export interface SearchItem {
   excerpt?: string
   locator?: Record<string, unknown>
   retrieval_enabled?: boolean
+  matched_terms?: string[]
 }
 export interface Dashboard {
   knowledge_base_count: number

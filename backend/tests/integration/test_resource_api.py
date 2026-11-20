@@ -37,6 +37,7 @@ from study_platform.persistence.models import (
 from study_platform.services import auth_limits
 from study_platform.services.chat import chunk_query
 from study_platform.services.learning_anchor import ensure_course_anchor
+from study_platform.services.lexical import lexical_column_values
 from study_platform.services.storage import page_path, source_path
 
 pytestmark = pytest.mark.integration
@@ -367,6 +368,7 @@ def test_content_search_uses_current_owned_fragments_and_notes_without_models(re
         chunk = MaterialChunk(
             id=uuid4(), material_version_id=version.id, index_version_id=index.id, ordinal=0,
             text=body, text_sha256="b" * 64, retrieval_enabled=enabled, locator={"page": 7, "ocr": []},
+            **lexical_column_values(body),
         )
         db.add(chunk)
         db.commit()
@@ -440,3 +442,91 @@ def test_content_search_uses_current_owned_fragments_and_notes_without_models(re
     assert search("newton")["items"] == []
     assert http.delete(f"/knowledge-bases/{notes_kb}").status_code == 204
     assert search("只出现在标题里的词")["items"] == []
+
+
+def test_workspace_search_ranks_lexical_matches_and_pages_with_a_stable_cursor(resource_client):
+    http, db = resource_client
+    owner = signup(http)
+    kb = http.post("/knowledge-bases", json={"name": "研究资料"}).json()["id"]
+
+    def material(title, text):
+        row = Material(
+            id=uuid4(), owner_user_id=owner, knowledge_base_id=UUID(kb), title=title, kind="other"
+        )
+        db.add(row)
+        db.flush()
+        version = MaterialVersion(
+            id=uuid4(), material_id=row.id, version_no=1, is_current=True,
+            source_mime="application/pdf", object_key=str(uuid4()), parse_status="ready",
+            source_sha256="c" * 64, byte_size=1,
+        )
+        db.add(version)
+        db.flush()
+        index = IndexVersion(
+            id=uuid4(), material_version_id=version.id, generation=1, status="ready",
+            is_active=True, pipeline_profile="test", embedding_profile="test:1024",
+            chunk_count=1, ready_at=datetime.now(UTC),
+        )
+        db.add(index)
+        db.flush()
+        chunk = MaterialChunk(
+            id=uuid4(), material_version_id=version.id, index_version_id=index.id, ordinal=0,
+            text=text, text_sha256="d" * 64, retrieval_enabled=True, locator={"page": 1},
+            **lexical_column_values(text),
+        )
+        db.add(chunk)
+        db.commit()
+        return row, chunk
+
+    title_material, _ = material("模型 向量指南.pdf", "此正文不包含检索词。")
+    _, fragment_hit = material("普通资料.pdf", "向量检索模型适合组织知识内容。")
+    note_response = http.post(
+        f"/knowledge-bases/{kb}/notes",
+        json={"title": "普通笔记", "content_md": "Q3 讨论向量检索模型的使用方式。"},
+    )
+    assert note_response.status_code == 201, note_response.text
+    note_id = note_response.json()["id"]
+
+    def search(query, **params):
+        response = http.get(
+            "/search", params={"q": query, "include_content": "true", **params}
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    first = search("模型 向量", limit=1)
+    assert first["items"][0]["id"] == str(title_material.id)
+    pages = first["items"]
+    cursor = first["next_cursor"]
+    while cursor:
+        page = search("模型 向量", limit=1, cursor=cursor)
+        pages.extend(page["items"])
+        cursor = page["next_cursor"]
+    assert len({item["id"] for item in pages}) == len(pages) == 3
+    assert {item["id"] for item in pages} == {
+        str(title_material.id), str(fragment_hit.id), note_id,
+    }
+    fragment_item = next(item for item in pages if item["type"] == "fragment")
+    assert set(fragment_item["matched_terms"]) == {"模型", "向量"}
+    assert note_id in {item["id"] for item in search("Q3")["items"]}
+    assert str(fragment_hit.id) in {item["id"] for item in search("检")["items"]}
+    assert http.get("/search", params={"q": "模型 向量", "cursor": "not-a-cursor"}).json()[
+        "code"
+    ] == "invalid_cursor"
+
+    editable = http.post(
+        f"/knowledge-bases/{kb}/notes",
+        json={"title": "可编辑笔记", "content_md": "初始正文。"},
+    ).json()
+    appended = http.post(
+        f"/notes/{editable['id']}/append",
+        json={"content_md": "新增段落包含向量检索模型。"},
+    )
+    assert appended.status_code == 200, appended.text
+    assert editable["id"] in {item["id"] for item in search("模型 向量")["items"]}
+    updated = http.patch(
+        f"/notes/{editable['id']}",
+        json={"content_md": "更新正文包含向量检索模型。"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert editable["id"] in {item["id"] for item in search("模型 向量")["items"]}

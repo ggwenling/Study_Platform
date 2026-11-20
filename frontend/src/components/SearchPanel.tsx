@@ -22,9 +22,20 @@ const shortcuts = [
   { id: 'library', title: '打开知识库', path: '/knowledge', icon: FolderOpen },
 ]
 
-type SearchOption = { id: string; title: string; path: string; icon: typeof Search; details?: string; excerpt?: string | null }
+type SearchOption = { id: string; title: string; path: string; icon: typeof Search; details?: string; excerpt?: string | null; matchedTerms?: string[] }
 
 type SearchState = { query: string; page?: Page<SearchItem>; loadingMore?: boolean; error?: string }
+
+function highlightMatches(text: string, terms: string[] = []) {
+  const uniqueTerms = [...new Set(terms.filter(Boolean))].sort((left, right) => right.length - left.length)
+  if (!uniqueTerms.length) return text
+  const escaped = uniqueTerms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const parts = text.split(new RegExp(`(${escaped.join('|')})`, 'gi'))
+  const matched = new Set(uniqueTerms.map((term) => term.toLowerCase()))
+  return parts.map((part, index) => matched.has(part.toLowerCase())
+    ? <mark className="search-highlight" key={`${index}-${part}`}>{part}</mark>
+    : part)
+}
 
 export function SearchPanel({ onSelect }: { onSelect: () => void }) {
   const { libraries, recent, report } = useWorkspace()
@@ -92,6 +103,7 @@ export function SearchPanel({ onSelect }: { onSelect: () => void }) {
       title: item.title,
       path: item.type === 'conversation' ? `/chat/${item.id}` : `/knowledge?${params}`,
       icon: kind[item.type].icon,
+      matchedTerms: item.matched_terms,
       details: [
         kind[item.type].label,
         item.type !== 'knowledge_base' && libraries.find((library) => library.id === item.knowledge_base_id)?.name,
@@ -132,15 +144,15 @@ export function SearchPanel({ onSelect }: { onSelect: () => void }) {
       <kbd>Ctrl K</kbd>
     </div>
     <ul id={listId} className="workspace-search-options" role="listbox" aria-label={idle ? '快捷操作和最近对话' : '搜索结果'} hidden={!options.length}>
-      {options.map(({ id, title, path, icon: Icon, details, excerpt }, index) => <li key={id} role="presentation">
+      {options.map(({ id, title, path, icon: Icon, details, excerpt, matchedTerms }, index) => <li key={id} role="presentation">
         {idle && index === 0 && <div className="search-group-label" aria-hidden="true">快捷操作</div>}
         {idle && index === shortcuts.length && <div className="search-group-label" aria-hidden="true">最近对话</div>}
         <Link id={`${listId}-${index}`} role="option" aria-selected={selected === index} tabIndex={-1}
           className="search-result" to={path} onPointerMove={() => setActive(index)} onClick={onSelect}>
           <Icon size={17} aria-hidden="true" />
-          <span className="search-result-text"><strong>{title}</strong>
+          <span className="search-result-text"><strong>{highlightMatches(title, matchedTerms)}</strong>
             {details && <small>{details}</small>}
-            {excerpt && <small className="search-excerpt">{excerpt}</small>}
+            {excerpt && <small className="search-excerpt">{highlightMatches(excerpt, matchedTerms)}</small>}
           </span>
         </Link>
       </li>)}

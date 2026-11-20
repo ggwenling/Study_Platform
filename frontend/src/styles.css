@@ -600,6 +600,7 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 .search-result > svg { flex: none; margin-top: 2px; color: var(--text-secondary); }
 .search-result-text { display: grid; min-width: 0; gap: 2px; overflow-wrap: anywhere; }
 .search-result-text > strong { font-weight: 500; }
+.search-highlight { color: inherit; background: light-dark(#ffe08a, #5a4720); border-radius: 2px; padding-inline: 1px; }
 .search-excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .search-status { margin: 2px 0; }
 .source-detail p { white-space: pre-wrap; overflow-wrap: anywhere; }

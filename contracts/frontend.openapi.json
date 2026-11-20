@@ -1181,8 +1181,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string",
-                  "format": "uuid"
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -7646,6 +7645,13 @@
               }
             ],
             "title": "Retrieval Enabled"
+          },
+          "matched_terms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Matched Terms"
           }
         },
         "type": "object",
@@ -7668,8 +7674,7 @@
           "next_cursor": {
             "anyOf": [
               {
-                "type": "string",
-                "format": "uuid"
+                "type": "string"
               },
               {
                 "type": "null"

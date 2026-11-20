@@ -77,6 +77,10 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                         column["name"] for column in inspector.get_columns("materials", schema="study")
                     } if upgraded else set()
                     assert ("source_url" in material_columns) is upgraded
+                    if upgraded:
+                        notes = {column["name"] for column in inspector.get_columns("notes", schema="study")}
+                        assert "lexical" in notes
+                        assert any(index["name"] == "ix_notes_lexical" for index in inspector.get_indexes("notes", schema="study"))
                     version = connection.scalar(
                         sa.text("SELECT version_num FROM study.alembic_version")
                     )
@@ -108,6 +112,15 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                             VALUES (:owner, :conversation, :kb, 'completed')"""), {"owner": owner, "conversation": conversation, "kb": kb})
             command.upgrade(config, "0009_model_call_records")
             with engine.begin() as connection:
+                connection.execute(sa.text("INSERT INTO study.courses(id, owner_user_id, name) "
+                                           "VALUES (:kb, :owner, 'Notes')"), {"kb": kb_ids[0], "owner": owner})
+                note_id = connection.scalar(sa.text("""
+                    INSERT INTO study.notes(owner_user_id, course_id, title, note_type, content_md,
+                        generated_content_md, status, source_scope, generator_profile, prompt_version)
+                    VALUES (:owner, :kb, '雪松仓库', 'summary', '向量模型 QZ-731', '', 'ready',
+                        '{}'::jsonb, 'test', 'test') RETURNING id
+                """), {"kb": kb_ids[0], "owner": owner})
+
                 def add_material(profile: str, *, deleted: bool = False):
                     material = connection.execute(sa.insert(models.Material).values(
                         owner_user_id=owner, knowledge_base_id=kb_ids[0], title=profile,
@@ -165,6 +178,10 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                 for conversation, expected_project in zip(conversations, [kb_ids[0], None, None, None], strict=True):
                     assert connection.scalar(sa.text("SELECT project_knowledge_base_id FROM study.conversations WHERE id=:id"), {"id": conversation}) == expected_project
             check(True)
+            if not offline:
+                with engine.connect() as connection:
+                    assert connection.scalar(sa.text("SELECT lexical @@ plainto_tsquery('simple', '雪松') "
+                        "FROM study.notes WHERE id=:id"), {"id": note_id})
             with engine.begin() as connection:
                 vision_connection = connection.scalar(sa.text(
                     "INSERT INTO study.model_connections(owner_user_id, kind, name, versions) "
@@ -189,7 +206,7 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                 connection.execute(sa.delete(models.IndexVersion).where(models.IndexVersion.id.in_(indexes)))
                 connection.execute(sa.delete(models.MaterialVersion).where(models.MaterialVersion.id.in_(versions)))
                 connection.execute(sa.delete(models.Material).where(models.Material.id.in_(materials)))
-                for table in ("ai_workflow_runs", "conversations", "knowledge_bases"):
+                for table in ("ai_workflow_runs", "conversations", "notes", "courses", "knowledge_bases"):
                     connection.execute(sa.text(f"DELETE FROM study.{table} WHERE owner_user_id=:owner"), {"owner": owner})
                 connection.execute(sa.text("DELETE FROM study.users WHERE id=:owner"), {"owner": owner})
             command.downgrade(config, "base")
