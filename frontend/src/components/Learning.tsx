@@ -30,6 +30,7 @@ import {
 } from '@/learningUi'
 import { MarkdownContent } from './MarkdownContent'
 import { FlashcardPanel } from './FlashcardPanel'
+import { SourceReaderDrawer, type ReaderActionContext, type SourceReaderTarget } from './SourceReaderDrawer'
 
 type Props = {
   knowledgeBases: KnowledgeBase[]
@@ -57,7 +58,11 @@ const countOptions = [
   { value: '15', label: '15 题' },
 ]
 
-function SourceList({ sources }: { sources?: LearningSource[] }) {
+function SourceList({ sources, onOpenSource, disabled = false }: {
+  sources?: LearningSource[]
+  onOpenSource: (source: LearningSource) => void
+  disabled?: boolean
+}) {
   if (!sources?.length) return null
   return (
     <div className="learning-sources" aria-label="题目资料依据">
@@ -69,6 +74,7 @@ function SourceList({ sources }: { sources?: LearningSource[] }) {
               <FileText size={14} aria-hidden />
               <strong>{src.title}</strong>
               <small>{src.availability === 'available' ? src.location_label : '来源已不可用'}</small>
+              {src.availability === 'available' && <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => onOpenSource(src)}>查看原文</Button>}
             </div>
             {src.quote_status === 'unverified' && <small>原文未验证</small>}
             {src.quote && <p className="learning-source-quote">{src.quote}</p>}
@@ -112,7 +118,24 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   const [wrongDueOnly, setWrongDueOnly] = useState(historyState?.wrongFilter === 'due')
   const [startDueQueue, setStartDueQueue] = useState(Boolean(historyState?.startDueQueue))
   const [expandedWrongIds, setExpandedWrongIds] = useState<string[]>([])
+  const [readerTarget, setReaderTarget] = useState<SourceReaderTarget | null>(null)
   const [tab, setTab] = useState<'practice' | 'flashcards' | 'history' | 'wrong'>(historyState?.tab ?? 'practice')
+
+  function openSource(source: LearningSource) {
+    if (source.availability !== 'available') return
+    setReaderTarget({
+      materialVersionId: source.material_version_id,
+      materialId: source.material_id,
+      knowledgeBaseId: source.knowledge_base_id ?? undefined,
+      knowledgeBaseName: knowledgeBases.find((library) => library.id === source.knowledge_base_id)?.name,
+      chunkId: source.chunk_id,
+      title: source.title,
+      quote: source.quote,
+      locator: source.locator,
+      locationLabel: source.location_label,
+      sourceUrl: source.source_url,
+    })
+  }
 
   const refreshWrongs = useCallback(async () => {
     try {
@@ -718,7 +741,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
               <p className="learning-ref">解析：{current.explanation}</p>
             ) : null}
 
-            <SourceList sources={current.sources} />
+            <SourceList sources={current.sources} onOpenSource={openSource} disabled={!isReferenceRevealed(current)} />
 
             <div className="learning-actions">
               <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => void setVerdict('correct')}>
@@ -919,7 +942,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
                       {row.explanation && row.explanation !== row.last_feedback && (
                         <p className="learning-ref">解析：{row.explanation}</p>
                       )}
-                      <SourceList sources={row.sources} />
+                      <SourceList sources={row.sources} onOpenSource={openSource} />
                     </div>
                   )}
 
@@ -977,6 +1000,11 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
           </ul>
         )}
       </section>
+      <SourceReaderDrawer open={Boolean(readerTarget)} target={readerTarget} onOpenChange={(open) => { if (!open) setReaderTarget(null) }}
+        onAskFollowUp={(context: ReaderActionContext) => {
+          const prompt = `请根据以下资料摘录回答我的问题。\n\n来源：${context.title} · ${context.locationLabel}\n\n${context.excerpt}\n\n我的问题：`
+          void navigate('/', { state: { preferredLibrary: context.knowledgeBaseId, initialDraft: prompt, initialMaterialIds: [context.materialId] } })
+        }} />
     </div>
   )
 }

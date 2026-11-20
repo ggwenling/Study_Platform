@@ -3,7 +3,7 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api/client'
-import type { Dashboard, LearningAttempt, WrongQuestionItem } from './api/types'
+import type { Dashboard, LearningAttempt, MaterialReader, WrongQuestionItem } from './api/types'
 import { Learning } from './components/Learning'
 import { ThemeProvider } from './Theme'
 import { wrongIdsForAttempt } from './learningUi'
@@ -11,6 +11,7 @@ import { wrongIdsForAttempt } from './learningUi'
 const navigateMock = vi.hoisted(() => vi.fn())
 const locationMock = vi.hoisted(() => ({ value: { key: 'initial', state: null as unknown } }))
 const refreshOverview = vi.fn()
+const workspace = vi.hoisted(() => ({ libraries: [{ id: 'kb-1', name: '高数资料库' }], notify: vi.fn(), report: vi.fn() }))
 
 vi.mock('react-router', () => ({
   useNavigate: () => navigateMock,
@@ -37,9 +38,14 @@ vi.mock('./components/FlashcardPanel', () => ({
     </div>
   ),
 }))
+vi.mock('./WorkspaceData', () => ({ useWorkspace: () => workspace }))
 vi.mock('./api/client', () => ({
   api: {
     materials: vi.fn(),
+    materialReader: vi.fn(),
+    pageImage: vi.fn(),
+    content: vi.fn(),
+    studio: { notes: vi.fn(), createNote: vi.fn(), appendNote: vi.fn() },
     learning: {
       generateQuiz: vi.fn(),
       attempts: vi.fn(),
@@ -126,6 +132,14 @@ const sampleWrong: WrongQuestionItem = {
   is_due: true,
 }
 
+const sampleReader: MaterialReader = {
+  material_id: 'm1', version_id: 'v1', knowledge_base_id: 'kb-1', title: '线代讲义.md', mime_type: 'text/plain',
+  source_url: null, page_count: null, preview_page_count: 0, can_render_pages: false, content_url: null,
+  target_chunk_id: 'c1', target_page: null, target_quote: '特征向量定义为非零列向量。',
+  chunks: [{ id: 'c1', ordinal: 1, text: '特征向量定义为非零列向量。', locator: {}, location_label: '第 2 页', is_target: true }],
+  total_chunks: 1, has_prev: false, has_next: false,
+}
+
 async function render(view: ReactNode) {
   await act(async () => root.render(<ThemeProvider>{view}</ThemeProvider>))
 }
@@ -171,6 +185,7 @@ beforeEach(() => {
   })
   vi.mocked(api.learning.wrongQuestions).mockResolvedValue({ items: [sampleWrong] })
   vi.mocked(api.learning.attempt).mockResolvedValue(sampleAttempt)
+  vi.mocked(api.materialReader).mockResolvedValue(sampleReader)
 })
 
 afterEach(async () => {
@@ -180,6 +195,23 @@ afterEach(async () => {
 })
 
 describe('Learning 2.0 workflow', () => {
+  it('keeps practice sources closed until revealed and opens wrong-book sources immediately', async () => {
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => findButtonContaining('继续上次练习')!.click())
+    const practiceSource = findButtonContaining('查看原文')!
+    expect(practiceSource.disabled).toBe(true)
+    await act(async () => practiceSource.click())
+    expect(api.materialReader).not.toHaveBeenCalled()
+
+    await act(async () => node.querySelector<HTMLButtonElement>('#learning-tab-wrong')!.click())
+    await act(async () => findButtonContaining('查看解析与依据')!.click())
+    const wrongSource = findButtonContaining('查看原文')!
+    expect(wrongSource.disabled).toBe(false)
+    await act(async () => wrongSource.click())
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(api.materialReader).toHaveBeenCalledWith('v1', 'c1', 3, expect.any(AbortSignal))
+  })
+
   it('starts the daily flashcard queue from route state and the Learning overview', async () => {
     locationMock.value = { key: 'due-cards', state: { tab: 'flashcards', startDueQueue: true } }
     const overview = { ...testOverview, due_flashcard_count: 3 }

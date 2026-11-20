@@ -19,6 +19,12 @@ from study_platform.persistence.models.identity import Material
 from study_platform.persistence.models.knowledge import KnowledgeBase
 from study_platform.persistence.models.materials import MaterialSection, MaterialVersion
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
+from study_platform.services.material_reader import (
+    IMAGE_MIMES,
+    MaterialReaderResponse,
+    material_reader,
+    render_pdf_page,
+)
 from study_platform.services.storage import page_path, source_path
 from study_platform.services.upload_validation import (
     Utf8TextValidator,
@@ -547,14 +553,38 @@ def content(version_id: UUID, db: Session = Depends(get_db), user=Depends(get_cu
     })
 
 
+@router.get("/material-versions/{version_id}/reader", response_model=MaterialReaderResponse)
+def reader(
+    version_id: UUID,
+    chunk_id: UUID | None = None,
+    window: int = Query(default=3, ge=0, le=10),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    version = owned_version(db, user, version_id)
+    material = db.get(Material, version.material_id)
+    return material_reader(db, material, version, chunk_id, window)
+
+
 @router.get("/material-versions/{version_id}/pages/{page_no}")
 def page(
     version_id: UUID, page_no: int, db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
-    owned_version(db, user, version_id)
+    version = owned_version(db, user, version_id)
     if page_no < 1 or page_no > get_settings().max_pdf_page_preview:
         raise missing()
     path = page_path(version_id, page_no)
+    mime = "image/png"
     if not path.is_file():
-        raise missing()
-    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+        if version.source_mime == "application/pdf" and page_no <= (version.page_count or 0):
+            path = render_pdf_page(version_id, page_no)
+        elif version.source_mime in IMAGE_MIMES and page_no == 1:
+            path = source_path(version_id)
+            mime = version.source_mime
+            if not path.is_file():
+                raise missing()
+        else:
+            raise missing()
+    return FileResponse(path, media_type=mime, headers={
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+    })

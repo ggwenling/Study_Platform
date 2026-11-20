@@ -1,0 +1,116 @@
+.source-reader-dialog {
+  inset: 0 0 0 auto !important;
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 56vw);
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0 !important;
+  overflow: hidden;
+  border-radius: 0;
+}
+
+.source-reader-dialog > div:last-child {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.source-reader {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  color: var(--foreground);
+}
+
+.source-reader-meta,
+.source-reader-tabs,
+.source-reader-actions,
+.source-reader-page-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.source-reader-meta {
+  flex-wrap: wrap;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.source-reader-meta a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.source-reader-location { font-weight: 600; color: var(--foreground); }
+.source-reader-extraction { border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; }
+.source-reader-tabs { padding: 12px 24px 0; }
+.source-reader-status, .source-reader-error { margin: 14px 24px; }
+.source-reader-error { color: var(--danger, #b42318); }
+
+.source-reader-copy {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 24px 22px;
+  overscroll-behavior: contain;
+}
+
+.source-reader-chunk {
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  scroll-margin-block: 35vh;
+}
+
+.source-reader-chunk[data-target="true"] {
+  border-color: color-mix(in oklab, var(--accent) 56%, var(--border));
+  background: color-mix(in oklab, var(--accent) 7%, var(--surface-raised));
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent);
+}
+
+.source-reader-chunk header { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-secondary); font-size: var(--text-xs); }
+.source-reader-chunk header strong { color: var(--accent); font-weight: 600; }
+.source-reader-chunk p { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; }
+.source-reader-citation-snapshot { margin: 10px 0 0; padding: 9px 12px; border-inline-start: 3px solid var(--accent); background: color-mix(in oklab, var(--accent) 6%, var(--surface-raised)); }
+.source-reader-citation-snapshot small { color: var(--text-secondary); font-size: var(--text-xs); }
+.source-reader-citation-snapshot p { margin-top: 4px; }
+.source-reader-chunk mark { border-radius: 3px; background: color-mix(in oklab, var(--accent) 25%, transparent); color: inherit; }
+.source-reader-copy > button { margin-block: 4px 14px; }
+
+.source-reader-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  padding: 12px 24px max(14px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.source-reader-page-view { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.source-reader-page-controls { justify-content: center; flex-wrap: wrap; padding: 12px 24px; }
+.source-reader-page-controls input { width: 5rem; min-height: 2rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--foreground); text-align: center; }
+.source-reader-page-image { flex: 1; min-height: 0; overflow: auto; padding: 12px 24px 24px; text-align: center; }
+.source-reader-page-image img { max-width: 100%; height: auto; box-shadow: 0 4px 24px rgb(0 0 0 / .12); }
+
+@media (max-width: 760px) {
+  .source-reader-dialog {
+    inset: auto 0 0 !important;
+    width: 100vw;
+    height: 88dvh;
+    max-height: 88dvh;
+    border-radius: 20px 20px 0 0;
+  }
+  .source-reader-meta, .source-reader-tabs, .source-reader-page-controls { padding-inline: 16px; }
+  .source-reader-copy { padding-inline: 16px; }
+  .source-reader-actions { padding-inline: 16px; }
+  .source-reader-page-image { padding-inline: 12px; }
+}

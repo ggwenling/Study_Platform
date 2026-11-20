@@ -148,6 +148,24 @@ it('binds in-flight upload to A after switching to B and preserves the draft', a
   expect(workspace.value.chat.send).not.toHaveBeenCalled()
 })
 
+it('applies the source material scope when opening a follow-up draft', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [material('ready')], next_cursor: null })
+  await render(<Composer preferredLibrary="A" initialDraft="继续解释这个来源" initialMaterialIds={['m']} />)
+
+  const form = node.querySelector<HTMLFormElement>('form.composer')!
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  })
+
+  expect(workspace.value.chat.send).toHaveBeenCalledWith(expect.objectContaining({
+    knowledge_base_id: 'A',
+    material_ids: ['m'],
+    content: '继续解释这个来源',
+  }), expect.any(Function))
+})
+
 it('creates and selects the first library without leaving chat', async () => {
   workspace.value.libraries = []
   vi.mocked(api.createKnowledgeBase).mockResolvedValue(library('C'))

@@ -85,6 +85,7 @@ def citation_dto(db, citation) -> dict:
     quote, quote_status = citation_quote(db, citation) if availability == "available" else ("", "unavailable")
     return {
         "id": citation.id,
+        "chunk_id": citation.chunk_id,
         "source_label": f"S{citation.ordinal + 1}",
         "material_id": material.id,
         "material_version_id": version.id,

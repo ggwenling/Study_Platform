@@ -3,7 +3,7 @@ import type { DragEvent, FormEvent, ReactNode } from 'react'
 import { ChevronRight, CircleDashed, Ellipsis, FilePlus2, FileText, Folder, Globe, Image as ImageIcon, Layers, Pencil, Plus, RefreshCw, Tag, Trash2, TriangleAlert, Upload } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { api } from '@/api/client'
-import type { DocumentLocation, Fragment, KnowledgeBase, LibraryOverview, Material, MaterialPreview } from '@/api/types'
+import type { Citation, DocumentLocation, Fragment, KnowledgeBase, LibraryOverview, Material } from '@/api/types'
 import { allPages, errorMessage, locatorLabel, safeExternalUrl } from '@/api/ui'
 import { ApiError } from '@/api/stream'
 import { PasteTextDialog } from './PasteTextDialog'
@@ -23,7 +23,7 @@ import { LibraryClassification } from './LibraryClassification'
 import { LibraryFragments, number } from './LibraryFragments'
 import { LibraryStudio } from './LibraryStudio'
 import { LibraryHitTest } from './LibraryHitTest'
-import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
+import { SourceReaderDrawer, type ReaderActionContext, type SourceReaderTarget } from './SourceReaderDrawer'
 import './Library.css'
 
 const phases: Record<string, string> = {
@@ -31,14 +31,8 @@ const phases: Record<string, string> = {
   ready: '已完成', failed: '处理失败', cancelled: '已取消',
 }
 
-type Panel = 'create' | 'edit' | 'deleteKb' | 'topics' | 'tags' | 'files' | 'ocr' | 'ocrQueue' | 'failed' | 'activity' | 'preview'
+type Panel = 'create' | 'edit' | 'deleteKb' | 'topics' | 'tags' | 'files' | 'ocr' | 'ocrQueue' | 'failed' | 'activity'
 type DocumentScope = { material_id?: string; section_id?: string; label?: string }
-type Preview = { title: string; version: string; text?: string; source?: MaterialPreview; locator?: string; imagePage?: number; quoteLabel?: string }
-type LinkedFragment = { id: string; preview?: Preview; failure?: string }
-
-function fragmentPreview(fragment: Fragment): Preview {
-  return { title: fragment.title, version: fragment.version_id, text: fragment.text, locator: locatorLabel(fragment.locator) }
-}
 
 function heading(icon: ReactNode, title: string, note: string) {
   return <header className="library-section-heading">{icon}<h2>{title}</h2><p>{note}</p></header>
@@ -111,6 +105,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   fragmentId: string | null; noteId: string | null; closeSearchResult: () => void;
 }) {
   const { revision, refresh, notify, report, libraryUploadQueue: uploadQueue } = useWorkspace()
+  const navigate = useNavigate()
   const id = library.id
   const [overview, setOverview] = useState<LibraryOverview>()
   const [materials, setMaterials] = useState<Material[]>([])
@@ -125,22 +120,35 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   const [confirmMaterial, setConfirmMaterial] = useState<Material | null>(null)
   const [scope, setScope] = useState<DocumentScope>({})
   const [day, setDay] = useState<string>()
-  const [preview, setPreview] = useState<Preview>()
-  const [linkedFragment, setLinkedFragment] = useState<LinkedFragment>()
-  const fragmentResult = linkedFragment?.id === fragmentId ? linkedFragment : undefined
-  const visiblePreview = fragmentId ? fragmentResult?.preview : preview
+  const [readerTarget, setReaderTarget] = useState<SourceReaderTarget | null>(null)
+  const [fragmentError, setFragmentError] = useState('')
   useEffect(() => {
-    if (!fragmentId) return
+    if (!fragmentId) { setFragmentError(''); return }
     let live = true
+    setReaderTarget(null)
+    setFragmentError('')
     void api.fragment(id, fragmentId).then(
-      (fragment) => { if (live) setLinkedFragment({ id: fragmentId, preview: fragmentPreview(fragment) }) },
+      (fragment) => {
+        if (!live) return
+        setReaderTarget({
+          materialVersionId: fragment.version_id,
+          materialId: fragment.material_id,
+          knowledgeBaseId: id,
+          knowledgeBaseName: library.name,
+          chunkId: fragment.id,
+          title: fragment.title,
+          quote: fragment.text,
+          locator: fragment.locator,
+          locationLabel: locatorLabel(fragment.locator),
+        })
+      },
       (error: unknown) => {
         if (!live) return
         const failure = error instanceof ApiError && [404, 422].includes(error.status ?? 0) ? '内容已不可用' : errorMessage(error)
-        setLinkedFragment({ id: fragmentId, failure })
+        setFragmentError(failure)
       },
     )
-    return () => { live = false; setLinkedFragment(undefined) }
+    return () => { live = false }
   }, [id, fragmentId])
   const fileInput = useRef<HTMLInputElement>(null)
   const fragmentPanel = useRef<HTMLElement>(null)
@@ -275,19 +283,38 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     } catch (error) { report(error) } finally { setBusy(undefined) }
   }
 
-  async function openSource(version: string, title: string, locator?: Record<string, unknown>, excerpt?: { text: string; label: string }) {
-    try {
-      const source = await api.preview(version)
-      const page = locator?.page ?? locator?.image
-      const imagePage = typeof page === 'number' && source.sections.some((part) => (part.locator.page ?? part.locator.image) === page && Array.isArray(part.locator.ocr)) ? page : undefined
-      setPreview({ title, version, source, locator: locator ? locatorLabel(locator) : undefined, imagePage, text: excerpt?.text, quoteLabel: excerpt?.label })
-      setPanel('preview')
-    } catch (error) { report(error) }
+  function openSource(target: SourceReaderTarget) {
+    setReaderTarget({ knowledgeBaseId: id, knowledgeBaseName: library.name, ...target })
   }
 
-  function showFragment(fragment: Fragment) {
-    setPreview(fragmentPreview(fragment))
-    setPanel('preview')
+  function openCitation(citation: Citation) {
+    if (citation.availability !== 'available') {
+      notify('此来源已不可访问。')
+      return
+    }
+    openSource({
+      materialVersionId: citation.material_version_id,
+      materialId: citation.material_id,
+      knowledgeBaseId: citation.knowledge_base_id,
+      chunkId: citation.chunk_id,
+      title: citation.title,
+      quote: citation.quote,
+      locator: citation.locator,
+      locationLabel: citation.location_label,
+      sourceUrl: citation.source_url,
+    })
+  }
+
+  function openFragment(fragment: Fragment) {
+    openSource({
+      materialVersionId: fragment.version_id,
+      materialId: fragment.material_id,
+      chunkId: fragment.id,
+      title: fragment.title,
+      quote: fragment.text,
+      locator: fragment.locator,
+      locationLabel: locatorLabel(fragment.locator),
+    })
   }
 
   const roots: TreeNode[] = [{ id, label: library.name, icon: <Folder size={15} />, children: materials.map((material) => {
@@ -406,27 +433,19 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         linkedNoteId={noteId}
         closeLinkedNote={closeSearchResult}
         onIngested={reloadData}
-        onOpenSource={(cit) => {
-          if (cit.availability === 'available') {
-            const label = cit.quote_status === 'unverified' ? '原文未验证'
-              : cit.quote_status === 'unavailable' ? '历史引文不可用' : '笔记引用片段'
-            void openSource(cit.material_version_id, cit.title, cit.locator, { text: cit.quote, label })
-          } else {
-            notify('此来源已不可访问。')
-          }
-        }}
+        onOpenSource={openCitation}
       />
       <LibraryHitTest
         kbId={id}
         readyCount={overview?.ready_count ?? 0}
-        onOpenSource={(item) => void openSource(item.version_id, item.title, item.locator)}
+        onOpenSource={(item) => openSource({ materialVersionId: item.version_id, materialId: item.material_id, chunkId: item.chunk_id, title: item.title, quote: item.text, locator: item.locator, locationLabel: item.location_label })}
         onFragmentUpdated={() => setFragmentRevision((value) => value + 1)}
       />
       <section className="library-panel library-fragment-panel" ref={fragmentPanel}>
         {heading(<FileText size={22} />, '片段浏览', '检索与管理已生成的内容片段')}
+        {fragmentError && <p role="alert" className="error-text">{fragmentError}</p>}
         <LibraryFragments id={id} tags={overview?.tags ?? []} day={day} setDay={setDay} scope={scope}
-          clearScope={() => setScope({})} revision={fragmentRevision} onPreview={showFragment}
-          onOpenSource={(row) => void openSource(row.version_id, row.title, row.locator)} />
+          clearScope={() => setScope({})} revision={fragmentRevision} onOpenSource={openFragment} />
       </section>
     </div>
     <aside className="library-panel library-aside" aria-label="资料库活动与索引概况">
@@ -450,7 +469,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         </div>
       </div>
     </aside>
-    <Dialog open={Boolean(panel || fragmentId)} onOpenChange={(open) => {
+    <Dialog open={Boolean(panel)} onOpenChange={(open) => {
       if (!open && !busy) {
         if (fragmentId) closeSearchResult()
         setConfirmMaterial(null)
@@ -485,18 +504,6 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         </div>
         <div className="library-activity-chart">{heatmap(false)}</div>
       </DialogContent>}
-      {(panel === 'preview' || fragmentId) && <DialogContent title={visiblePreview?.title ?? '资料片段'} description={visiblePreview?.locator ?? '查看原件中提取的文字。'} closeLabel="关闭">
-        {visiblePreview ? <div className="source-detail">
-          <DownloadMaterial version={visiblePreview.version} title={visiblePreview.title} />
-          {visiblePreview.imagePage && <MaterialPage version={visiblePreview.version} page={visiblePreview.imagePage} title={visiblePreview.title} />}
-          {visiblePreview.quoteLabel && <strong>{visiblePreview.quoteLabel}</strong>}
-          {visiblePreview.text && <p>{visiblePreview.text}</p>}
-          {visiblePreview.quoteLabel && Boolean(visiblePreview.source?.sections.length) && <strong>资料预览</strong>}
-          {visiblePreview.source?.sections.map((section, index) => <p key={index}>
-            <small>{locatorLabel(section.locator)}</small><br />{section.text}
-          </p>)}
-        </div> : fragmentResult?.failure ? <p role="alert" className="error-text">{fragmentResult.failure}</p> : <p role="status">正在读取资料片段…</p>}
-      </DialogContent>}
       {(panel === 'files' || panel === 'failed' || panel === 'ocr' || panel === 'ocrQueue') && <DialogContent
         title={confirmMaterial ? '删除资料' : panel === 'files' ? '资料列表' : panel === 'failed' ? '处理失败的资料' : panel === 'ocrQueue' ? 'OCR 队列' : '已识别的资料'} closeLabel="关闭">
         {confirmMaterial ? (
@@ -517,7 +524,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
                   {sourceUrl && <a href={sourceUrl} target="_blank" rel="noopener noreferrer">打开原网页</a>}
                   {item.error_message && <p className="error-text">{item.error_message}</p>}</div>
                 <div className="library-dialog-actions">
-                  {item.status === 'ready' && item.version_id && <Button size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void openSource(item.version_id!, item.title)}>查看文字</Button>}
+                  {item.status === 'ready' && item.version_id && <Button size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => openSource({ materialVersionId: item.version_id!, materialId: item.id, title: item.title })}>查看原文</Button>}
                   {inProgress && item.job_id && <Button size="sm" variant="secondary" loading={busy === `cancel:${item.id}`} disabled={Boolean(busy)} onClick={() => void cancelJob(item)}>取消处理</Button>}
                   {['failed', 'cancelled'].includes(item.status) && <Button size="sm" variant="secondary" loading={busy === item.id} disabled={Boolean(busy)} onClick={() => void retry(item)}>重试处理</Button>}
                   <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => setConfirmMaterial(item)}>删除</Button>
@@ -536,6 +543,15 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       onSubmitFile={(file) => addFiles([file])}
     />
     <WebClipDialog open={webClipOpen} onOpenChange={setWebClipOpen} libraryId={id} libraryName={library.name} />
+    <SourceReaderDrawer open={Boolean(readerTarget)} target={readerTarget} onOpenChange={(open) => {
+      if (!open) {
+        setReaderTarget(null)
+        if (fragmentId) closeSearchResult()
+      }
+    }} onAskFollowUp={(context: ReaderActionContext) => {
+      const prompt = `请根据以下资料摘录回答我的问题。\n\n来源：${context.title} · ${context.locationLabel}\n\n${context.excerpt}\n\n我的问题：`
+      void navigate('/', { state: { preferredLibrary: context.knowledgeBaseId, initialDraft: prompt, initialMaterialIds: [context.materialId] } })
+    }} />
   </section>
 }
 

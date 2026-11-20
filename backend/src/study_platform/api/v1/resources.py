@@ -103,6 +103,7 @@ class ScopeDTO(BaseModel):
 class CitationDTO(BaseModel):
     source_label: str
     id: UUID
+    chunk_id: UUID
     material_id: UUID
     material_version_id: UUID
     knowledge_base_id: UUID

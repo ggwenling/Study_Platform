@@ -43,6 +43,7 @@ from study_platform.services.learning_llm import (
     map_fragment_hits,
     resolve_mcq_choice,
 )
+from study_platform.services.material_reader import locator_label, reader_locator
 from study_platform.services.model_connections import llm_available
 from study_platform.services.model_task import learning_task
 
@@ -64,27 +65,6 @@ def _reference_from_answer_key(answer_key) -> str:
 def _extract_choice_letter(text: str) -> str | None:
     match = _OPTION_LETTER.match(text or "")
     return match.group(1).upper() if match else None
-
-
-def _locator_label(locator: dict) -> str:
-    if locator.get("heading"):
-        line_no = locator.get("start_line")
-        return f"{locator['heading']} · 第 {line_no} 行" if isinstance(line_no, int) else str(locator["heading"])
-    if locator.get("table_path"):
-        parts = " / ".join(
-            f"表格 {part['table']}，第 {part['row']} 行，第 {part['column']} 列"
-            for part in locator["table_path"]
-        )
-        return f"{parts}，段落 {locator.get('cell_paragraph', 1)}"
-    for key, fmt in (
-        ("page", "第 {} 页"),
-        ("paragraph", "段落 {}"),
-        ("start_line", "第 {} 行"),
-        ("line", "行 {}"),
-    ):
-        if key in locator:
-            return fmt.format(locator[key])
-    return "原文"
 
 
 def _load_sources_by_item(
@@ -111,7 +91,7 @@ def _load_sources_by_item(
             and index is not None
             and index.status in ("ready", "retired")
         )
-        loc = (src.locator or {}) if available else {}
+        loc = reader_locator(src.locator or {}) if available else {}
         revealed = include_quotes is None or src.quiz_item_id in include_quotes
         reveal_quote = available and revealed
         quote_status = ("verified" if src.quote_text is not None else "unverified") if reveal_quote else (
@@ -122,8 +102,11 @@ def _load_sources_by_item(
                 "chunk_id": str(chunk.id),
                 "material_id": str(material.id),
                 "material_version_id": str(version.id),
+                "knowledge_base_id": str(kb.id),
+                "locator": loc,
+                "source_url": material.source_url if available else None,
                 "title": material.title,
-                "location_label": _locator_label(loc) if available else "来源已不可用",
+                "location_label": locator_label(loc) if available else "来源已不可用",
                 "availability": "available" if available else "unavailable",
                 "quote": (src.quote_text if src.quote_text is not None else chunk.text) if reveal_quote else None,
                 "quote_status": quote_status,

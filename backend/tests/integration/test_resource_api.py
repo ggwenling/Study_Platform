@@ -9,14 +9,16 @@ import pytest
 import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from study_platform.api.v1.auth import router as auth_router
 from study_platform.api.v1.library_detail import router as library_router
+from study_platform.api.v1.materials import router as material_router
 from study_platform.api.v1.resources import router
 from study_platform.api.v1.studio import router as studio_router
-from study_platform.core.config import Settings
+from study_platform.core.config import Settings, get_settings
 from study_platform.core.errors import ApiError, api_error_handler
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import (
@@ -33,6 +35,7 @@ from study_platform.persistence.models import (
 from study_platform.services import auth_limits
 from study_platform.services.chat import chunk_query
 from study_platform.services.learning_anchor import ensure_course_anchor
+from study_platform.services.storage import page_path, source_path
 
 pytestmark = pytest.mark.integration
 
@@ -59,6 +62,7 @@ def resource_client(monkeypatch):
         app.include_router(auth_router)
         app.include_router(router)
         app.include_router(library_router)
+        app.include_router(material_router)
         app.include_router(studio_router)
         app.add_exception_handler(ApiError, api_error_handler)
         app.dependency_overrides[get_db] = lambda: db
@@ -81,6 +85,74 @@ def signup(http):
     assert result.status_code == 201
     http.headers["Authorization"] = "Bearer " + result.json()["access_token"]
     return UUID(result.json()["user"]["id"])
+
+
+def test_reader_keeps_historical_index_context_and_caches_pdf_pages(resource_client, tmp_path, monkeypatch):
+    http, db = resource_client
+    monkeypatch.setenv("STORAGE_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    try:
+        owner = signup(http)
+        library = UUID(http.post("/knowledge-bases", json={"name": "Reader"}).json()["id"])
+        document = Material(owner_user_id=owner, knowledge_base_id=library, title="Pages.pdf", kind="other")
+        db.add(document)
+        db.flush()
+        version = MaterialVersion(
+            id=uuid4(), material_id=document.id, version_no=1, is_current=True,
+            source_mime="application/pdf", object_key=str(uuid4()), parse_status="ready",
+            source_sha256="a" * 64, byte_size=1, page_count=3,
+        )
+        db.add(version)
+        db.flush()
+        history, active = [
+            IndexVersion(
+                material_version_id=version.id, generation=generation, status="ready" if is_active else "retired",
+                is_active=is_active, pipeline_profile="test", embedding_profile="test",
+                ready_at=datetime.now(UTC),
+            )
+            for generation, is_active in [(1, False), (2, True)]
+        ]
+        db.add_all([history, active])
+        db.flush()
+        chunks = [
+            MaterialChunk(
+                material_version_id=version.id, index_version_id=index.id, ordinal=ordinal,
+                text=f"generation {index.generation} chunk {ordinal}", text_sha256="b" * 64,
+                locator={"page": min(ordinal + 1, 3)},
+            )
+            for index, count in [(history, 5), (active, 1)]
+            for ordinal in range(count)
+        ]
+        db.add_all(chunks)
+        db.commit()
+        path = source_path(version.id)
+        path.parent.mkdir()
+        with Image.new("RGB", (200, 100), "white") as image:
+            image.save(path, format="PDF", save_all=True, append_images=[image, image])
+        base = f"/material-versions/{version.id}"
+        assert http.get(f"{base}/reader").json()["target_chunk_id"] == str(chunks[-1].id)
+        response = http.get(f"{base}/reader", params={"chunk_id": str(chunks[2].id), "window": 1})
+        assert response.status_code == 200, response.text
+        context = response.json()
+        assert context["target_page"] == 3 and context["can_render_pages"]
+        assert context["total_chunks"] == 5 and context["has_prev"] and context["has_next"]
+        assert [row["ordinal"] for row in context["chunks"]] == [1, 2, 3]
+        assert [row["is_target"] for row in context["chunks"]] == [False, True, False]
+        assert context["target_quote"] == chunks[2].text
+        assert http.get(f"{base}/reader", params={"chunk_id": str(uuid4())}).status_code == 404
+
+        assert not page_path(version.id, 2).is_file()
+        rendered = http.get(f"{base}/pages/2")
+        assert rendered.status_code == 200 and rendered.headers["content-type"] == "image/png"
+        assert rendered.content == page_path(version.id, 2).read_bytes()
+        path.unlink()
+        assert http.get(f"{base}/pages/2").content == rendered.content
+        assert http.get(f"{base}/pages/4").status_code == 404
+        signup(http)
+        assert http.get(f"{base}/reader").status_code == 404
+        assert http.get(f"{base}/pages/2").status_code == 404
+    finally:
+        get_settings.cache_clear()
 
 
 def test_due_flashcards_across_decks_and_dashboard(resource_client):

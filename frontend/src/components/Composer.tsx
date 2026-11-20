@@ -36,11 +36,12 @@ export type ComposerHandle = {
   editAsNew: (content: string, scope: Scope | null) => void
 }
 
-export function Composer({ demo = false, conversationId, preferredLibrary, initialDraft, onInitialDraftApplied, ref }: {
+export function Composer({ demo = false, conversationId, preferredLibrary, initialDraft, initialMaterialIds, onInitialDraftApplied, ref }: {
   demo?: boolean
   conversationId?: string
   preferredLibrary?: string
   initialDraft?: string
+  initialMaterialIds?: string[]
   onInitialDraftApplied?: () => void
   ref?: Ref<ComposerHandle>
 }) {
@@ -80,15 +81,15 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
     setDraftState(() => ({
       text: initialDraft,
       libraryId: preferredLibrary,
-      materialIds: [],
-      scoped: false,
+      materialIds: initialMaterialIds ?? [],
+      scoped: Boolean(initialMaterialIds?.length),
       supplement: false,
       summaryMode: false,
       scopeRequired: false,
     }))
     setScopeStatus(undefined)
     onInitialDraftApplied?.()
-  }, [initialDraft, preferredLibrary, setDraftState, onInitialDraftApplied, user])
+  }, [initialDraft, initialMaterialIds, preferredLibrary, setDraftState, onInitialDraftApplied, user])
 
   useEffect(() => {
     if (!reducedMotion) void import('./ComposerMetalSend')

@@ -1,6 +1,6 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
 import type { DueFlashcard } from './types'
-import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
+import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, MaterialReader, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
@@ -193,6 +193,8 @@ export const api = {
   job: (id: string) => request<Job>(`/jobs/${pathId(id)}`),
   cancelJob: (id: string) => request<Pick<Job, 'id' | 'status'>>(`/jobs/${pathId(id)}/cancel`, json('POST')),
   preview: (id: string) => request<MaterialPreview>(`/material-versions/${pathId(id)}/preview`),
+  materialReader: (id: string, chunkId?: string | null, window = 3, signal?: AbortSignal) =>
+    request<MaterialReader>(`/material-versions/${pathId(id)}/reader` + query({ chunk_id: chunkId ?? undefined, window: String(window) }), { signal }),
   content: (id: string) => checkedFetch(`/material-versions/${pathId(id)}/content`),
   pageImage: (id: string, page: number) => checkedFetch(`/material-versions/${pathId(id)}/pages/${page}`),
   source: (id: string) => request<Citation>(`/sources/${pathId(id)}`),
