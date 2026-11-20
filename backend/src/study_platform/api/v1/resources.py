@@ -68,6 +68,7 @@ class KnowledgeBaseDTO(BaseModel):
     updated_at: datetime
     embedding_connection_id: UUID | None = None
     embedding_binding: dict | None = None
+    retrieval_settings: dict | None = None
 
 
 class KnowledgeBasePage(BaseModel):
@@ -149,7 +150,7 @@ class MessagePage(BaseModel):
 
 def kb_dto(kb):
     return {k: getattr(kb, k) for k in ("id", "name", "description", "created_at", "updated_at",
-                                      "embedding_connection_id", "embedding_binding")}
+                                      "embedding_connection_id", "embedding_binding", "retrieval_settings")}
 
 
 def conversation_dto(row):
@@ -240,6 +241,8 @@ def update_knowledge_base(
 def delete_knowledge_base(
     kb_id: UUID, db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
+    from study_platform.services.reindex import cancel_for_deleted_library
+
     row = db.scalar(
         sa.select(KnowledgeBase)
         .where(
@@ -284,6 +287,7 @@ def delete_knowledge_base(
             .where(AiJobAttempt.job_id == job.id, AiJobAttempt.finished_at.is_(None))
             .values(outcome="cancelled", finished_at=now)
         )
+    cancel_for_deleted_library(db, row)
     runs = db.scalars(
         sa.select(AiWorkflowRun)
         .where(
@@ -631,6 +635,8 @@ class CapabilitiesDTO(BaseModel):
     library_rag: dict[str, bool] = Field(default_factory=dict)
     ocr: bool
     vision: bool
+    rerank: bool
+    retrieval_defaults: dict[str, int | float | bool]
     answer_modes: list[str]
     upload_mime_types: list[str]
     max_upload_bytes: int
@@ -656,6 +662,10 @@ def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
         vision = bool(default_snapshot(db, user.id, "vision").get("id"))
     except ApiError:
         vision = False
+    try:
+        rerank = bool(default_snapshot(db, user.id, "rerank").get("id"))
+    except ApiError:
+        rerank = False
     library_rag = {str(kb): available["llm"] and (status == "ready" if connection else bool(settings.embedding_api_key.get_secret_value()))
                    for kb, connection, status in libraries}
     return {
@@ -663,6 +673,14 @@ def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
         "library_rag": library_rag,
         "ocr": True,
         "vision": vision,
+        "rerank": rerank,
+        "retrieval_defaults": {
+            "top_k": settings.retrieval_top_k,
+            "lexical_weight": settings.retrieval_lexical_weight,
+            "min_similarity": settings.retrieval_min_similarity,
+            "rerank_enabled": False,
+            "rerank_candidate_k": settings.retrieval_candidate_k,
+        },
         "answer_modes": ["knowledge_only", "with_general"],
         "upload_mime_types": sorted(set(MIMES.values())),
         "max_upload_bytes": settings.max_upload_bytes,

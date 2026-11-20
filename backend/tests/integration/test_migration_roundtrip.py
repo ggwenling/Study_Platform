@@ -79,7 +79,8 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                     assert ("source_url" in material_columns) is upgraded
                     if upgraded:
                         notes = {column["name"] for column in inspector.get_columns("notes", schema="study")}
-                        assert "lexical" in notes
+                        library = {column["name"] for column in inspector.get_columns("knowledge_bases", schema="study")}
+                        assert "lexical" in notes and "retrieval_settings" in library
                         assert any(index["name"] == "ix_notes_lexical" for index in inspector.get_indexes("notes", schema="study"))
                     version = connection.scalar(
                         sa.text("SELECT version_num FROM study.alembic_version")
@@ -182,6 +183,24 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                 with engine.connect() as connection:
                     assert connection.scalar(sa.text("SELECT lexical @@ plainto_tsquery('simple', '雪松') "
                         "FROM study.notes WHERE id=:id"), {"id": note_id})
+            with engine.begin() as connection:
+                # Exercise the widened constraints without leaving data that would prevent downgrade.
+                revision_tx = connection.begin_nested()
+                connection.execute(sa.text("INSERT INTO study.model_connections(owner_user_id, kind, name, versions) "
+                    "VALUES (:owner, 'rerank', 'Rank', '{}'::jsonb)"), {"owner": owner})
+                connection.execute(sa.text("INSERT INTO study.model_call_records(owner_user_id, purpose, model_name, success) "
+                    "VALUES (:owner, 'rerank', 'rank-test', true)"), {"owner": owner})
+                connection.execute(sa.text("INSERT INTO study.ai_jobs(owner_user_id, job_type, resource_type, resource_id, "
+                    "status, attempt_count, max_attempts, next_run_at) "
+                    "VALUES (:owner, 'reindex', 'knowledge_base', :kb, 'queued', 0, 1, now())"), {"owner": owner, "kb": kb_ids[0]})
+                revision_tx.rollback()
+            command.downgrade(config, "0014_vision_model_connections")
+            with engine.connect() as connection:
+                inspector = sa.inspect(connection)
+                assert "lexical" not in {column["name"] for column in inspector.get_columns("notes", schema="study")}
+                assert "retrieval_settings" not in {column["name"] for column in inspector.get_columns("knowledge_bases", schema="study")}
+            command.upgrade(config, "head")
+            check(True)
             with engine.begin() as connection:
                 vision_connection = connection.scalar(sa.text(
                     "INSERT INTO study.model_connections(owner_user_id, kind, name, versions) "

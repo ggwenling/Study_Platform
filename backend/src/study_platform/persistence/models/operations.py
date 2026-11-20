@@ -76,7 +76,7 @@ class AiJob(Base):
         sa.CheckConstraint("max_attempts > 0", name="ck_ai_jobs_max_attempts_positive"),
         sa.CheckConstraint("fencing >= 0", name="ck_ai_jobs_fencing_nonnegative"),
         sa.CheckConstraint(
-            "job_type IN ('ingest', 'notes', 'quiz', 'flashcards', 'grade', 'cleanup', 'classification')",
+            "job_type IN ('ingest', 'notes', 'quiz', 'flashcards', 'grade', 'cleanup', 'classification', 'reindex')",
             name="ck_ai_jobs_job_type_values",
         ),
         sa.CheckConstraint(

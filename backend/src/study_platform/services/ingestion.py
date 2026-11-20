@@ -3,7 +3,6 @@
 import hashlib
 import re
 import shutil
-import socket
 import zipfile
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
@@ -27,7 +26,7 @@ from study_platform.persistence.models.materials import (
     MaterialVersion,
 )
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
-from study_platform.services import chunking, classification, model_connections
+from study_platform.services import chunking, classification, job_queue, model_connections
 from study_platform.services.lexical import lexical_column_values
 from study_platform.services.material_reader import PDFIUM_LOCK
 from study_platform.services.model_usage import ModelUsageContext
@@ -368,72 +367,10 @@ def chunks(text, size=800, overlap=120):
         start += size - overlap
 
 
-class LostLease(Exception):
-    pass
-
+LostLease = job_queue.LostLease
 
 def claim(db):
-    current = now()
-    job = db.scalar(
-        select(AiJob)
-        .where(
-            AiJob.job_type.in_(("ingest", "classification")),
-            AiJob.cancel_requested_at.is_(None),
-            sa.or_(
-                sa.and_(AiJob.status == "queued", AiJob.next_run_at <= current),
-                sa.and_(AiJob.status == "running", AiJob.lease_expires_at < current),
-            ),
-        )
-        .order_by(AiJob.created_at)
-        .with_for_update(skip_locked=True)
-        .limit(1)
-    )
-    if not job:
-        return None
-    if job.attempt_count >= job.max_attempts:
-        previous = db.scalar(
-            select(AiJobAttempt).where(
-                AiJobAttempt.job_id == job.id, AiJobAttempt.attempt_no == job.attempt_count
-            )
-        )
-        if previous and previous.finished_at is None:
-            previous.finished_at = current
-            previous.outcome = "failed"
-            previous.failure_code = "lease_expired"
-        job.status = "failed"
-        job.failure_code = "lease_expired"
-        job.finished_at = current
-        db.commit()
-        return None
-    if job.status == "running":
-        previous = db.scalar(
-            select(AiJobAttempt).where(
-                AiJobAttempt.job_id == job.id, AiJobAttempt.attempt_no == job.attempt_count
-            )
-        )
-        if previous and previous.finished_at is None:
-            previous.finished_at = current
-            previous.outcome = "retry"
-            previous.failure_code = "lease_expired"
-    job.status = "running"
-    job.failure_code = None
-    job.attempt_count += 1
-    job.fencing += 1
-    job.lease_expires_at = current + timedelta(seconds=get_settings().job_lease_seconds)
-    job.lease_token_hash = hashlib.sha256(uuid4().bytes).hexdigest()
-    job.result = {"phase": "parsing"}
-    db.add(
-        AiJobAttempt(
-            job_id=job.id,
-            attempt_no=job.attempt_count,
-            worker_id=socket.gethostname()[:128],
-            fencing=job.fencing,
-            started_at=current,
-        )
-    )
-    result = (job.id, job.resource_id, job.fencing, job.attempt_count)
-    db.commit()
-    return result
+    return job_queue.claim(db, ("ingest", "classification", "reindex"))
 
 
 def locked_job(db, job_id, fence):
@@ -490,14 +427,20 @@ def update_phase(db, job_id, fence, phase, **details):
     return owner_id
 
 
-def run_once():
+def run_once(claimed=None):
     factory = session_factory()
     with factory() as db:
-        claim_result = claim(db)
+        claim_result = claimed or claim(db)
         if not claim_result:
             return False
         job_id, version_id, fence, attempt_no = claim_result
         job = db.get(AiJob, job_id)
+        if job.job_type == "reindex":
+            from study_platform.services import reindex
+
+            db.rollback()
+            reindex.run(job_id, version_id, fence)
+            return True
         version = db.get(MaterialVersion, version_id)
         material = db.get(Material, version.material_id)
         owner = job.owner_user_id

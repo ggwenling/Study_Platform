@@ -11,7 +11,7 @@ class ModelCallRecord(Base):
     __table_args__ = (
         sa.CheckConstraint(
             "purpose IN ('chat', 'learning_quiz', 'learning_grade', 'query_rewrite', "
-            "'embedding', 'classification', 'connection_test', 'vision_ingest', 'vision_grade')",
+            "'embedding', 'classification', 'connection_test', 'vision_ingest', 'vision_grade', 'rerank')",
             name="ck_model_call_records_purpose_values",
         ),
         sa.CheckConstraint("elapsed_ms IS NULL OR elapsed_ms >= 0", name="ck_model_call_records_elapsed"),

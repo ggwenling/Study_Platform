@@ -1,6 +1,7 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
 import type { DueFlashcard, ExtractionMode, ModelConnectionKind } from './types'
-import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, MaterialReader, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
+import type { ReindexStatus, ReindexSubmitted } from './types'
+import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, MaterialReader, Message, ModelUsageSummary, Page, RetrievalSettings, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
@@ -169,9 +170,15 @@ export const api = {
   knowledgeBase: (id: string) => request<KnowledgeBase>(`/knowledge-bases/${pathId(id)}`),
   createKnowledgeBase: (body: KnowledgeBaseInput) => request<KnowledgeBase>('/knowledge-bases', json('POST', body)),
   updateKnowledgeBase: (id: string, body: KnowledgeBaseInput) => request<KnowledgeBase>(`/knowledge-bases/${pathId(id)}`, json('PATCH', body)),
+  updateRetrievalSettings: (id: string, body: Partial<RetrievalSettings>) =>
+    request<{ retrieval_settings: Partial<RetrievalSettings> | null }>(`/knowledge-bases/${pathId(id)}/retrieval-settings`, json('PATCH', body)),
   deleteKnowledgeBase: (id: string) => request<void>(`/knowledge-bases/${pathId(id)}`, json('DELETE')),
   libraryOverview: (id: string, signal?: AbortSignal) => request<LibraryOverview>(`/knowledge-bases/${pathId(id)}/overview`, { signal }),
   syncLibrary: (id: string) => request<LibraryOverview>(`/knowledge-bases/${pathId(id)}/sync`, json('POST')),
+  startReindex: (id: string, connectionId: string | null) => request<ReindexSubmitted>(`/knowledge-bases/${pathId(id)}/reindex`, json('POST', { embedding_connection_id: connectionId })),
+  reindexStatus: (id: string, signal?: AbortSignal) => request<ReindexStatus | null>(`/knowledge-bases/${pathId(id)}/reindex-status`, { signal }),
+  retryReindex: (id: string) => request<ReindexStatus>(`/knowledge-bases/${pathId(id)}/reindex/retry-failed`, json('POST')),
+  cancelReindex: (id: string) => request<ReindexStatus>(`/knowledge-bases/${pathId(id)}/reindex/cancel`, json('POST')),
   documentLocations: (id: string, material: string) => request<DocumentLocation[]>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/locations`),
   fragments: (id: string, filters: Record<string, string | undefined>, signal?: AbortSignal) =>
     request<FragmentPage>(`/knowledge-bases/${pathId(id)}/fragments` + query(filters), { signal }),
@@ -317,7 +324,7 @@ export const api = {
   workshop: {
     hitTest: (
       knowledgeBaseId: string,
-      body: { query: string; top_k?: number; lexical_weight?: number; material_ids?: string[] | null },
+      body: { query: string; top_k?: number; lexical_weight?: number; min_similarity?: number; rerank_enabled?: boolean; rerank_connection_id?: string | null; rerank_candidate_k?: number; material_ids?: string[] | null },
     ) =>
       request<HitTestResponse>(
         `/knowledge-bases/${pathId(knowledgeBaseId)}/hit-test`,

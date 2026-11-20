@@ -29,6 +29,7 @@ PURPOSES = frozenset(
         "connection_test",
         "vision_ingest",
         "vision_grade",
+        "rerank",
     }
 )
 

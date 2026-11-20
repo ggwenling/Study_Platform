@@ -24,11 +24,13 @@ from study_platform.persistence.models.identity import Material, User
 from study_platform.persistence.models.knowledge import KnowledgeBase
 from study_platform.persistence.models.materials import (
     IndexVersion,
+    MaterialChunk,
     MaterialSection,
     MaterialVersion,
 )
+from study_platform.persistence.models.model_connections import ModelConnection
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
-from study_platform.services import ingestion, model_calls, model_connections
+from study_platform.services import ingestion, job_queue, model_calls, model_connections, reindex
 from study_platform.services.storage import source_path
 from study_platform.services.web_clip import WebClip
 
@@ -130,6 +132,145 @@ def test_worker_publishes_text_and_vector(state):
             )
             == "hello"
         )
+
+
+@pytest.mark.parametrize("cancel", [False, True], ids=["retry", "cancel"])
+def test_reindex_keeps_both_active_indexes_until_atomic_switch(state, monkeypatch, cancel):
+    factory, _, first_version, material_id, kb_id = state
+    monkeypatch.setattr(reindex, "session_factory", lambda: factory)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **__: nullcontext())
+    monkeypatch.setattr(ingestion.classification, "enqueue", lambda *_: None)
+    assert ingestion.run_once()
+    with factory() as db:
+        from study_platform.api.v1.materials import create_job
+
+        kb = db.get(KnowledgeBase, kb_id)
+        owner = db.get(User, kb.owner_user_id)
+        material = Material(id=uuid4(), owner_user_id=owner.id, knowledge_base_id=kb.id,
+                            title="Second", kind="other", status="active")
+        second = MaterialVersion(id=uuid4(), material_id=material.id, version_no=1, is_current=True,
+                                 source_mime="text/plain", source_sha256="b" * 64, byte_size=6,
+                                 object_key=str(uuid4()), parse_status="pending")
+        target = ModelConnection(id=uuid4(), owner_user_id=owner.id, kind="embedding", name="Next",
+                                 status="ready", revision=1, versions={"1": {
+                                     "base_url": "https://example.test/v1", "model": "vector-next",
+                                 }})
+        db.add_all([material, target])
+        db.flush()
+        db.add(second)
+        db.flush()
+        create_job(db, owner, second)
+        db.commit()
+        source = source_path(second.id)
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("second", encoding="utf-8")
+        versions = [first_version, second.id]
+        target_id = target.id
+        owner_id = owner.id
+    assert ingestion.run_once()
+    with factory() as db:
+        old_ids = set(db.scalars(sa.select(IndexVersion.id).where(
+            IndexVersion.material_version_id.in_(versions), IndexVersion.is_active.is_(True),
+        )))
+        assert len(old_ids) == 2
+
+    app = FastAPI()
+    app.include_router(library_detail.router)
+    app.add_exception_handler(ApiError, api_error_handler)
+
+    def provide_db():
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = provide_db
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=owner_id)
+    prefix = f"/knowledge-bases/{kb_id}"
+    calls = []
+    with TestClient(app) as client:
+        created = client.post(f"{prefix}/reindex", json={"embedding_connection_id": str(target_id)})
+        assert created.status_code == 202, created.text
+        job_id = created.json()["job_id"]
+        assert created.json()["total_materials"] == 2
+        assert client.post(f"{prefix}/reindex", json={}).json()["code"] == "reindex_in_progress"
+
+        def embed(texts, **_):
+            calls.extend(texts)
+            status = client.get(f"{prefix}/reindex-status").json()
+            assert status["running"] == 1 and status["status"] == "running"
+            with factory() as db:
+                assert not db.get(KnowledgeBase, kb_id).embedding_connection_id
+                assert old_ids == set(db.scalars(sa.select(IndexVersion.id).where(
+                    IndexVersion.material_version_id.in_(versions), IndexVersion.is_active.is_(True),
+                )))
+            if len(calls) == 2:
+                assert status["succeeded"] == 1
+                if cancel:
+                    response = client.post(f"{prefix}/reindex/cancel")
+                    assert response.json()["status"] == "cancelled", response.text
+                else:
+                    raise ApiError(502, "embedding_unavailable", "test failure")
+            return [[0.1] * 1024 for _ in texts]
+
+        monkeypatch.setattr(reindex, "embed_texts", embed)
+
+        def run():
+            with factory() as db:
+                claimed = job_queue.claim(db, ("reindex",))
+            assert str(claimed[0]) == job_id
+            assert ingestion.run_once(claimed)
+
+        run()
+        status = client.get(f"{prefix}/reindex-status").json()
+        if cancel:
+            assert status["status"] == "cancelled"
+        else:
+            assert (status["status"], status["succeeded"], status["failed"]) == ("failed", 1, 1)
+            assert status["failures"][0]["error_code"] == "embedding_unavailable"
+            assert client.post(f"{prefix}/reindex/retry-failed").status_code == 202
+            run()
+            assert len(calls) == 3 and calls[1] == calls[2]
+            assert client.get(f"{prefix}/reindex-status").json()["status"] == "succeeded"
+    with factory() as db:
+        indexes = db.scalars(sa.select(IndexVersion).where(IndexVersion.material_version_id.in_(versions))).all()
+        assert sum(row.is_active for row in indexes) == 2
+        assert db.get(KnowledgeBase, kb_id).embedding_connection_id == (None if cancel else target_id)
+        assert all(row.is_active is cancel for row in indexes if row.id in old_ids)
+        assert all(row.status == "ready" and row.embedding_profile == f"connection:{target_id}:1024"
+                   for row in indexes if row.id not in old_ids)
+        assert len(indexes) == (2 if cancel else 4)
+        assert len(db.scalars(sa.select(MaterialChunk.id).where(MaterialChunk.index_version_id.in_(old_ids))).all()) == 2
+        assert db.get(Material, material_id).title == "Test"
+
+
+def test_reindex_yields_to_pending_ingestion_and_includes_its_new_index(state, monkeypatch):
+    factory, _, version_id, _, kb_id = state
+    monkeypatch.setattr(reindex, "session_factory", lambda: factory)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **__: nullcontext())
+    monkeypatch.setattr(reindex, "embed_texts", lambda texts, **_: [[0.1] * 1024 for _ in texts])
+    with factory() as db:
+        kb = db.get(KnowledgeBase, kb_id, with_for_update=True)
+        submitted = reindex.enqueue(db, kb, None, True)
+        assert submitted["total_materials"] == 0
+        claimed = job_queue.claim(db, ("reindex",))
+    assert ingestion.run_once(claimed)
+    with factory() as db:
+        waiting = db.get(AiJob, submitted["job_id"])
+        assert waiting.status == "queued"
+        assert waiting.result["phase"] == "waiting_for_ingestion"
+        assert db.get(KnowledgeBase, kb_id).embedding_binding is None
+        claimed = job_queue.claim(db, ("ingest",))
+    assert ingestion.run_once(claimed)
+    with factory() as db:
+        db.get(AiJob, submitted["job_id"]).next_run_at = job_queue.now()
+        db.commit()
+        claimed = job_queue.claim(db, ("reindex",))
+    assert ingestion.run_once(claimed)
+    with factory() as db:
+        finished = reindex.status(db.get(AiJob, submitted["job_id"]))
+        assert (finished["status"], finished["total"], finished["succeeded"]) == ("succeeded", 1, 1)
+        indexes = db.scalars(sa.select(IndexVersion).where(IndexVersion.material_version_id == version_id)
+                            .order_by(IndexVersion.generation)).all()
+        assert [(index.generation, index.status) for index in indexes] == [(1, "retired"), (2, "ready")]
 
 
 def test_web_clip_persists_source_and_publishes_markdown(state, monkeypatch):

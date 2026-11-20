@@ -170,7 +170,7 @@ def llm_available(owner):
 
 
 @contextmanager
-def task(owner, *, llm=None, embedding=None, vision=None, kb_id=None):
+def task(owner, *, llm=None, embedding=None, vision=None, rerank=None, kb_id=None):
     existing = selection.get()
     if existing and existing["owner"] == owner:
         yield existing
@@ -185,7 +185,7 @@ def task(owner, *, llm=None, embedding=None, vision=None, kb_id=None):
             if kb_id
             else None
         )
-        for config in (llm, embedding, vision):
+        for config in (llm, embedding, vision, rerank):
             if config and config.get("id"):
                 row = owned(db, owner, UUID(config["id"]), lock=True)
                 lease = ModelConnectionLease(
@@ -196,7 +196,7 @@ def task(owner, *, llm=None, embedding=None, vision=None, kb_id=None):
                 db.add(lease)
                 lease_ids.append(lease.id)
         db.commit()
-    token = selection.set({"owner": owner, "llm": llm, "embedding": embedding, "vision": vision})
+    token = selection.set({"owner": owner, "llm": llm, "embedding": embedding, "vision": vision, "rerank": rerank})
     try:
         yield selection.get()
     finally:

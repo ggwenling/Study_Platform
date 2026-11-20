@@ -73,6 +73,7 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
         "last_synced_at",
         "embedding_connection_id",
         "embedding_binding",
+        "retrieval_settings",
         "created_at",
         "updated_at",
         "deleted_at",

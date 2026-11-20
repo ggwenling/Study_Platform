@@ -2031,6 +2031,216 @@
         }
       }
     },
+    "/api/v1/knowledge-bases/{kb_id}/reindex": {
+      "post": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Start Reindex",
+        "operationId": "start_reindex_api_v1_knowledge_bases__kb_id__reindex_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexKnowledgeBaseBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReindexSubmitted"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/reindex-status": {
+      "get": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Reindex Status",
+        "operationId": "reindex_status_api_v1_knowledge_bases__kb_id__reindex_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReindexStatus"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Reindex Status Api V1 Knowledge Bases  Kb Id  Reindex Status Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/reindex/retry-failed": {
+      "post": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Retry Reindex",
+        "operationId": "retry_reindex_api_v1_knowledge_bases__kb_id__reindex_retry_failed_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReindexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/reindex/cancel": {
+      "post": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Cancel Reindex",
+        "operationId": "cancel_reindex_api_v1_knowledge_bases__kb_id__reindex_cancel_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReindexStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/knowledge-bases/{kb_id}/overview": {
       "get": {
         "tags": [
@@ -2573,6 +2783,64 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ClassificationState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/retrieval-settings": {
+      "patch": {
+        "tags": [
+          "knowledge base detail"
+        ],
+        "summary": "Patch Retrieval Settings",
+        "operationId": "patch_retrieval_settings_api_v1_knowledge_bases__kb_id__retrieval_settings_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetrievalSettingsPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalSettingsResponse"
                 }
               }
             }
@@ -3846,7 +4114,8 @@
               "enum": [
                 "llm",
                 "embedding",
-                "vision"
+                "vision",
+                "rerank"
               ],
               "type": "string",
               "title": "Kind"
@@ -4961,6 +5230,27 @@
             "type": "boolean",
             "title": "Vision"
           },
+          "rerank": {
+            "type": "boolean",
+            "title": "Rerank"
+          },
+          "retrieval_defaults": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Retrieval Defaults"
+          },
           "answer_modes": {
             "items": {
               "type": "string"
@@ -4985,6 +5275,8 @@
           "rag",
           "ocr",
           "vision",
+          "rerank",
+          "retrieval_defaults",
           "answer_modes",
           "upload_mime_types",
           "max_upload_bytes"
@@ -5339,7 +5631,8 @@
             "enum": [
               "llm",
               "embedding",
-              "vision"
+              "vision",
+              "rerank"
             ],
             "title": "Kind"
           },
@@ -5446,7 +5739,8 @@
             "enum": [
               "llm",
               "embedding",
-              "vision"
+              "vision",
+              "rerank"
             ],
             "title": "Kind"
           },
@@ -6225,18 +6519,79 @@
             "title": "Query"
           },
           "top_k": {
-            "type": "integer",
-            "maximum": 20.0,
-            "minimum": 1.0,
-            "title": "Top K",
-            "default": 6
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top K"
           },
           "lexical_weight": {
-            "type": "number",
-            "maximum": 2.0,
-            "minimum": 0.0,
-            "title": "Lexical Weight",
-            "default": 0.4
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 2.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lexical Weight"
+          },
+          "min_similarity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 0.95,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Similarity"
+          },
+          "rerank_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Enabled"
+          },
+          "rerank_connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Connection Id"
+          },
+          "rerank_candidate_k": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 50.0,
+                "minimum": 5.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Candidate K"
           },
           "material_ids": {
             "anyOf": [
@@ -6357,6 +6712,39 @@
           "rrf_score": {
             "type": "number",
             "title": "Rrf Score"
+          },
+          "rrf_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rrf Rank"
+          },
+          "rerank_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Rank"
+          },
+          "rerank_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Score"
           }
         },
         "type": "object",
@@ -6399,6 +6787,22 @@
           "min_similarity_threshold": {
             "type": "number",
             "title": "Min Similarity Threshold"
+          },
+          "rerank_enabled": {
+            "type": "boolean",
+            "title": "Rerank Enabled",
+            "default": false
+          },
+          "rerank_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Error"
           },
           "items": {
             "items": {
@@ -6545,6 +6949,18 @@
               }
             ],
             "title": "Embedding Binding"
+          },
+          "retrieval_settings": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Settings"
           }
         },
         "type": "object",
@@ -7373,6 +7789,154 @@
         ],
         "title": "RegisterBody"
       },
+      "ReindexFailure": {
+        "properties": {
+          "material_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Material Version Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "error_code": {
+            "type": "string",
+            "title": "Error Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "material_version_id",
+          "title",
+          "error_code"
+        ],
+        "title": "ReindexFailure"
+      },
+      "ReindexKnowledgeBaseBody": {
+        "properties": {
+          "embedding_connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Connection Id"
+          },
+          "rechunk": {
+            "type": "boolean",
+            "title": "Rechunk",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "ReindexKnowledgeBaseBody"
+      },
+      "ReindexStatus": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "succeeded": {
+            "type": "integer",
+            "title": "Succeeded"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "running": {
+            "type": "integer",
+            "title": "Running"
+          },
+          "target_model": {
+            "type": "string",
+            "title": "Target Model"
+          },
+          "target_connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Connection Id"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/ReindexFailure"
+            },
+            "type": "array",
+            "title": "Failures"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "total",
+          "succeeded",
+          "failed",
+          "running",
+          "target_model",
+          "target_connection_id",
+          "failures",
+          "error_code"
+        ],
+        "title": "ReindexStatus"
+      },
+      "ReindexSubmitted": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "total_materials": {
+            "type": "integer",
+            "title": "Total Materials"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "total_materials"
+        ],
+        "title": "ReindexSubmitted"
+      },
       "ReparseRequest": {
         "properties": {
           "extraction_mode": {
@@ -7426,6 +7990,108 @@
           "email"
         ],
         "title": "ResetRequest"
+      },
+      "RetrievalSettingsPatch": {
+        "properties": {
+          "top_k": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top K"
+          },
+          "lexical_weight": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lexical Weight"
+          },
+          "min_similarity": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 0.95,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Similarity"
+          },
+          "rerank_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Enabled"
+          },
+          "rerank_connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Connection Id"
+          },
+          "rerank_candidate_k": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 50.0,
+                "minimum": 5.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Candidate K"
+          }
+        },
+        "type": "object",
+        "title": "RetrievalSettingsPatch"
+      },
+      "RetrievalSettingsResponse": {
+        "properties": {
+          "retrieval_settings": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Settings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "retrieval_settings"
+        ],
+        "title": "RetrievalSettingsResponse"
       },
       "RetrievalUpdate": {
         "properties": {

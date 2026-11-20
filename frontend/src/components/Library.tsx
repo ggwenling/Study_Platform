@@ -24,6 +24,7 @@ import { LibraryClassification } from './LibraryClassification'
 import { LibraryFragments, number } from './LibraryFragments'
 import { LibraryStudio } from './LibraryStudio'
 import { LibraryHitTest } from './LibraryHitTest'
+import { LibraryReindex } from './LibraryReindex'
 import { VisionReparseDialog } from './VisionReparseDialog'
 import { SourceReaderDrawer, type ReaderActionContext, type SourceReaderTarget } from './SourceReaderDrawer'
 import { canUseVisionForMime } from '@/visionUi'
@@ -119,6 +120,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   const [panel, setPanel] = useState<Panel>()
   const [pasteOpen, setPasteOpen] = useState(false)
   const [webClipOpen, setWebClipOpen] = useState(false)
+  const [reindexOpen, setReindexOpen] = useState(false)
   const [visionForNextUpload, setVisionForNextUpload] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [confirmMaterial, setConfirmMaterial] = useState<Material | null>(null)
@@ -430,6 +432,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
             { label: '导入资料', icon: <Upload size={16} />, onSelect: () => fileInput.current?.click() },
             { label: '随手贴文本', icon: <FilePlus2 size={16} />, onSelect: () => setPasteOpen(true) },
             { label: '管理资料', icon: <FileText size={16} />, onSelect: () => { setConfirmMaterial(null); setPanel('files') } },
+            { label: '重建索引', icon: <RefreshCw size={16} />, onSelect: () => setReindexOpen(true) },
             { label: '新建知识库', icon: <Plus size={16} />, onSelect: create },
             ...libraries.filter((item) => item.id !== id).map((item, index) => ({ label: item.name, icon: <Folder size={16} />, separatorBefore: index === 0, onSelect: () => select(item.id) })),
             { label: '删除知识库', icon: <Trash2 size={16} />, destructive: true, separatorBefore: true, onSelect: () => setPanel('deleteKb') },
@@ -441,6 +444,11 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
           if (files.length) addFiles(files)
         }} />
       </header>
+      <LibraryReindex library={library} open={reindexOpen} onOpenChange={setReindexOpen} onPublished={() => {
+        setFragmentRevision((value) => value + 1)
+        reloadData()
+        refresh()
+      }} />
       {capabilities?.vision && <p className="muted library-upload-note">
         <Switch aria-label="本次导入的图片或 PDF 使用视觉解析（可能产生费用）" label="本次导入的图片或 PDF 使用视觉解析（可能产生费用）"
           checked={visionForNextUpload} onCheckedChange={setVisionForNextUpload} />

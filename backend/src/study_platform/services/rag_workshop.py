@@ -11,7 +11,6 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from study_platform.api.v1.materials import missing, owned_kb
-from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
 from study_platform.persistence.models import (
     AiJob,
@@ -31,7 +30,9 @@ from study_platform.services.lexical import (
 from study_platform.services.material_reader import locator_label
 from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.models import embed_texts
-from study_platform.services.retrieval import LEXICAL_IDF_POOL
+from study_platform.services.rerank import rerank
+from study_platform.services.retrieval import LEXICAL_IDF_POOL, dedup_documents
+from study_platform.services.retrieval_settings import effective_settings, rerank_snapshot
 
 
 def _public_locator(locator: dict | None) -> dict:
@@ -51,29 +52,57 @@ def run_hit_test(
     user: Any,
     kb_id: UUID,
     query: str,
-    top_k: int = 6,
-    lexical_weight: float = 0.4,
+    top_k: int | None = None,
+    lexical_weight: float | None = None,
+    min_similarity: float | None = None,
+    rerank_enabled: bool | None = None,
+    rerank_connection_id: UUID | None = None,
+    rerank_connection_override: bool = False,
+    rerank_candidate_k: int | None = None,
     material_ids: list[UUID] | None = None,
 ) -> dict[str, Any]:
     cleaned_query = query.strip()
     if not cleaned_query:
         raise ApiError(422, "validation_error", "测试提问不能为空")
 
-    owned_kb(db, user, kb_id)
-    with model_connections.task(user.id, llm={"id": None, "kind": "llm"}, kb_id=kb_id):
-        index_ids = visible_indices(db, user.id, kb_id, material_ids)
-        terms = lexical_query_terms(cleaned_query)
-        settings = get_settings()
-        min_sim = float(settings.retrieval_min_similarity)
+    kb = owned_kb(db, user, kb_id, lock=True)
+    retrieval = effective_settings(kb.retrieval_settings)
+    for key, value in (
+        ("top_k", top_k),
+        ("lexical_weight", lexical_weight),
+        ("min_similarity", min_similarity),
+        ("rerank_enabled", rerank_enabled),
+        ("rerank_candidate_k", rerank_candidate_k),
+    ):
+        if value is not None:
+            retrieval[key] = value
+    if rerank_connection_override:
+        retrieval["rerank_connection_id"] = str(rerank_connection_id) if rerank_connection_id else None
+    top_k = int(retrieval["top_k"])
+    lexical_weight = float(retrieval["lexical_weight"])
+    rerank_enabled = bool(retrieval["rerank_enabled"])
+    embedding_model = model_connections.library_snapshot(db, user.id, kb_id)
+    rerank_model = rerank_snapshot(db, user.id, retrieval)
+    index_ids = visible_indices(db, user.id, kb_id, material_ids)
+    terms = lexical_query_terms(cleaned_query)
+    min_sim = float(retrieval["min_similarity"])
+    db.commit()
 
-        if not index_ids:
-            return {
-                "query": cleaned_query,
-                "query_terms": terms,
-                "lexical_weight": lexical_weight,
-                "min_similarity_threshold": min_sim,
-                "items": [],
-            }
+    if not index_ids:
+        return {
+            "query": cleaned_query,
+            "query_terms": terms,
+            "lexical_weight": lexical_weight,
+            "min_similarity_threshold": min_sim,
+            "rerank_enabled": rerank_enabled,
+            "rerank_error": None,
+            "items": [],
+        }
+
+    with model_connections.task(
+        user.id, llm={"id": None, "kind": "llm"}, embedding=embedding_model,
+        rerank=rerank_model,
+    ):
 
         vectors = embed_texts(
             [cleaned_query],
@@ -84,8 +113,12 @@ def run_hit_test(
         vector = vectors[0]
 
         indices = [UUID(x) for x in index_ids]
-        profile = model_connections.embedding_profile(user.id, kb_id, db)
-        candidate_k = max(20, top_k * 3)
+        profile = embedding_model["binding"]["profile"]
+        candidate_k = (
+            max(top_k, int(retrieval["rerank_candidate_k"]))
+            if rerank_enabled
+            else max(20, top_k * 3)
+        )
 
         query = chunk_query(indices, user.id)
         base_query = query.add_columns(Material.id.label("material_id"))
@@ -197,7 +230,7 @@ def run_hit_test(
         combined.sort(key=lambda item: item[:4])
 
         out_items = []
-        for *_, cid, rrf_score in combined[:top_k]:
+        for rank, (*_, cid, rrf_score) in enumerate(combined[:candidate_k], start=1):
             meta = chunk_meta[cid]
             chunk: MaterialChunk = meta["chunk"]
             v_entry = vector_info.get(cid)
@@ -220,14 +253,47 @@ def run_hit_test(
                     "lexical_score": l_entry[1] if l_entry else None,
                     "matched_terms": l_entry[2] if l_entry else [],
                     "rrf_score": rrf_score,
+                    "rrf_rank": rank,
+                    "rerank_rank": None,
+                    "rerank_score": None,
+                    "material_version_id": str(chunk.material_version_id),
                 }
             )
+
+        rerank_error = None
+        if rerank_enabled and out_items:
+            try:
+                results = rerank(
+                    user.id,
+                    cleaned_query,
+                    [f"{item['title']}\n{item['text']}" for item in out_items],
+                    top_n=len(out_items),
+                    saved=rerank_model,
+                )
+                ranked_indexes = [item["index"] for item in results or []]
+                ranked_indexes.extend(
+                    index for index in range(len(out_items)) if index not in set(ranked_indexes)
+                )
+                score_by_index = {item["index"]: item["relevance_score"] for item in results or []}
+                out_items = [out_items[index] for index in ranked_indexes]
+                for rank, item in enumerate(out_items, start=1):
+                    original_index = ranked_indexes[rank - 1]
+                    item["rerank_rank"] = rank
+                    item["rerank_score"] = score_by_index.get(original_index)
+            except ApiError as error:
+                rerank_error = error.code
+
+        out_items = dedup_documents(out_items, top_k)
+        for item in out_items:
+            item.pop("material_version_id", None)
 
         return {
             "query": cleaned_query,
             "query_terms": terms,
             "lexical_weight": lexical_weight,
             "min_similarity_threshold": min_sim,
+            "rerank_enabled": rerank_enabled,
+            "rerank_error": rerank_error,
             "items": out_items,
         }
 

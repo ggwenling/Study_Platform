@@ -54,10 +54,10 @@ def compatible_api():
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             calls.append((self.path, body, self.headers.get("Authorization")))
             model = modes.get(body["model"], body["model"])
-            if model in {"unauthorized", "rate-limit", "timeout", "vision-unsupported"}:
+            if model in {"unauthorized", "rate-limit", "timeout", "vision-unsupported", "rerank-error"}:
                 if model == "timeout":
                     time.sleep(0.2)
-                status = 401 if model == "unauthorized" else 400 if model == "vision-unsupported" else 429
+                status = 401 if model == "unauthorized" else 400 if model == "vision-unsupported" else 500 if model == "rerank-error" else 429
                 self.send_response(status)
                 self.end_headers()
                 try:
@@ -70,7 +70,15 @@ def compatible_api():
                 self.send_header("Location", "http://127.0.0.1:9/stolen")
                 self.end_headers()
                 return
-            if self.path.endswith("/embeddings"):
+            if self.path.endswith("/rerank"):
+                result = json.dumps({
+                    "results": [
+                        {"index": 1, "relevance_score": 0.92},
+                        {"index": 0, "relevance_score": 0.13},
+                    ]
+                })
+                content_type = "application/json"
+            elif self.path.endswith("/embeddings"):
                 inputs = body["input"]
                 vector = [0.2] * (512 if model == "wrong-dimension" else 1024)
                 if model == "zero":
@@ -505,6 +513,80 @@ def test_vision_probe_rejects_model_without_multimodal_support(connections_env):
     result = state.client.post(f"/me/model-connections/{row['id']}/test").json()
     assert result["status"] == "failed"
     assert result["error_code"] == "vision_model_unsupported"
+
+
+def test_rerank_connection_probe_default_and_usage(connections_env):
+    from study_platform.services.rerank import rerank
+
+    state = connections_env
+    row, _ = create(state, "rerank", "rerank-a")
+    tested = state.client.post(f"/me/model-connections/{row['id']}/test")
+    assert tested.status_code == 200 and tested.json()["status"] == "ready"
+    path, body, authorization = state.provider.calls[-1]
+    assert path.endswith("/rerank")
+    assert body == {
+        "model": "rerank-a",
+        "query": "which sentence mentions a test?",
+        "documents": ["This is a short test document.", "This sentence is unrelated."],
+        "top_n": 2,
+    }
+    assert authorization == "Bearer fixture-secret-abcd"
+    assert state.client.put(
+        "/me/model-connections/defaults/rerank", json={"connection_id": row["id"]}
+    ).status_code == 204
+    assert state.client.get("/capabilities").json()["rerank"] is True
+
+    saved = {"id": row["id"], "kind": "rerank", "revision": 1}
+    with model_connections.task(state.owner.id, rerank=saved):
+        ranked = rerank(state.owner.id, "query", ["first", "second"], top_n=2, saved=saved)
+    assert ranked == [
+        {"index": 1, "relevance_score": 0.92},
+        {"index": 0, "relevance_score": 0.13},
+    ]
+    purposes = {item["key"] for item in state.client.get("/me/model-usage").json()["by_purpose"]}
+    assert {"connection_test", "rerank"} <= purposes
+
+
+def test_reindex_job_pins_target_embedding_endpoint_and_model(connections_env):
+    state = connections_env
+    row, body = create(state, "embedding", "embed-target")
+    saved = {"id": row["id"], "kind": "embedding", "revision": 1}
+    job = AiJob(
+        id=uuid4(),
+        owner_user_id=state.owner.id,
+        job_type="reindex",
+        resource_type="knowledge_base",
+        resource_id=uuid4(),
+        status="queued",
+        progress=0,
+        payload={"embedding_connection": saved},
+        attempt_count=0,
+        max_attempts=3,
+        fencing=0,
+        next_run_at=datetime.now(UTC),
+    )
+    with state.factory() as db:
+        db.add(job)
+        db.commit()
+
+    changed = state.client.patch(
+        f"/me/model-connections/{row['id']}",
+        json={**body, "model": "embed-target-v2"},
+    )
+    assert changed.status_code == 409
+    assert changed.json()["code"] == "model_connection_busy"
+    blocked_delete = state.client.delete(f"/me/model-connections/{row['id']}")
+    assert blocked_delete.status_code == 409
+    assert blocked_delete.json()["code"] == "model_connection_busy"
+
+    with state.factory() as db:
+        db.delete(db.get(AiJob, job.id))
+        db.commit()
+    updated = state.client.patch(
+        f"/me/model-connections/{row['id']}",
+        json={**body, "model": "embed-target-v2"},
+    )
+    assert updated.status_code == 200 and updated.json()["revision"] == 2
 
 
 def _test_pixel_png():

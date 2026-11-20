@@ -119,6 +119,8 @@ button.library-aside-row:hover { background: color-mix(in srgb, var(--ink) 4%, t
 .library-pagination { justify-content: flex-end; margin-top: 8px; font-size: var(--text-caption); }
 .library-fragment-panel table { min-width: 790px; }
 .library-fragment-panel thead { position: sticky; top: 0; z-index: 2; }
+.library-reindex { display: grid; gap: 0.75rem; }
+.library-reindex progress { width: 100%; }
 .library-fragment-panel th { height: 35px; font-size: var(--text-caption); }
 .library-fragment-panel td { height: 51px; font-size: var(--text-caption); line-height: 1.4; }
 .library-fragment-panel th:last-child { font-size: 0; }
@@ -187,6 +189,9 @@ button.library-aside-row:hover { background: color-mix(in srgb, var(--ink) 4%, t
 .hit-test-form [role="combobox"] { min-width: 138px; }
 .hit-test-query { flex: 1 1 280px; min-width: 0; }
 .hit-test-query input { background: var(--surface-muted); }
+.hit-test-rerank-toggle { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 4px; font-size: var(--text-caption); white-space: nowrap; }
+.hit-test-settings-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; font-size: var(--text-xs); }
+.hit-test-rerank-error { margin: 10px 0 0; padding: 9px 12px; border: 1px solid color-mix(in srgb, #e07a22 40%, var(--line)); border-radius: 10px; background: color-mix(in srgb, #e07a22 10%, var(--panel)); color: var(--ink); font-size: var(--text-caption); }
 .hit-test-results { display: grid; gap: 11px; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--line); }
 .hit-test-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: var(--text-xs); }
 .hit-test-term { display: inline-block; margin-inline: 3px; padding: 1px 6px; border-radius: 6px; background: var(--line); font-size: var(--text-xs); }

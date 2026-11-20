@@ -27,7 +27,7 @@ router = APIRouter(prefix="/me/model-connections", tags=["model connections"])
 
 class ConnectionInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    kind: Literal["llm", "embedding", "vision"]
+    kind: Literal["llm", "embedding", "vision", "rerank"]
     base_url: str = Field(min_length=1, max_length=500)
     model: str = Field(min_length=1, max_length=120)
     api_key: SecretStr | None = Field(default=None, max_length=4096)
@@ -44,7 +44,7 @@ class ConnectionInput(BaseModel):
 class ConnectionDTO(BaseModel):
     id: UUID
     name: str
-    kind: Literal["llm", "embedding", "vision"]
+    kind: Literal["llm", "embedding", "vision", "rerank"]
     base_url: str
     model: str
     dimensions: int | None
@@ -69,7 +69,11 @@ def dto(db, row):
     config = row.versions[str(row.revision)]
     libraries = db.execute(
         sa.select(KnowledgeBase.id, KnowledgeBase.name).where(
-            KnowledgeBase.embedding_connection_id == row.id, KnowledgeBase.deleted_at.is_(None)
+            KnowledgeBase.deleted_at.is_(None),
+            sa.or_(
+                KnowledgeBase.embedding_connection_id == row.id,
+                KnowledgeBase.retrieval_settings["rerank_connection_id"].astext == str(row.id),
+            ),
         )
     ).all()
     return ConnectionDTO(
@@ -131,6 +135,8 @@ def busy(db, row):
             sa.or_(
                 AiWorkflowRun.source_scope["llm_connection"]["id"].astext == str(row.id),
                 AiWorkflowRun.source_scope["vision_connection"]["id"].astext == str(row.id),
+                AiWorkflowRun.source_scope["embedding_connection"]["id"].astext == str(row.id),
+                AiWorkflowRun.source_scope["rerank_connection"]["id"].astext == str(row.id),
             ),
         )
         .limit(1)
@@ -143,6 +149,8 @@ def busy(db, row):
             sa.or_(
                 AiJob.payload["llm_connection"]["id"].astext == str(row.id),
                 AiJob.payload["vision_connection"]["id"].astext == str(row.id),
+                AiJob.payload["embedding_connection"]["id"].astext == str(row.id),
+                AiJob.payload["rerank_connection"]["id"].astext == str(row.id),
             ),
         )
         .limit(1)
@@ -155,6 +163,21 @@ def busy(db, row):
             row.status == "testing"
             and row.tested_at
             and row.tested_at > current - timedelta(minutes=3)
+        )
+    )
+
+
+def _reindex_uses_embedding_connection(db, row):
+    return bool(
+        db.scalar(
+            sa.select(AiJob.id)
+            .where(
+                AiJob.owner_user_id == row.owner_user_id,
+                AiJob.job_type == "reindex",
+                AiJob.status.in_(("queued", "running")),
+                AiJob.payload["embedding_connection"]["id"].astext == str(row.id),
+            )
+            .limit(1)
         )
     )
 
@@ -213,6 +236,9 @@ def update(
             409, "model_connection_bound", "连接已绑定知识库；更换地址或模型请另存新连接。"
         )
     row.name = body.name
+    if new != old and (old["base_url"], old["model"]) != (new["base_url"], new["model"]):
+        if row.kind == "embedding" and _reindex_uses_embedding_connection(db, row):
+            raise ApiError(409, "model_connection_busy", "重建索引期间不能修改目标向量连接的地址或模型。")
     if new != old:
         row.revision += 1
         row.versions = {**row.versions, str(row.revision): new}
@@ -244,7 +270,7 @@ class DefaultInput(BaseModel):
 
 @router.put("/defaults/{kind}", status_code=204)
 def set_default(
-    kind: Literal["llm", "embedding", "vision"],
+    kind: Literal["llm", "embedding", "vision", "rerank"],
     body: DefaultInput,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),

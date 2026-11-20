@@ -59,8 +59,8 @@ def workshop_env(tmp_path, monkeypatch):
         allowed_origins=["http://testserver"],
     )
     for target in (
-        "study_platform.services.rag_workshop.get_settings",
         "study_platform.services.model_connections.get_settings",
+        "study_platform.services.retrieval_settings.get_settings",
         "study_platform.core.config.get_settings",
     ):
         monkeypatch.setattr(target, lambda: settings)
@@ -215,6 +215,43 @@ def test_hit_test_hybrid_weights_and_fragment_reembedding(workshop_env):
     assert top_hit["vector_similarity"] == pytest.approx(1.0, abs=1e-3)
     assert top_hit["lexical_rank"] == 1
     assert len(top_hit["matched_terms"]) >= 1
+
+
+def test_retrieval_settings_patch_and_hit_test_inheritance(workshop_env):
+    http, db, kb_id, _ = workshop_env
+    payload = {
+        "top_k": 4,
+        "lexical_weight": 0.75,
+        "min_similarity": 0.6,
+        "rerank_enabled": True,
+        "rerank_candidate_k": 12,
+    }
+    saved = http.patch(f"/knowledge-bases/{kb_id}/retrieval-settings", json=payload)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["retrieval_settings"] == payload
+    assert http.get(f"/knowledge-bases/{kb_id}").json()["retrieval_settings"] == payload
+
+    result = http.post(
+        f"/knowledge-bases/{kb_id}/hit-test", json={"query": "拉格朗日乘子"}
+    )
+    assert result.status_code == 200, result.text
+    response = result.json()
+    assert response["lexical_weight"] == 0.75
+    assert response["min_similarity_threshold"] == 0.6
+    assert response["rerank_enabled"] is True
+    assert response["rerank_error"] == "rerank_not_configured"
+    assert len(response["items"]) <= 4
+
+    bad_range = http.patch(
+        f"/knowledge-bases/{kb_id}/retrieval-settings", json={"top_k": 21}
+    )
+    assert bad_range.status_code == 422
+    bad_connection = http.patch(
+        f"/knowledge-bases/{kb_id}/retrieval-settings",
+        json={"rerank_connection_id": str(uuid4())},
+    )
+    assert bad_connection.status_code == 422
+    assert db.get(KnowledgeBase, kb_id).retrieval_settings == payload
 
 
 
