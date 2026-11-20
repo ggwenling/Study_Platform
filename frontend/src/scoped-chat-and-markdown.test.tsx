@@ -3,7 +3,7 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api/client'
-import type { Citation, Material, Scope } from './api/types'
+import type { ChatRequest, Citation, Material, Scope } from './api/types'
 import { Composer } from './components/Composer'
 import type { ComposerHandle } from './components/Composer'
 import { MarkdownContent } from './components/MarkdownContent'
@@ -85,7 +85,7 @@ beforeEach(() => {
     requireLogin: vi.fn(),
     chat: {
       busy: false,
-      send: vi.fn().mockResolvedValue(true),
+      send: vi.fn(async (_request, onAccepted: () => void) => { onAccepted(); return true }),
       isBusy: vi.fn().mockReturnValue(false),
       activeFor: vi.fn().mockReturnValue(null),
       pendingFor: vi.fn().mockReturnValue(null),
@@ -141,7 +141,7 @@ describe('scoped material selection & in-conversation summary toggle', () => {
       intent: 'qa',
       material_ids: ['m1', 'm2'],
       content: '对比两章重点',
-    })
+    }, expect.any(Function))
 
     const summaryToggle = node.querySelector<HTMLButtonElement>('button[aria-label="摘要模式"]')!
     await act(async () => summaryToggle.click())
@@ -160,7 +160,7 @@ describe('scoped material selection & in-conversation summary toggle', () => {
       intent: 'summary',
       material_ids: ['m1', 'm2'],
       content: '提炼核心要点',
-    })
+    }, expect.any(Function))
 
     await act(async () => materialsTrigger.click())
     const clear = node.querySelector<HTMLButtonElement>('.current-materials button[aria-label="清除选择"]')!
@@ -199,7 +199,7 @@ it('keeps an invalid selection blocked until the user explicitly uses the whole 
   expect(workspace.value.chat.send).not.toHaveBeenCalled()
   await act(async () => [...node.querySelectorAll('button')].find((button) => button.textContent === '使用全库')!.click())
   await submit()
-  expect(workspace.value.chat.send).toHaveBeenCalledWith(expect.objectContaining({ material_ids: null }))
+  expect(workspace.value.chat.send).toHaveBeenCalledWith(expect.objectContaining({ material_ids: null }), expect.any(Function))
 })
 
 it('restores drafts per user and conversation with their library and answer options', async () => {
@@ -226,33 +226,78 @@ it('restores drafts per user and conversation with their library and answer opti
   expect(node.querySelector<HTMLButtonElement>('button[aria-label="摘要模式"]')!.getAttribute('aria-pressed')).toBe('true')
 })
 
+it('only opens materials for uploads observed during the current Composer visit', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  const trigger = () => node.querySelector<HTMLButtonElement>('.current-materials button[aria-expanded]')!
+  await render(<Composer />)
+  expect(trigger().getAttribute('aria-expanded')).toBe('false')
+
+  workspace.value.uploadQueue.lastUploaded = { libraryId: 'A', at: 100 }
+  await render(<Composer />)
+  expect(trigger().getAttribute('aria-expanded')).toBe('true')
+  await act(async () => trigger().click())
+  expect(trigger().getAttribute('aria-expanded')).toBe('false')
+
+  await render(null)
+  await render(<Composer conversationId="conv-1" />)
+  expect(trigger().getAttribute('aria-expanded')).toBe('false')
+  workspace.value.uploadQueue.lastUploaded = { libraryId: 'B', at: 200 }
+  await render(<Composer conversationId="conv-1" />)
+  expect(trigger().getAttribute('aria-expanded')).toBe('false')
+  workspace.value.uploadQueue.lastUploaded = { libraryId: 'A', at: 300 }
+  await render(<Composer conversationId="conv-1" />)
+  expect(trigger().getAttribute('aria-expanded')).toBe('true')
+})
+
 it('keeps a newer edit when the sent text is accepted and clears accepted text after unmount', async () => {
   vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
-  let resolveSend!: (accepted: boolean) => void
-  workspace.value.chat.send.mockImplementation(() => new Promise<boolean>((resolve) => { resolveSend = resolve }))
+  let accepted!: () => void
+  let finish!: (result: boolean) => void
+  workspace.value.chat.send.mockImplementation((_request: ChatRequest, onAccepted: () => void) => {
+    accepted = onAccepted
+    return new Promise<boolean>((resolve) => { finish = resolve })
+  })
   await render(<Composer conversationId="conv-1" />)
   await enterText('发送中的问题')
   await act(async () => node.querySelector<HTMLFormElement>('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
   await enterText('发送期间的新修改')
-  await act(async () => { resolveSend(true); await Promise.resolve() })
+  await act(async () => accepted())
 
   expect(node.querySelector('textarea')!.value).toBe('发送期间的新修改')
   const stored = JSON.parse(sessionStorage.getItem('knowloop:drafts:u1')!)
   expect(stored['conv-1'].text).toBe('发送期间的新修改')
 
-  await act(async () => root.render(null))
-  await render(<Composer conversationId="conv-1" />)
-  await enterText('离开页面前发送')
-  let resolveUnmountedSend!: (accepted: boolean) => void
-  workspace.value.chat.send.mockImplementationOnce(() => new Promise<boolean>((resolve) => { resolveUnmountedSend = resolve }))
+  await act(async () => finish(true))
+  await render(null)
+  await render(<Composer />)
+  await enterText('首页发送的问题')
   await act(async () => node.querySelector<HTMLFormElement>('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-  await act(async () => root.render(null))
-  await render(<Composer conversationId="conv-1" />)
-  expect(node.querySelector('textarea')!.value).toBe('离开页面前发送')
-  await act(async () => { resolveUnmountedSend(true); await Promise.resolve() })
-  const afterUnmountedSend = JSON.parse(sessionStorage.getItem('knowloop:drafts:u1')!)
-  expect(afterUnmountedSend['conv-1'].text).toBe('')
+  expect(node.querySelector('textarea')!.value).toBe('首页发送的问题')
+  await render(null)
+  await act(async () => accepted())
+  await render(<Composer />)
   expect(node.querySelector('textarea')!.value).toBe('')
+  await enterText('下一条新问题')
+  await act(async () => finish(true))
+  expect(node.querySelector('textarea')!.value).toBe('下一条新问题')
+})
+
+it('clears the matching resent draft on acceptance while the answer is still streaming', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  workspace.value.chat.pendingFor.mockReturnValue({ body: { content: '待重发的问题' }, key: 'pending' })
+  let accepted!: () => void
+  let finish!: (result: boolean) => void
+  workspace.value.chat.resend.mockImplementation((_id: string | undefined, onAccepted: () => void) => {
+    accepted = onAccepted
+    return new Promise<boolean>((resolve) => { finish = resolve })
+  })
+  await render(<Composer />)
+  await enterText(' 待重发的问题 ')
+  await act(async () => [...node.querySelectorAll('button')].find((button) => button.textContent?.includes('重发上次请求'))!.click())
+  expect(node.querySelector('textarea')!.value).toBe(' 待重发的问题 ')
+  await act(async () => accepted())
+  expect(node.querySelector('textarea')!.value).toBe('')
+  await act(async () => finish(true))
 })
 
 it('caps the per-user draft LRU at 30 conversations and clears it on auth reset', async () => {

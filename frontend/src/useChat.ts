@@ -161,7 +161,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
     }
   }, [startRecovery])
 
-  async function run(action: RunAction): Promise<boolean> {
+  async function run(action: RunAction, onAccepted?: () => void): Promise<boolean> {
     const request = action.kind === 'send' ? action.request : null
     const conversationId = action.kind === 'send' ? action.request.body.conversation_id ?? null : action.conversationId
     const startKey = conversationId ?? homeKey
@@ -281,6 +281,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
       for await (const event of events) {
         if (abort.signal.aborted || controllers.current.get(operationKey) !== abort) return Boolean(current)
         if (event.type === 'meta') {
+          if (!current) onAccepted?.()
           replay = Boolean(event.replay)
           if (!migrateConversation(event.conversation_id)) return true
           current = { conversationId: event.conversation_id, turnId: event.turn_id, assistantId: event.assistant_message_id, phase: replay ? null : 'working' }
@@ -466,13 +467,15 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
         })
       }
     },
-    send: (body: ChatRequest) => run({ kind: 'send', request: { body, key: crypto.randomUUID() } }),
-    resend: (conversationId?: string) => {
+    send: (body: ChatRequest, onAccepted?: () => void) =>
+      run({ kind: 'send', request: { body, key: crypto.randomUUID() } }, onAccepted),
+    resend: (conversationId?: string, onAccepted?: () => void) => {
       const request = pendingByConversation[conversationId ?? homeKey]
-      return request ? run({ kind: 'send', request }) : Promise.resolve(false)
+      return request ? run({ kind: 'send', request }, onAccepted) : Promise.resolve(false)
     },
     retry: (conversationId: string, turnId: string) => run({ kind: 'retry', conversationId, turnId }),
-    edit: (conversationId: string, turnId: string, content: string) => run({ kind: 'edit', conversationId, turnId, content }),
+    edit: (conversationId: string, turnId: string, content: string, onAccepted?: () => void) =>
+      run({ kind: 'edit', conversationId, turnId, content }, onAccepted),
   }
 }
 

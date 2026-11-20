@@ -31,8 +31,8 @@ vi.mock('./components/arc/accordion/accordion', () => ({
   Accordion: ({ items }: any) => <>{items.map((item: any, idx: number) => <section key={idx}>{item.title}{item.content}</section>)}</>,
 }))
 vi.mock('./components/FlashcardPanel', () => ({
-  FlashcardPanel: ({ startDueQueue, onDueQueueStarted }: { startDueQueue?: boolean; onDueQueueStarted?: () => void }) => (
-    <div data-testid="flashcard-panel" data-start-due-queue={startDueQueue ? 'true' : 'false'}>
+  FlashcardPanel: ({ active, startDueQueue, onDueQueueStarted }: { active: boolean; startDueQueue?: boolean; onDueQueueStarted?: () => void }) => (
+    <div data-testid="flashcard-panel" data-active={active} data-start-due-queue={startDueQueue ? 'true' : 'false'}>
       {startDueQueue && <button type="button" onClick={onDueQueueStarted}>完成到期队列加载</button>}
     </div>
   ),
@@ -186,11 +186,16 @@ describe('Learning 2.0 workflow', () => {
     await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={overview} refreshOverview={refreshOverview} />)
 
     expect(node.querySelector('#learning-tab-flashcards')?.getAttribute('aria-selected')).toBe('true')
-    expect(node.querySelector('[data-testid="flashcard-panel"]')?.getAttribute('data-start-due-queue')).toBe('true')
+    const panel = node.querySelector('[data-testid="flashcard-panel"]')!
+    expect(panel.getAttribute('data-start-due-queue')).toBe('true')
+    expect(panel.getAttribute('data-active')).toBe('true')
     await act(async () => findButtonContaining('完成到期队列加载')!.click())
-    expect(node.querySelector('[data-testid="flashcard-panel"]')?.getAttribute('data-start-due-queue')).toBe('false')
+    expect(panel.getAttribute('data-start-due-queue')).toBe('false')
+    await act(async () => node.querySelector<HTMLButtonElement>('#learning-tab-practice')!.click())
+    expect(panel.getAttribute('data-active')).toBe('false')
     await act(async () => findButtonContaining('开始今日到期闪卡')!.click())
-    expect(node.querySelector('[data-testid="flashcard-panel"]')?.getAttribute('data-start-due-queue')).toBe('true')
+    expect(panel.getAttribute('data-start-due-queue')).toBe('true')
+    expect(panel.getAttribute('data-active')).toBe('true')
   })
 
   it('shows the due review entry and retries only today’s due wrong questions', async () => {
@@ -224,26 +229,29 @@ describe('Learning 2.0 workflow', () => {
   })
 
   it('shows the full-paper three-state recap and retries only matching wrong IDs', async () => {
+    const otherWrong = { ...sampleWrong, id: 'wrong-2', knowledge_base_id: 'kb-2' }
     const completedAttempt: LearningAttempt = {
       ...sampleAttempt,
       items: [
         { ...sampleAttempt.items[0], verdict: 'incorrect', knowledge_base_id: 'kb-1' },
         { ...sampleAttempt.items[1], verdict: 'correct' },
         { ...sampleAttempt.items[1], response_id: 'resp-3', quiz_item_id: 'item-3', ordinal: 2, stem: '需要确认的题目', verdict: 'pending' },
+        { ...sampleAttempt.items[0], response_id: 'resp-4', quiz_item_id: 'clone-from-kb-2', ordinal: 3, verdict: 'incorrect', knowledge_base_id: 'kb-2', origin_wrong_id: otherWrong.id },
       ],
     }
     vi.mocked(api.learning.attempt).mockResolvedValue(completedAttempt)
+    vi.mocked(api.learning.wrongQuestions).mockResolvedValue({ items: [sampleWrong, otherWrong] })
     vi.mocked(api.learning.retryWrong).mockResolvedValue({ ...sampleAttempt, id: 'att-retry' })
     await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
     await act(async () => findButtonContaining('继续上次练习')!.click())
 
-    expect(node.textContent).toContain('正确 1 题 · 错误 1 题 · 待确认 1 题')
+    expect(node.textContent).toContain('正确 1 题 · 错误 2 题 · 待确认 1 题')
     expect(node.textContent).not.toContain('分数')
     expect(node.textContent).not.toContain('排名')
     await act(async () => findButtonContaining('查看待确认题目')!.click())
     expect(node.querySelector('[aria-label="第 3 题"]')?.getAttribute('aria-current')).toBe('step')
-    await act(async () => findButtonContaining('立即重练本卷错题（1）')!.click())
-    expect(api.learning.retryWrong).toHaveBeenCalledWith({ wrong_ids: ['wrong-1'], knowledge_base_id: 'kb-1' })
+    await act(async () => findButtonContaining('立即重练本卷错题（2）')!.click())
+    expect(api.learning.retryWrong).toHaveBeenCalledWith({ wrong_ids: ['wrong-1', 'wrong-2'], knowledge_base_id: undefined })
 
     const retryClone = {
       ...completedAttempt,

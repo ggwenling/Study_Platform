@@ -141,7 +141,9 @@ function findBtn(text: string) {
 }
 
 async function pressKey(key: string, code: string) {
-  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key, code, bubbles: true, cancelable: true })))
+  const event = new KeyboardEvent('keydown', { key, code, bubbles: true, cancelable: true })
+  await act(async () => window.dispatchEvent(event))
+  return event.defaultPrevented
 }
 
 beforeEach(() => {
@@ -415,16 +417,18 @@ describe('Studio notes & Flashcard SM-2 review', () => {
     vi.mocked(api.studio.flashcardDecks).mockResolvedValue({ items: [] })
     vi.mocked(api.studio.dueFlashcards).mockResolvedValue({ total_due: 1, items: [dueCard1] })
     vi.mocked(api.studio.reviewFlashcard).mockResolvedValue({ ...dueCard1, is_due: false })
-    await render(
+    const panel = (active: boolean) => (
       <FlashcardPanel
+        active={active}
         knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]}
         defaultKbId="kb-1"
         notify={vi.fn()}
         startDueQueue
         onDueQueueStarted={onDueQueueStarted}
         onOverviewRefresh={onOverviewRefresh}
-      />,
+      />
     )
+    await render(panel(true))
 
     expect(api.studio.dueFlashcards).toHaveBeenCalledWith(undefined, 100)
     expect(onDueQueueStarted).toHaveBeenCalledOnce()
@@ -438,6 +442,12 @@ describe('Studio notes & Flashcard SM-2 review', () => {
 
     titleInput.blur()
     await pressKey(' ', 'Space')
+    expect(node.textContent).toContain('满足 Q^T Q = I 的实方阵')
+    await render(panel(false))
+    expect(await pressKey('1', 'Digit1')).toBe(false)
+    expect(await pressKey(' ', 'Space')).toBe(false)
+    expect(api.studio.reviewFlashcard).not.toHaveBeenCalled()
+    await render(panel(true))
     expect(node.textContent).toContain('满足 Q^T Q = I 的实方阵')
     await act(async () => findBtn('去对话追问')!.click())
     expect(navigateMock).toHaveBeenCalledWith('/', {
@@ -465,6 +475,9 @@ describe('Studio notes & Flashcard SM-2 review', () => {
     expect(node.textContent).toContain('本轮复习总结')
     expect(node.textContent).toContain('重来 1')
     expect(onOverviewRefresh).toHaveBeenCalledOnce()
+    expect(await pressKey(' ', 'Space')).toBe(false)
+    expect(await pressKey('4', 'Digit4')).toBe(false)
+    expect(api.studio.reviewFlashcard).toHaveBeenCalledOnce()
     await act(async () => findBtn('仅重刷本轮生疏卡（1 张）')!.click())
     expect(node.textContent).toContain('重刷本轮生疏卡')
     await act(async () => findBtn('翻转查看答案')!.click())

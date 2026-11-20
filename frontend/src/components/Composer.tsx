@@ -44,6 +44,8 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   ref?: Ref<ComposerHandle>
 }) {
   const { user, libraries, capabilities, chat, notify, report, requireLogin, refresh, uploadQueue } = useWorkspace()
+  const { lastUploaded } = uploadQueue
+  const uploadAtMount = useRef(lastUploaded)
   const { value: draftState, setValue: setDraftState } = useChatDrafts(demo ? undefined : user?.id, conversationId)
   const { text: draft, materialIds: selectedMaterialIds, scoped, supplement, summaryMode } = draftState
   const [scopeStatus, setScopeStatus] = useState<{ libraryId: string; ids: string[]; valid: boolean }>()
@@ -97,7 +99,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
     }
   }
 
-  async function submit() {
+  function submit() {
     const sentText = draft
     const content = sentText.trim()
     if (!content) return
@@ -113,16 +115,14 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
       return notify('请先在下方「当前库资料」中勾选要提炼的已就绪资料。')
     }
     if (pending) return notify('请先重发上次请求，确认发送结果。')
-    if (await chat.send({
+    void chat.send({
       conversation_id: conversationId,
       knowledge_base_id: libraryId,
       answer_mode: supplement ? 'with_general' : 'knowledge_only',
       intent: summaryMode ? 'summary' : 'qa',
       material_ids: scoped ? selectedMaterialIds : null,
       content,
-    })) {
-      clearAcceptedChatDraftText(user.id, conversationId, sentText)
-    }
+    }, () => clearAcceptedChatDraftText(user.id, conversationId, sentText))
   }
 
   function chooseLibrary(id: string) {
@@ -204,7 +204,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
       onDrop={onDrop}
       onSubmit={(event) => {
         event.preventDefault()
-        void submit()
+        submit()
       }}
     >
       {!demo && user && libraries.length === 0 && <Button type="button" variant="ghost" size="sm" onClick={() => { setCreateError(''); setCreating(true) }}>创建知识库并导入资料</Button>}
@@ -230,7 +230,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
           onKeyDown={(event) => {
             if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return
             event.preventDefault()
-            void submit()
+            submit()
           }}
         />
       </div>
@@ -312,11 +312,11 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
           ))}
         </div>
       )}
-      {pending && <Button type="button" variant="secondary" size="sm" onClick={async () => {
+      {pending && <Button type="button" variant="secondary" size="sm" onClick={() => {
         const sentText = draft
-        if (await chat.resend(conversationId) && sentText.trim() === pending.body.content) {
-          clearAcceptedChatDraftText(user?.id, conversationId, sentText)
-        }
+        void chat.resend(conversationId, () => {
+          if (sentText.trim() === pending.body.content) clearAcceptedChatDraftText(user?.id, conversationId, sentText)
+        })
       }}>重发上次请求</Button>}
     </form>
     {!demo && user && libraryId && (
@@ -325,7 +325,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
         libraryId={libraryId}
         name={libraries.find((library) => library.id === libraryId)!.name}
         reveal={Math.max(
-          uploadQueue.lastUploaded?.libraryId === libraryId ? uploadQueue.lastUploaded.at : 0,
+          lastUploaded !== uploadAtMount.current && lastUploaded?.libraryId === libraryId ? lastUploaded.at : 0,
           panelReveal?.id === libraryId ? panelReveal.at : 0,
         )}
         summaryMode={summaryMode}

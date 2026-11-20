@@ -242,10 +242,10 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                   {message.scope && <span className="pill"><Folder size={13} />{scopeSummaryText(message.scope)}</span>}
                   {isUser ? (
                     editing?.id === message.id && message.turn_id ? (
-                      <form className="user-bubble chat-question-editor" onSubmit={async (event) => {
+                      <form className="user-bubble chat-question-editor" onSubmit={(event) => {
                         event.preventDefault()
                         if (!editing.content.trim() || busy) return
-                        if (await chat.edit(id, message.turn_id!, editing.content.trim())) setEditing(null)
+                        void chat.edit(id, message.turn_id!, editing.content.trim(), () => setEditing(null))
                       }}>
                         <Textarea label="编辑问题" rows={3} maxLength={8000} autoFocus
                           value={editing.content} disabled={busy}

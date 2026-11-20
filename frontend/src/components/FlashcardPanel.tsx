@@ -24,6 +24,7 @@ const deckCountOptions = [
 ]
 
 export function FlashcardPanel({
+  active = true,
   knowledgeBases,
   defaultKbId,
   initialDeckId,
@@ -33,6 +34,7 @@ export function FlashcardPanel({
   onDueQueueStarted,
   onOverviewRefresh,
 }: {
+  active?: boolean
   knowledgeBases: KnowledgeBase[]
   defaultKbId: string
   initialDeckId?: string
@@ -342,7 +344,7 @@ export function FlashcardPanel({
   Object.values(ratingsByCardId).forEach((rating) => { ratingCounts[rating] += 1 })
 
   useEffect(() => {
-    if (!card) return
+    if (!active || !card || showReviewSummary) return
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target
       const focused = document.activeElement
@@ -366,7 +368,7 @@ export function FlashcardPanel({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [card, flipped, busy, pendingReview, rateCurrentCard])
+  }, [active, card, showReviewSummary, flipped, busy, pendingReview, rateCurrentCard])
 
   return (
     <div className="flashcard-workspace">

@@ -135,7 +135,7 @@ it('regenerates or edits the last turn and stages an older question as a new dra
     { ...messages[0], id: 'older-user', turn_id: 'older-turn', sequence_no: 0, content: '历史提问', scope },
     { ...messages[1], id: 'older-answer', turn_id: 'older-turn', sequence_no: 1, scope },
   ]
-  chat.edit.mockResolvedValue(true)
+  chat.edit.mockImplementation(async (_conversationId, _turnId, _content, onAccepted) => { onAccepted(); return true })
   vi.mocked(api.messages).mockResolvedValue({ items: [...older, ...messages.map((message) => ({ ...message, sequence_no: message.sequence_no + 2 }))], next_cursor: null })
   await renderChat('turn-actions')
   expect([...node.querySelectorAll('button')].filter((button) => button.textContent?.trim() === '重新生成')).toHaveLength(1)
@@ -151,7 +151,7 @@ it('regenerates or edits the last turn and stages an older question as a new dra
     field.dispatchEvent(new Event('input', { bubbles: true }))
   })
   await act(async () => click('保存并重新生成'))
-  expect(chat.edit).toHaveBeenCalledWith('conversation', 'turn', '原位编辑后的问题')
+  expect(chat.edit).toHaveBeenCalledWith('conversation', 'turn', '原位编辑后的问题', expect.any(Function))
   expect(node.querySelector('.chat-question-editor')).toBeNull()
 })
 

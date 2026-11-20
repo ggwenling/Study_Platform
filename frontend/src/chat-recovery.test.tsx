@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatEvent, Message, Scope, Turn } from './api/types'
 import { api, editTurn, retryTurn, streamChat } from './api/client'
+import { ApiError } from './api/stream'
 import { useChat, type ChatController } from './useChat'
 import LiveChat from './components/LiveChat'
 
@@ -391,6 +392,43 @@ describe('disconnected chat recovery', () => {
     expect(chat.accepted.c).toBeUndefined()
   })
 
+  it('keeps inline edits on pre-meta conflict and closes the editor while the accepted answer streams', async () => {
+    view = true
+    vi.mocked(api.messages).mockResolvedValue({ items: [userMessage('原问题'), message('completed')], next_cursor: null })
+    await render()
+    await act(async () => [...node.querySelectorAll('button')].find((button) => button.textContent?.includes('编辑并重发'))!.click())
+    const field = node.querySelector<HTMLTextAreaElement>('.chat-question-editor textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, '编辑后的问题')
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const finish = deferred<void>()
+    const answer = message('completed', '重新生成的回答')
+    vi.mocked(api.turn).mockResolvedValue({ ...turn('completed', answer), messages: [userMessage('编辑后的问题'), answer] })
+
+    vi.mocked(editTurn).mockImplementationOnce(async function* () {
+      throw new ApiError({ code: 'scope_unavailable', message: '原资料版本已不可用', retryable: false }, 409)
+    }).mockImplementationOnce(async function* () {
+      yield meta
+      await finish.promise
+      yield { type: 'done', turn_id: 't', message: answer, scope }
+    })
+
+    const submit = () => act(async () => {
+      node.querySelector('.chat-question-editor')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    await submit()
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ status: 409 }))
+    expect(node.querySelector<HTMLTextAreaElement>('.chat-question-editor textarea')?.value).toBe('编辑后的问题')
+
+    await submit()
+    expect(chat.isBusy('c')).toBe(true)
+    expect(node.querySelector('.chat-question-editor')).toBeNull()
+    expect(node.querySelector('.user-bubble')?.textContent).toBe('编辑后的问题')
+    await act(async () => finish.resolve())
+    expect(chat.isBusy('c')).toBe(false)
+  })
+
   it('does not redirect a home send after the user navigates elsewhere before meta', async () => {
     const beforeMeta = deferred<void>()
     const finalAssistant = message('completed', '最终回答')
@@ -412,6 +450,7 @@ describe('disconnected chat recovery', () => {
   })
 
   it('migrates the lone home controller after meta so another home send can start', async () => {
+    const beforeMeta = deferred<void>()
     const firstGate = deferred<void>()
     const secondGate = deferred<void>()
     const secondMeta: ChatEvent = { ...meta, conversation_id: 'c2', turn_id: 't2', user_message_id: 'u2', assistant_message_id: 'a2' }
@@ -427,6 +466,7 @@ describe('disconnected chat recovery', () => {
     }))
     vi.mocked(streamChat)
       .mockImplementationOnce(async function* () {
+        await beforeMeta.promise
         yield meta
         await firstGate.promise
         yield { type: 'done', turn_id: 't', message: firstAssistant, scope }
@@ -439,7 +479,13 @@ describe('disconnected chat recovery', () => {
     await render()
 
     let first!: Promise<boolean>
-    await act(async () => { first = chat.send({ knowledge_base_id: 'k', content: '第一问' }) })
+    const accepted = vi.fn()
+    await act(async () => { first = chat.send({ knowledge_base_id: 'k', content: '第一问' }, accepted) })
+    expect(accepted).not.toHaveBeenCalled()
+    expect(chat.isBusy()).toBe(true)
+    await act(async () => beforeMeta.resolve())
+    expect(accepted).toHaveBeenCalledExactlyOnceWith()
+    expect(accepted).toHaveBeenCalledBefore(navigateMock)
     expect(chat.isBusy('c')).toBe(true)
     expect(chat.isBusy()).toBe(false)
     expect(chat.activeFor('c')?.turnId).toBe('t')
@@ -452,6 +498,7 @@ describe('disconnected chat recovery', () => {
     expect(streamChat).toHaveBeenCalledTimes(2)
 
     await act(async () => { firstGate.resolve(); await first })
+    expect(accepted).toHaveBeenCalledOnce()
     expect(chat.isBusy('c')).toBe(false)
     expect(chat.isBusy('c2')).toBe(true)
     await act(async () => { secondGate.resolve(); await second })

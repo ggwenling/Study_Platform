@@ -771,7 +771,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
               type="button"
               variant="secondary"
               disabled={busy || currentWrongIds.length !== recapCounts.incorrect}
-              onClick={() => void startWrongRetry(currentWrongIds, attempt.knowledge_base_id ?? undefined)}
+              onClick={() => void startWrongRetry(currentWrongIds)}
             >
               {currentWrongIds.length === recapCounts.incorrect ? `立即重练本卷错题（${recapCounts.incorrect}）` : '本卷错题暂不可重练'}
             </Button>}
@@ -794,6 +794,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
         hidden={tab !== 'flashcards'}
       >
         <FlashcardPanel
+          active={tab === 'flashcards'}
           knowledgeBases={knowledgeBases}
           defaultKbId={kbId}
           initialDeckId={historyState?.deckId}
