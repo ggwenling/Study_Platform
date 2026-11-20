@@ -37,6 +37,7 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.conversations(undefined, undefined, true); await api.archiveConversation('id', true)
   await api.overview(); await api.search('q'); await api.capabilities(); await api.turn('id', 'id'); await api.cancelTurn('id', 'id')
   await api.studio.dueFlashcards('id', 10)
+  await api.studio.appendNote('id', { content_md: 'x', message_id: 'id' })
   await api.modelUsage(30)
   await api.modelConnections()
   const connection = { name: '模型', kind: 'llm' as const, base_url: 'https://api.example/v1', model: 'model', api_key: 'test-key' }
@@ -44,7 +45,7 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.testModelConnection('id'); await api.defaultModelConnection('llm', 'id'); await api.deleteModelConnection('id')
   for await (const _ of streamChat({ knowledge_base_id: 'id', answer_mode: 'knowledge_only', intent: 'qa', content: 'x' }, 'key')) { /* consume */ }
   for await (const _ of retryTurn('id', 'id')) { /* consume */ }
-  expect(calls).toHaveLength(49)
+  expect(calls).toHaveLength(50)
   for (const [url, method] of calls) {
     const path = Object.keys(contract.paths).find((template) => new RegExp('^' + template.replace(/\{[^}]+\}/g, '[^/]+') + '$').test(url))
     expect(path, `${method.toUpperCase()} ${url}`).toBeDefined()
@@ -76,6 +77,7 @@ it('publishes the fields consumed by the frontend', () => {
     DashboardDTO: ['knowledge_base_count', 'material_count', 'conversation_count', 'completed_qa_count', 'due_flashcard_count', 'due_wrong_question_count', 'activity'],
     DueFlashcardsDTO: ['total_due', 'items'],
     DueFlashcardDTO: ['id', 'deck_id', 'deck_title', 'knowledge_base_id', 'knowledge_base_name', 'front', 'back', 'due_at', 'is_due', 'sources'],
+    AppendNoteBody: ['content_md'],
     ActivityDTO: ['date', 'count'],
     CapabilitiesDTO: ['rag', 'ocr', 'answer_modes', 'upload_mime_types', 'max_upload_bytes'],
     ChatRequest: ['knowledge_base_id', 'content'],

@@ -3978,6 +3978,62 @@
         }
       }
     },
+    "/api/v1/notes/{note_id}/append": {
+      "post": {
+        "tags": [
+          "studio"
+        ],
+        "summary": "Append To Note",
+        "operationId": "append_to_note_api_v1_notes__note_id__append_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendNoteBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/notes/{note_id}/ingest": {
       "post": {
         "tags": [
@@ -4396,6 +4452,45 @@
           "answer_text"
         ],
         "title": "AnswerTextBody"
+      },
+      "AppendNoteBody": {
+        "properties": {
+          "content_md": {
+            "type": "string",
+            "maxLength": 200000,
+            "minLength": 1,
+            "title": "Content Md"
+          },
+          "section_heading": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section Heading"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content_md"
+        ],
+        "title": "AppendNoteBody"
       },
       "AttemptBody": {
         "properties": {

@@ -13,7 +13,7 @@ import { ProjectNavigation } from './components/ProjectNavigation'
 import { SearchPanel } from './components/SearchPanel'
 import { exportConversationMarkdown } from './conversationActions'
 import type { AccountMode } from './components/Account'
-import { WorkspaceData, useWorkspace } from './WorkspaceData'
+import { WorkspaceData, useWorkspace, type NoticeOptions } from './WorkspaceData'
 import { useTheme } from './Theme'
 import { api } from './api/client'
 import { ApiError } from './api/stream'
@@ -73,7 +73,7 @@ export function App() {
   const [mode, setMode] = useState<AccountMode>('login')
   const [resetToken, setResetToken] = useState('')
   const [authError, setAuthError] = useState('')
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<{ message: string; action?: NoticeOptions['action'] } | null>(null)
   const timer = useRef<number>(0)
   const reduced = useReducedMotion()
   const trigger = useRef<HTMLElement | null>(null)
@@ -91,10 +91,15 @@ export function App() {
     setLoginOpen(true)
   }
 
-  function notify(message: string) {
+  function closeNotice() {
     window.clearTimeout(timer.current)
-    setNotice(message)
-    timer.current = window.setTimeout(() => setNotice(''), 3600)
+    setNotice(null)
+  }
+
+  function notify(message: string, options?: NoticeOptions) {
+    window.clearTimeout(timer.current)
+    setNotice({ message, action: options?.action })
+    timer.current = window.setTimeout(closeNotice, options?.durationMs ?? (options?.action ? 5500 : 3600))
   }
 
   useEffect(() => () => window.clearTimeout(timer.current), [])
@@ -142,8 +147,8 @@ export function App() {
   }
 
   return <>
-    <WorkspaceData key={user?.id ?? 'guest'} user={user} notify={notify} requireLogin={requireLogin} onExpired={() => { api.clearSession(); setUser(null) }}>
-      <Shell onLogout={() => setUser(null)} onPrivateLink={requireLogin} privatePage={privatePage && !user} sessionState={sessionState}
+    <WorkspaceData key={user?.id ?? 'guest'} user={user} notify={notify} requireLogin={requireLogin} onExpired={() => { api.clearSession(); closeNotice(); setUser(null) }}>
+      <Shell onLogout={() => { closeNotice(); setUser(null) }} onPrivateLink={requireLogin} privatePage={privatePage && !user} sessionState={sessionState}
         retrySession={() => { setSessionState('loading'); setSessionAttempt((value) => value + 1) }} />
     </WorkspaceData>
     {loginOpen && (
@@ -159,8 +164,12 @@ export function App() {
     <div className="notice-region" role="status" aria-live="polite">
       <AnimatePresence mode="wait">
         {notice && (
-          <motion.div key={notice} className="notice" initial={{ opacity: 0, y: reduced ? 0 : 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: reduced ? 0 : .2 }}>
-            {notice}<Button variant="ghost" size="sm" onClick={() => setNotice('')}>关闭 <ChevronRight size={14} /></Button>
+          <motion.div key={notice.message} className="notice" initial={{ opacity: 0, y: reduced ? 0 : 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: reduced ? 0 : .2 }}>
+            <span className="notice-message">{notice.message}</span>
+            <div className="notice-actions">
+              {notice.action && <Button variant="secondary" size="sm" onClick={() => { closeNotice(); notice.action?.onClick() }}>{notice.action.label}</Button>}
+              <Button variant="ghost" size="sm" onClick={closeNotice}>关闭 <ChevronRight size={14} /></Button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

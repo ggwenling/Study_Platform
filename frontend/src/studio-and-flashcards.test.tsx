@@ -166,6 +166,46 @@ afterEach(async () => {
 })
 
 describe('Studio notes & Flashcard SM-2 review', () => {
+  it('opens the source attached to a mindmap node', async () => {
+    const citation = {
+      id: 'note-cite', source_label: 'S1', material_id: 'material-1', material_version_id: 'v1',
+      knowledge_base_id: 'kb-1', title: '线性代数讲义', quote: '矩阵特征值定义', locator: { line: 1 },
+      location_label: '第 1 行', version_no: 1, availability: 'available',
+    } as const
+    const note: StudyNote = {
+      ...sampleGuide, artifact_kind: 'mindmap', title: '矩阵导图',
+      content_md: '## 知识层级树\n\n- 矩阵 [S1]\n  - 特征值\n\n## 脉络关系说明\n\n特征值解释谱结构。',
+      citations: [citation],
+    }
+    const openSource = vi.fn()
+    await render(<LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} readyMaterials={readyMaterials}
+      revision={0} initialNotes={[note]} onIngested={vi.fn()} onOpenSource={openSource} />)
+    await act(async () => node.querySelector<HTMLButtonElement>('.studio-note-card')!.click())
+    expect(document.querySelector('[aria-label="可拖动画布中的知识导图"]')).toBeTruthy()
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="查看引用 S1：线性代数讲义"]')!.click())
+    expect(openSource).toHaveBeenCalledWith(citation)
+    await act(async () => findBtn('全部折叠')!.click())
+    expect(document.querySelector('[data-map-node-id]')?.parentElement?.textContent).not.toContain('特征值')
+    await act(async () => findBtn('Markdown 原文')!.click())
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('特征值解释谱结构')
+  })
+
+  it('keeps unsaved note text until the user confirms discarding it', async () => {
+    await render(<LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} readyMaterials={readyMaterials}
+      revision={0} initialNotes={[]} onIngested={vi.fn()} />)
+    await act(async () => findBtn('新建笔记')!.click())
+    const field = document.querySelector<HTMLInputElement>('[role="dialog"] input[name="title"]')!
+    await changeInput(field, '未保存的标题')
+    const close = document.querySelector<HTMLButtonElement>('[aria-label="关闭新建笔记"]')!
+    await act(async () => close.click())
+    expect(document.body.textContent).toContain('放弃未保存的更改？')
+    await act(async () => findBtn('继续编辑')!.click())
+    expect(field.value).toBe('未保存的标题')
+    await act(async () => close.click())
+    await act(async () => findBtn('放弃更改')!.click())
+    expect(api.studio.createNote).not.toHaveBeenCalled()
+  })
+
   it('keeps a saved guide when a notes list requested before generation arrives late', async () => {
     let finishStaleRead!: (result: { items: StudyNote[] }) => void
     let finishFreshRead!: (result: { items: StudyNote[] }) => void
@@ -272,7 +312,7 @@ describe('Studio notes & Flashcard SM-2 review', () => {
 
     await act(async () => findBtn('编辑')!.click())
     const titleInput = document.querySelector<HTMLInputElement>('input[name=title]')!
-    titleInput.value = '修订版提纲'
+    await changeInput(titleInput, '修订版提纲')
     await act(async () => {
       titleInput.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     })

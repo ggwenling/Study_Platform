@@ -27,6 +27,12 @@ class UpdateNoteBody(BaseModel):
     content_md: str | None = Field(default=None, max_length=200000)
 
 
+class AppendNoteBody(BaseModel):
+    content_md: str = Field(min_length=1, max_length=200000)
+    section_heading: str | None = Field(default=None, max_length=255)
+    message_id: UUID | None = None
+
+
 class GenerateArtifactBody(BaseModel):
     kind: Literal["study_guide", "mindmap", "formula_sheet"]
     material_ids: list[UUID] | None = Field(default=None, max_length=50)
@@ -142,6 +148,25 @@ def patch_single_note(
         note_id=note_id,
         title=body.title,
         content_md=body.content_md,
+    )
+    db.commit()
+    return dto
+
+
+@router.post("/notes/{note_id}/append")
+def append_to_note(
+    note_id: UUID,
+    body: AppendNoteBody,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    dto = studio.append_note(
+        db,
+        owner_user_id=user.id,
+        note_id=note_id,
+        content_md=body.content_md,
+        section_heading=body.section_heading,
+        message_id=body.message_id,
     )
     db.commit()
     return dto

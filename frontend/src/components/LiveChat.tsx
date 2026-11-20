@@ -3,7 +3,7 @@ import { useDisclosurePreference } from '../useDisclosurePreference'
 import { BookmarkPlus, Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { api } from '@/api/client'
-import type { Citation, Conversation, Message } from '@/api/types'
+import type { Citation, Conversation, Message, Scope } from '@/api/types'
 import { allPages, errorMessage } from '@/api/ui'
 import { downloadMarkdownFile, formatConversationMarkdown, sanitizeMarkdownFilename, scopeSummaryText } from '@/conversationActions'
 import { Button } from '@/components/arc/button/button'
@@ -16,6 +16,7 @@ import { ConversationDialogs, type ConversationDialogTarget } from './Conversati
 import { MarkdownContent } from './MarkdownContent'
 import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
 import { AssistantActivity, activityLabels } from './AssistantActivity'
+import { SaveChatNoteDialog } from './SaveChatNoteDialog'
 
 const time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const statusText = { pending: '等待生成…', streaming: '正在生成…', stopped: '已停止', failed: '回答失败', completed: '' }
@@ -33,7 +34,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
   const [sourceId, setSourceId] = useState<string | null>(null)
   const [source, setSource] = useState<Citation | null>(null)
   const [sourceError, setSourceError] = useState('')
-  const [savingNoteId, setSavingNoteId] = useState<string | null>(null)
+  const [noteTarget, setNoteTarget] = useState<{ message: Message; scope: Scope; title: string } | null>(null)
   const scroll = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
   const live = chat.cached[id] ?? []
@@ -206,26 +207,11 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                           <Button
                             size="sm"
                             variant="ghost"
-                            loading={savingNoteId === message.id}
-                            disabled={savingNoteId !== null}
-                            onClick={async () => {
-                              if (!message.scope || savingNoteId) return
-                              setSavingNoteId(message.id)
+                            onClick={() => {
+                              if (!message.scope) return
                               const promptRow = messages.find((m) => m.role === 'user' && m.turn_id === message.turn_id)
-                              const noteTitle = (promptRow?.content.slice(0, 60) || displayTitle || '问答沉淀笔记').trim()
-                              try {
-                                await api.studio.createNote(message.scope.knowledge_base_id, {
-                                  title: noteTitle,
-                                  content_md: message.content,
-                                  note_type: 'summary',
-                                  message_id: message.id,
-                                })
-                                notify(`已保存至「${message.scope.knowledge_base_name}」研究笔记。`)
-                              } catch (failure) {
-                                report(failure)
-                              } finally {
-                                setSavingNoteId(null)
-                              }
+                              const title = (promptRow?.content.trim().slice(0, 60) || displayTitle || '问答沉淀笔记').replace(/\s+/g, ' ').trim()
+                              setNoteTarget({ message, scope: message.scope, title })
                             }}
                           >
                             <BookmarkPlus size={15} />存为笔记
@@ -287,6 +273,28 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
               : <p role="status">正在核实来源…</p>}
         </DialogContent>
       </Dialog>
+      {noteTarget && <SaveChatNoteDialog
+        key={noteTarget.message.id}
+        libraryId={noteTarget.scope.knowledge_base_id}
+        libraryName={noteTarget.scope.knowledge_base_name}
+        titleSuggestion={noteTarget.title}
+        content={noteTarget.message.content}
+        onClose={() => setNoteTarget(null)}
+        onSave={async (request) => {
+          const kbId = noteTarget.scope.knowledge_base_id
+          const source = { content_md: noteTarget.message.content, message_id: noteTarget.message.id }
+          const note = 'noteId' in request
+            ? await api.studio.appendNote(request.noteId, { ...source, section_heading: request.sectionHeading || undefined })
+            : await api.studio.createNote(kbId, { ...source, title: request.title, note_type: 'summary' })
+          setNoteTarget(null)
+          notify(`已保存至「${note.title}」研究笔记。`, {
+            action: {
+              label: '查看笔记',
+              onClick: () => void navigate(`/knowledge?${new URLSearchParams({ id: kbId, note: note.id })}`),
+            },
+          })
+        }}
+      />}
       <ConversationDialogs
         target={dialogTarget}
         onClose={() => setDialogTarget(null)}

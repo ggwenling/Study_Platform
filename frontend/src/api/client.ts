@@ -278,6 +278,8 @@ export const api = {
     note: (noteId: string) => request<StudyNote>(`/notes/${pathId(noteId)}`),
     updateNote: (noteId: string, body: { title?: string; content_md?: string }) =>
       request<StudyNote>(`/notes/${pathId(noteId)}`, json('PATCH', body)),
+    appendNote: (noteId: string, body: { content_md: string; section_heading?: string; message_id?: string }) =>
+      request<StudyNote>(`/notes/${pathId(noteId)}/append`, json('POST', body)),
     deleteNote: (noteId: string) => request<void>(`/notes/${pathId(noteId)}`, json('DELETE')),
     ingestNote: (noteId: string) => request<UploadResult>(`/notes/${pathId(noteId)}/ingest`, json('POST')),
     flashcardDecks: (knowledgeBaseId?: string) =>

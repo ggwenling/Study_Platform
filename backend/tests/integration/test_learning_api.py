@@ -421,6 +421,304 @@ def test_studio_citation_ordinals_and_flashcard_idempotency(learning_env, monkey
 
 
 
+def test_append_note_remaps_sparse_sources_and_preserves_verified_snapshot(learning_env):
+    from study_platform.api.v1.auth import get_current_user
+    from study_platform.persistence.models import (
+        Conversation,
+        Message,
+        MessageCitation,
+        NoteCitation,
+    )
+    from study_platform.services import studio
+
+    http, db, owner, kb_id = learning_env
+    user_obj = db.get(User, owner)
+    http.app.dependency_overrides[get_current_user] = lambda: user_obj
+    try:
+        first_chunk = db.scalar(
+            sa.select(MaterialChunk)
+            .join(MaterialVersion, MaterialVersion.id == MaterialChunk.material_version_id)
+            .join(Material, Material.id == MaterialVersion.material_id)
+            .where(Material.owner_user_id == owner, Material.knowledge_base_id == kb_id)
+        )
+        chunks = [first_chunk]
+        for ordinal, text in ((1, "追加快照二"), (2, "追加快照三")):
+            chunk = MaterialChunk(
+                id=uuid4(),
+                index_version_id=first_chunk.index_version_id,
+                material_version_id=first_chunk.material_version_id,
+                ordinal=ordinal,
+                text=text,
+                text_sha256=hashlib.sha256(text.encode()).hexdigest(),
+                locator={"page": ordinal + 1},
+            )
+            db.add(chunk)
+            db.flush()
+            chunks.append(chunk)
+
+        note = studio.create_note(
+            db,
+            owner_user_id=owner,
+            knowledge_base_id=kb_id,
+            title="已有研究笔记",
+            content_md="已有结论 [S4]。",
+        )
+        db.add(
+            NoteCitation(
+                note_id=UUID(note["id"]),
+                chunk_id=first_chunk.id,
+                material_version_id=first_chunk.material_version_id,
+                index_version_id=first_chunk.index_version_id,
+                locator={"page": 1},
+                quote_text=first_chunk.text,
+                quote_sha256=hashlib.sha256(first_chunk.text.encode()).hexdigest(),
+                ordinal=3,
+            )
+        )
+        conversation = Conversation(id=uuid4(), owner_user_id=owner, title="笔记追加测试")
+        db.add(conversation)
+        db.flush()
+        content = (
+            "## 回答依据 [S2]\n结论见 [S2]、[S4]、[S6]，未匹配来源 [S99]。\n"
+            "行内代码 `[S4]` 保持原样。\n\n```text\n[S2] [S4] [S6]\n```\n"
+        )
+        message = Message(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            role="assistant",
+            content=content,
+            status="completed",
+            sequence_no=1,
+        )
+        db.add(message)
+        db.flush()
+        for ordinal, chunk in ((1, chunks[0]), (3, chunks[1]), (5, chunks[2])):
+            digest = "0" * 64 if ordinal == 5 else hashlib.sha256(chunk.text.encode()).hexdigest()
+            db.add(
+                MessageCitation(
+                    message_id=message.id,
+                    chunk_id=chunk.id,
+                    material_version_id=chunk.material_version_id,
+                    index_version_id=chunk.index_version_id,
+                    locator=chunk.locator,
+                    quote_sha256=digest,
+                    ordinal=ordinal,
+                )
+            )
+        db.flush()
+
+        response = http.post(
+            f"/notes/{note['id']}/append",
+            json={
+                "content_md": content,
+                "section_heading": "追加复盘",
+                "message_id": str(message.id),
+            },
+        )
+        assert response.status_code == 200
+        saved = response.json()
+        assert saved["edit_revision"] == 1
+        assert "\n\n---\n\n## 追加复盘\n\n" in saved["content_md"]
+        assert "结论见 [S6]、[S8]、[S10]" in saved["content_md"]
+        assert "行内代码 `[S4]` 保持原样。" in saved["content_md"]
+        assert "```text\n[S2] [S4] [S6]\n```" in saved["content_md"]
+        assert "未匹配来源 `[S99]`" in saved["content_md"]
+        citations = saved["citations"]
+        assert [citation["source_label"] for citation in citations] == ["S4", "S6", "S8", "S10"]
+        assert citations[1]["quote"] == chunks[0].text
+        assert citations[2]["quote"] == chunks[1].text
+        assert citations[3]["quote"] == ""
+        assert citations[3]["quote_status"] == "unavailable"
+
+        note_citations = db.scalars(
+            sa.select(NoteCitation)
+            .where(NoteCitation.note_id == UUID(note["id"]))
+            .order_by(NoteCitation.ordinal)
+        ).all()
+        assert [citation.ordinal for citation in note_citations] == [3, 5, 7, 9]
+        assert note_citations[1].quote_sha256 == hashlib.sha256(chunks[0].text.encode()).hexdigest()
+        assert note_citations[3].quote_sha256 == "0" * 64
+        assert note_citations[3].quote_text is None
+    finally:
+        http.app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_chat_note_paths_reject_stale_cross_library_unowned_and_oversized_content(learning_env):
+    from study_platform.api.v1.auth import get_current_user
+    from study_platform.persistence.models import (
+        AiWorkflowRun,
+        Conversation,
+        Course,
+        KnowledgeBase,
+        Message,
+    )
+    from study_platform.services import studio
+
+    http, db, owner, kb_id = learning_env
+    user_obj = db.get(User, owner)
+    http.app.dependency_overrides[get_current_user] = lambda: user_obj
+    try:
+        note = studio.create_note(
+            db,
+            owner_user_id=owner,
+            knowledge_base_id=kb_id,
+            title="目标笔记",
+            content_md="已有内容",
+        )
+        other_kb = KnowledgeBase(id=uuid4(), owner_user_id=owner, name="另一知识库")
+        db.add(other_kb)
+        db.flush()
+        db.add(Course(id=other_kb.id, owner_user_id=owner, name=other_kb.name))
+        db.flush()
+
+        def scoped_message(
+            *,
+            target_kb_id: UUID,
+            content: str,
+            status: str = "completed",
+            role: str = "assistant",
+        ):
+            conversation = Conversation(id=uuid4(), owner_user_id=owner, title="消息范围测试")
+            db.add(conversation)
+            db.flush()
+            run = AiWorkflowRun(
+                id=uuid4(),
+                owner_user_id=owner,
+                conversation_id=conversation.id,
+                knowledge_base_id=target_kb_id,
+                answer_mode="knowledge_only",
+                status="completed",
+                source_scope={"knowledge_base_id": str(target_kb_id)},
+            )
+            db.add(run)
+            db.flush()
+            message = Message(
+                id=uuid4(),
+                conversation_id=conversation.id,
+                role=role,
+                content=content,
+                status=status,
+                sequence_no=1,
+                workflow_run_id=run.id,
+            )
+            db.add(message)
+            db.flush()
+            return message
+
+        cross_library = scoped_message(target_kb_id=other_kb.id, content="另一库答案")
+        create_cross = http.post(
+            f"/knowledge-bases/{kb_id}/notes",
+            json={
+                "title": "跨库尝试",
+                "content_md": "另一库答案",
+                "message_id": str(cross_library.id),
+            },
+        )
+        append_cross = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": "另一库答案", "message_id": str(cross_library.id)},
+        )
+        assert create_cross.status_code == append_cross.status_code == 409
+        assert create_cross.json()["code"] == append_cross.json()["code"] == "cross_library_scope"
+
+        canonical = scoped_message(target_kb_id=kb_id, content="新的规范答案")
+        create_stale = http.post(
+            f"/knowledge-bases/{kb_id}/notes",
+            json={"title": "过期回答", "content_md": "旧答案", "message_id": str(canonical.id)},
+        )
+        append_stale = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": "旧答案", "message_id": str(canonical.id)},
+        )
+        assert create_stale.status_code == append_stale.status_code == 409
+        assert create_stale.json()["code"] == append_stale.json()["code"] == "message_changed"
+
+        incomplete = scoped_message(target_kb_id=kb_id, content="仍在生成", status="streaming")
+        incomplete_response = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": incomplete.content, "message_id": str(incomplete.id)},
+        )
+        assert incomplete_response.status_code == 409
+        assert incomplete_response.json()["code"] == "message_not_completed"
+
+        non_assistant = scoped_message(
+            target_kb_id=kb_id, content="用户消息", role="user"
+        )
+        non_assistant_response = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": non_assistant.content, "message_id": str(non_assistant.id)},
+        )
+        assert non_assistant_response.status_code == 409
+        assert non_assistant_response.json()["code"] == "message_not_completed"
+
+        missing_message = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": "正文", "message_id": str(uuid4())},
+        )
+        assert missing_message.status_code == 404
+        assert http.post(f"/notes/{uuid4()}/append", json={"content_md": "正文"}).status_code == 404
+
+        private_user = User(
+            id=uuid4(),
+            email=f"{uuid4().hex}@example.test",
+            password_hash="x",
+            display_name="Other",
+        )
+        db.add(private_user)
+        db.flush()
+        private_conversation = Conversation(
+            id=uuid4(), owner_user_id=private_user.id, title="私有会话"
+        )
+        db.add(private_conversation)
+        db.flush()
+        private_message = Message(
+            id=uuid4(),
+            conversation_id=private_conversation.id,
+            role="assistant",
+            content="私人回答",
+            status="completed",
+            sequence_no=1,
+        )
+        db.add(private_message)
+        db.flush()
+        private_kb = KnowledgeBase(id=uuid4(), owner_user_id=private_user.id, name="私有知识库")
+        db.add(private_kb)
+        db.flush()
+        db.add(Course(id=private_kb.id, owner_user_id=private_user.id, name=private_kb.name))
+        db.flush()
+        private_note = studio.create_note(
+            db,
+            owner_user_id=private_user.id,
+            knowledge_base_id=private_kb.id,
+            title="私有笔记",
+            content_md="私人内容",
+        )
+        private_append = http.post(
+            f"/notes/{private_note['id']}/append", json={"content_md": "越权追加"}
+        )
+        assert private_append.status_code == 404
+        private_message_append = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": "私人回答", "message_id": str(private_message.id)},
+        )
+        assert private_message_append.status_code == 404
+
+        long_note = studio.create_note(
+            db,
+            owner_user_id=owner,
+            knowledge_base_id=kb_id,
+            title="长笔记",
+            content_md="x" * 199995,
+        )
+        oversized = http.post(
+            f"/notes/{long_note['id']}/append", json={"content_md": "再追加一点"}
+        )
+        assert oversized.status_code == 422
+        assert oversized.json()["code"] == "note_too_long"
+    finally:
+        http.app.dependency_overrides.pop(get_current_user, None)
+
+
 def test_learning_regressions_mcq_image_override_cleanup_deleted_kb_and_retry_feedback(
     learning_env, monkeypatch
 ):
