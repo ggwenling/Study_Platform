@@ -44,6 +44,7 @@ class VerdictBody(BaseModel):
 class RetryWrongBody(BaseModel):
     wrong_ids: list[UUID] | None = Field(default=None, max_length=20)
     knowledge_base_id: UUID | None = None
+    due_only: bool = False
 
 
 def _response_payload(db: Session, row) -> dict:
@@ -97,17 +98,20 @@ def generate_quiz(
 @router.get("/attempts")
 def list_attempts(
     knowledge_base_id: UUID | None = None,
-    limit: int = Query(default=15, ge=1, le=50),
+    limit: int = Query(default=20, ge=1, le=50),
+    cursor: UUID | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if knowledge_base_id is not None:
         owned_kb(db, user, knowledge_base_id)
-    return {
-        "items": learning.list_attempts(
-            db, user.id, knowledge_base_id=knowledge_base_id, limit=limit
-        )
-    }
+    return learning.list_attempts_page(
+        db,
+        user.id,
+        knowledge_base_id=knowledge_base_id,
+        limit=limit,
+        cursor=cursor,
+    )
 
 
 @router.post("/attempts")
@@ -202,6 +206,7 @@ def patch_verdict(
 @router.get("/wrong-questions")
 def wrong_questions(
     knowledge_base_id: UUID | None = None,
+    due_only: bool = False,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -209,7 +214,7 @@ def wrong_questions(
         owned_kb(db, user, knowledge_base_id)
     return {
         "items": learning.list_wrong_questions(
-            db, user.id, knowledge_base_id=knowledge_base_id
+            db, user.id, knowledge_base_id=knowledge_base_id, due_only=due_only
         )
     }
 
@@ -234,6 +239,7 @@ def retry_wrong(
         owner_user_id=user.id,
         wrong_ids=body.wrong_ids,
         knowledge_base_id=body.knowledge_base_id,
+        due_only=body.due_only,
     )
     db.commit()
     return learning.attempt_payload(db, attempt.id, user.id)

@@ -3,13 +3,16 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatEvent, Message, Scope, Turn } from './api/types'
-import { api, retryTurn, streamChat } from './api/client'
+import { api, editTurn, retryTurn, streamChat } from './api/client'
+import { ApiError } from './api/stream'
 import { useChat, type ChatController } from './useChat'
 import LiveChat from './components/LiveChat'
 
 const workspace = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
-vi.mock('./api/client', () => ({ api: { turn: vi.fn(), cancelTurn: vi.fn(), conversation: vi.fn(), messages: vi.fn() }, streamChat: vi.fn(), retryTurn: vi.fn() }))
-vi.mock('react-router', () => ({ useNavigate: () => vi.fn(), Link: ({ children }: { children: React.ReactNode }) => <span>{children}</span> }))
+const navigateMock = vi.hoisted(() => vi.fn())
+const routerState = vi.hoisted(() => ({ location: { pathname: '/' } }))
+vi.mock('./api/client', () => ({ api: { turn: vi.fn(), cancelTurn: vi.fn(), conversation: vi.fn(), messages: vi.fn() }, streamChat: vi.fn(), retryTurn: vi.fn(), editTurn: vi.fn() }))
+vi.mock('react-router', () => ({ useNavigate: () => navigateMock, useLocation: () => routerState.location, Link: ({ children }: { children: React.ReactNode }) => <span>{children}</span> }))
 vi.mock('./WorkspaceData', () => ({ useWorkspace: () => workspace.value }))
 vi.mock('./components/Composer', () => ({ Composer: () => null }))
 vi.mock('./components/MarkdownContent', () => ({ MarkdownContent: ({ children }: { children: React.ReactNode }) => <span>{children}</span> }))
@@ -23,6 +26,7 @@ vi.mock('./components/ThinkingOrbLazy', () => ({
 
 const scope: Scope = { knowledge_base_id: 'k', knowledge_base_name: '知识库', answer_mode: 'knowledge_only', index_version_ids: [] }
 const message = (status: Message['status'], content = '保存的回答'): Message => ({ id: 'a', conversation_id: 'c', turn_id: 't', role: 'assistant', sequence_no: 2, status, content, citations: [], scope, created_at: '2026-01-01T00:00:00Z' })
+const userMessage = (content: string, turnId = 't'): Message => ({ id: 'u', conversation_id: 'c', turn_id: turnId, role: 'user', sequence_no: 1, status: 'completed', content, citations: [], scope, created_at: '2026-01-01T00:00:00Z' })
 const turn = (status: string, row = message(status as Message['status'])): Turn => ({ conversation_id: 'c', turn_id: 't', scope, status, messages: [row], error_code: null })
 const meta: ChatEvent = { type: 'meta', conversation_id: 'c', turn_id: 't', user_message_id: 'u', assistant_message_id: 'a', scope }
 const user = { id: 'one' }
@@ -56,6 +60,7 @@ beforeEach(() => {
   root = createRoot(node)
   revision = 0
   view = false
+  routerState.location.pathname = '/'
   vi.mocked(api.conversation).mockResolvedValue({ id: 'c', title: '对话', project_knowledge_base_id: null, created_at: '', updated_at: '' })
   vi.mocked(api.messages).mockResolvedValue({ items: [], next_cursor: null })
 })
@@ -358,6 +363,146 @@ describe('disconnected chat recovery', () => {
     expect(report).toHaveBeenCalledWith(expect.objectContaining({ message: 'refresh failed' }))
     expect(node.textContent).toContain('本次成功的内容')
     expect(node.textContent).not.toContain('回答失败')
+  })
+
+  it('keeps accepted edited messages ahead of stale snapshots and clears them after acknowledgement', async () => {
+    const finish = deferred<void>()
+    const editedUser = userMessage('修订后的问题')
+    const finalAssistant = message('completed', '根据新问题生成的回答')
+    vi.mocked(api.turn).mockResolvedValue({ ...turn('completed', finalAssistant), messages: [editedUser, finalAssistant] })
+    vi.mocked(editTurn).mockImplementation(async function* () {
+      yield meta
+      yield { type: 'delta', turn_id: 't', delta: finalAssistant.content }
+      await finish.promise
+      yield { type: 'done', turn_id: 't', message: finalAssistant, scope }
+    })
+    await render()
+
+    let edited!: Promise<boolean>
+    await act(async () => { edited = chat.edit('c', 't', '修订后的问题') })
+    expect(editTurn).toHaveBeenCalledWith('c', 't', '修订后的问题', expect.any(AbortSignal))
+    expect(chat.cached.c.find((row) => row.role === 'user')).toMatchObject({ content: '修订后的问题', status: 'completed' })
+    expect(chat.accepted.c?.find((row) => row.role === 'user')).toMatchObject({ content: '修订后的问题' })
+
+    await act(async () => { finish.resolve(); await edited })
+    expect(chat.accepted.c?.find((row) => row.role === 'assistant')).toMatchObject({ content: finalAssistant.content, status: 'completed' })
+    await act(async () => chat.acknowledgeSaved('c', [userMessage('旧问题'), message('failed', '旧回答')]))
+    expect(chat.accepted.c?.map((row) => row.id)).toEqual(['u', 'a'])
+    await act(async () => chat.acknowledgeSaved('c', chat.accepted.c!))
+    expect(chat.accepted.c).toBeUndefined()
+  })
+
+  it('keeps inline edits on pre-meta conflict and closes the editor while the accepted answer streams', async () => {
+    view = true
+    vi.mocked(api.messages).mockResolvedValue({ items: [userMessage('原问题'), message('completed')], next_cursor: null })
+    await render()
+    await act(async () => [...node.querySelectorAll('button')].find((button) => button.textContent?.includes('编辑并重发'))!.click())
+    const field = node.querySelector<HTMLTextAreaElement>('.chat-question-editor textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field, '编辑后的问题')
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const finish = deferred<void>()
+    const answer = message('completed', '重新生成的回答')
+    vi.mocked(api.turn).mockResolvedValue({ ...turn('completed', answer), messages: [userMessage('编辑后的问题'), answer] })
+
+    vi.mocked(editTurn).mockImplementationOnce(async function* () {
+      throw new ApiError({ code: 'scope_unavailable', message: '原资料版本已不可用', retryable: false }, 409)
+    }).mockImplementationOnce(async function* () {
+      yield meta
+      await finish.promise
+      yield { type: 'done', turn_id: 't', message: answer, scope }
+    })
+
+    const submit = () => act(async () => {
+      node.querySelector('.chat-question-editor')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    await submit()
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ status: 409 }))
+    expect(node.querySelector<HTMLTextAreaElement>('.chat-question-editor textarea')?.value).toBe('编辑后的问题')
+
+    await submit()
+    expect(chat.isBusy('c')).toBe(true)
+    expect(node.querySelector('.chat-question-editor')).toBeNull()
+    expect(node.querySelector('.user-bubble')?.textContent).toBe('编辑后的问题')
+    await act(async () => finish.resolve())
+    expect(chat.isBusy('c')).toBe(false)
+  })
+
+  it('does not redirect a home send after the user navigates elsewhere before meta', async () => {
+    const beforeMeta = deferred<void>()
+    const finalAssistant = message('completed', '最终回答')
+    vi.mocked(api.turn).mockResolvedValue(turn('completed', finalAssistant))
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      await beforeMeta.promise
+      yield meta
+      yield { type: 'done', turn_id: 't', message: finalAssistant, scope }
+    })
+    await render()
+
+    let sent!: Promise<boolean>
+    await act(async () => { sent = chat.send({ knowledge_base_id: 'k', content: '问题' }) })
+    routerState.location.pathname = '/knowledge'
+    await act(async () => { beforeMeta.resolve(); await sent })
+    expect(navigateMock).not.toHaveBeenCalled()
+    expect(chat.isBusy()).toBe(false)
+    expect(chat.cached.c.find((row) => row.role === 'user')).toMatchObject({ content: '问题' })
+  })
+
+  it('migrates the lone home controller after meta so another home send can start', async () => {
+    const beforeMeta = deferred<void>()
+    const firstGate = deferred<void>()
+    const secondGate = deferred<void>()
+    const secondMeta: ChatEvent = { ...meta, conversation_id: 'c2', turn_id: 't2', user_message_id: 'u2', assistant_message_id: 'a2' }
+    const firstAssistant = message('completed', '回答一')
+    const secondAssistant: Message = { ...message('completed', '回答二'), id: 'a2', conversation_id: 'c2', turn_id: 't2' }
+    vi.mocked(api.turn).mockImplementation(async (conversationId, turnId) => ({
+      conversation_id: conversationId,
+      turn_id: turnId,
+      scope,
+      status: 'completed',
+      messages: [conversationId === 'c2' ? secondAssistant : firstAssistant],
+      error_code: null,
+    }))
+    vi.mocked(streamChat)
+      .mockImplementationOnce(async function* () {
+        await beforeMeta.promise
+        yield meta
+        await firstGate.promise
+        yield { type: 'done', turn_id: 't', message: firstAssistant, scope }
+      })
+      .mockImplementationOnce(async function* () {
+        yield secondMeta
+        await secondGate.promise
+        yield { type: 'done', turn_id: 't2', message: secondAssistant, scope }
+      })
+    await render()
+
+    let first!: Promise<boolean>
+    const accepted = vi.fn()
+    await act(async () => { first = chat.send({ knowledge_base_id: 'k', content: '第一问' }, accepted) })
+    expect(accepted).not.toHaveBeenCalled()
+    expect(chat.isBusy()).toBe(true)
+    await act(async () => beforeMeta.resolve())
+    expect(accepted).toHaveBeenCalledExactlyOnceWith()
+    expect(accepted).toHaveBeenCalledBefore(navigateMock)
+    expect(chat.isBusy('c')).toBe(true)
+    expect(chat.isBusy()).toBe(false)
+    expect(chat.activeFor('c')?.turnId).toBe('t')
+
+    let second!: Promise<boolean>
+    await act(async () => { second = chat.send({ knowledge_base_id: 'k', content: '第二问' }) })
+    expect(chat.isBusy('c')).toBe(true)
+    expect(chat.isBusy('c2')).toBe(true)
+    expect(chat.isBusy()).toBe(false)
+    expect(streamChat).toHaveBeenCalledTimes(2)
+
+    await act(async () => { firstGate.resolve(); await first })
+    expect(accepted).toHaveBeenCalledOnce()
+    expect(chat.isBusy('c')).toBe(false)
+    expect(chat.isBusy('c2')).toBe(true)
+    await act(async () => { secondGate.resolve(); await second })
+    expect(chat.isBusy('c2')).toBe(false)
   })
 
   it('stops polling when stopped and preserves stopped canonical messages', async () => {

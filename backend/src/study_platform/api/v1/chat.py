@@ -15,13 +15,8 @@ from study_platform.services import chat
 router = APIRouter()
 
 
-class ChatRequest(BaseModel):
-    conversation_id: UUID | None = None
-    knowledge_base_id: UUID
-    answer_mode: Literal["knowledge_only", "with_general"] = "knowledge_only"
-    intent: Literal["qa", "summary"] = "qa"
+class EditTurnBody(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
-    material_ids: list[UUID] | None = Field(default=None, max_length=50)
 
     @field_validator("content")
     @classmethod
@@ -29,6 +24,14 @@ class ChatRequest(BaseModel):
         if not value.strip():
             raise ValueError("content must not be blank")
         return value.strip()
+
+
+class ChatRequest(EditTurnBody):
+    conversation_id: UUID | None = None
+    knowledge_base_id: UUID
+    answer_mode: Literal["knowledge_only", "with_general"] = "knowledge_only"
+    intent: Literal["qa", "summary"] = "qa"
+    material_ids: list[UUID] | None = Field(default=None, max_length=50)
 
 
 class TurnDTO(BaseModel):
@@ -67,4 +70,11 @@ def cancel(conversation_id: UUID, turn_id: UUID, user=Depends(get_current_user))
              response_class=StreamingResponse, responses={200: {"content": {"text/event-stream": {}}}})
 async def retry(conversation_id: UUID, turn_id: UUID, user=Depends(get_current_user)):
     prepared = await run_in_threadpool(chat.retry, user.id, conversation_id, turn_id)
+    return response(user.id, prepared)
+
+
+@router.post("/conversations/{conversation_id}/turns/{turn_id}/edit",
+             response_class=StreamingResponse, responses={200: {"content": {"text/event-stream": {}}}})
+async def edit_turn(conversation_id: UUID, turn_id: UUID, body: EditTurnBody, user=Depends(get_current_user)):
+    prepared = await run_in_threadpool(chat.retry, user.id, conversation_id, turn_id, edited_content=body.content)
     return response(user.id, prepared)

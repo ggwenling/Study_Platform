@@ -18,6 +18,7 @@ from study_platform.api.v1.materials import create_job
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
 from study_platform.persistence.models import (
+    AiWorkflowRun,
     Conversation,
     Flashcard,
     FlashcardDeck,
@@ -87,6 +88,9 @@ _FLASHCARD_SYSTEM = (
     "source_indices 必须引用给定片段编号（正整数），全部使用中文。"
 )
 
+_SOURCE_TOKEN = re.compile(r"\[S[0-9]+\]")
+_MARKDOWN_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -118,6 +122,144 @@ def _owned_note(db: Session, owner_user_id: UUID, note_id: UUID, *, lock: bool =
     if note is None:
         raise ApiError(404, "not_found", "笔记不存在")
     return note
+
+
+def _message_citations_for_note(
+    db: Session,
+    *,
+    owner_user_id: UUID,
+    knowledge_base_id: UUID,
+    message_id: UUID,
+    content_md: str,
+) -> list[MessageCitation]:
+    msg = db.scalar(
+        sa.select(Message)
+        .join(Conversation, Conversation.id == Message.conversation_id)
+        .where(
+            Message.id == message_id,
+            Conversation.owner_user_id == owner_user_id,
+            Conversation.deleted_at.is_(None),
+        )
+        .with_for_update(of=Message)
+    )
+    if msg is None:
+        raise ApiError(404, "not_found", "关联消息不存在")
+    if msg.role != "assistant" or msg.status != "completed":
+        raise ApiError(409, "message_not_completed", "只能保存已完成的回答")
+    if msg.content.strip() != content_md.strip():
+        raise ApiError(409, "message_changed", "回答内容已更新，请重新打开后再保存")
+
+    has_library_scope = False
+    if msg.workflow_run_id is not None:
+        run = db.get(AiWorkflowRun, msg.workflow_run_id)
+        if run is None or run.owner_user_id != owner_user_id or run.conversation_id != msg.conversation_id:
+            raise ApiError(409, "message_scope_unavailable", "回答范围不可用")
+        if run.knowledge_base_id is not None:
+            if run.knowledge_base_id != knowledge_base_id:
+                raise ApiError(409, "cross_library_scope", "回答与目标笔记不属于同一知识库")
+            has_library_scope = True
+        scope = run.source_scope if isinstance(run.source_scope, dict) else {}
+        raw_scope_kb = scope.get("knowledge_base_id")
+        if raw_scope_kb:
+            try:
+                scope_kb_id = UUID(str(raw_scope_kb))
+            except ValueError as exc:
+                raise ApiError(409, "message_scope_unavailable", "回答范围不可用") from exc
+            if scope_kb_id != knowledge_base_id:
+                raise ApiError(409, "cross_library_scope", "回答与目标笔记不属于同一知识库")
+            has_library_scope = True
+
+    citations = list(
+        db.scalars(
+            sa.select(MessageCitation)
+            .where(MessageCitation.message_id == msg.id)
+            .order_by(MessageCitation.ordinal)
+        ).all()
+    )
+    if not citations and not has_library_scope:
+        raise ApiError(409, "message_scope_unavailable", "回答范围不可用")
+    for citation in citations:
+        version = db.get(MaterialVersion, citation.material_version_id)
+        material = db.get(Material, version.material_id) if version is not None else None
+        if (
+            material is None
+            or material.owner_user_id != owner_user_id
+            or material.knowledge_base_id != knowledge_base_id
+        ):
+            raise ApiError(409, "cross_library_scope", "回答引用与目标笔记不属于同一知识库")
+    return citations
+
+
+def _remap_source_tokens(content: str, label_map: dict[str, str]) -> str:
+    lines = content.splitlines(keepends=True)
+    remapped: list[str] = []
+    fence_char: str | None = None
+    fence_size = 0
+    for line in lines:
+        match = _MARKDOWN_FENCE.match(line)
+        if fence_char is not None:
+            remapped.append(line)
+            if match and match.group(1)[0] == fence_char and len(match.group(1)) >= fence_size:
+                fence_char = None
+                fence_size = 0
+            continue
+        if match:
+            remapped.append(line)
+            fence_char = match.group(1)[0]
+            fence_size = len(match.group(1))
+            continue
+
+        index = 0
+        inline_ticks = 0
+        parts: list[str] = []
+        while index < len(line):
+            if line[index] == "`":
+                end = index + 1
+                while end < len(line) and line[end] == "`":
+                    end += 1
+                tick_count = end - index
+                if inline_ticks == tick_count:
+                    inline_ticks = 0
+                elif inline_ticks == 0:
+                    inline_ticks = tick_count
+                parts.append(line[index:end])
+                index = end
+                continue
+            token = _SOURCE_TOKEN.match(line, index) if inline_ticks == 0 else None
+            if token:
+                label = token.group(0)
+                # An unanswered reference must stay literal when later sections add sources.
+                parts.append(label_map.get(label, f"`{label}`"))
+                index = token.end()
+                continue
+            parts.append(line[index])
+            index += 1
+        remapped.append("".join(parts))
+    return "".join(remapped)
+
+
+def _note_citation_snapshots(
+    db: Session,
+    *,
+    note_id: UUID,
+    citations: list[MessageCitation],
+    base_offset: int,
+) -> None:
+    for citation in citations:
+        quote, quote_status = citation_quote(db, citation)
+        ordinal = base_offset + citation.ordinal
+        db.add(
+            NoteCitation(
+                note_id=note_id,
+                chunk_id=citation.chunk_id,
+                material_version_id=citation.material_version_id,
+                index_version_id=citation.index_version_id,
+                locator=citation.locator if isinstance(citation.locator, dict) else {},
+                quote_text=quote if quote_status == "verified" else None,
+                quote_sha256=citation.quote_sha256,
+                ordinal=ordinal,
+            )
+        )
 
 
 def note_dto(db: Session, note: Note, kb_name: str | None = None) -> dict[str, Any]:
@@ -203,23 +345,15 @@ def create_note(
 
     msg_citations: list[MessageCitation] = []
     if message_id is not None:
-        msg = db.scalar(
-            sa.select(Message)
-            .join(Conversation, Conversation.id == Message.conversation_id)
-            .where(
-                Message.id == message_id,
-                Conversation.owner_user_id == owner_user_id,
-                Conversation.deleted_at.is_(None),
-            )
+        msg_citations = _message_citations_for_note(
+            db,
+            owner_user_id=owner_user_id,
+            knowledge_base_id=kb.id,
+            message_id=message_id,
+            content_md=cleaned_body,
         )
-        if msg is None:
-            raise ApiError(404, "not_found", "关联消息不存在")
-        msg_citations = list(
-            db.scalars(
-                sa.select(MessageCitation)
-                .where(MessageCitation.message_id == msg.id)
-                .order_by(MessageCitation.ordinal)
-            ).all()
+        cleaned_body = _remap_source_tokens(
+            cleaned_body, {f"[S{citation.ordinal + 1}]": f"[S{citation.ordinal + 1}]" for citation in msg_citations}
         )
 
     scope: dict[str, Any] = {
@@ -245,23 +379,71 @@ def create_note(
     )
     db.add(note)
     db.flush()
-    for cit in msg_citations:
-        quote, quote_status = citation_quote(db, cit)
-        db.add(
-            NoteCitation(
-                note_id=note.id,
-                chunk_id=cit.chunk_id,
-                material_version_id=cit.material_version_id,
-                index_version_id=cit.index_version_id,
-                locator=cit.locator if isinstance(cit.locator, dict) else {},
-                quote_text=quote if quote_status == "verified" else None,
-                quote_sha256=cit.quote_sha256,
-                ordinal=cit.ordinal,
-            )
-        )
+    _note_citation_snapshots(
+        db, note_id=note.id, citations=msg_citations, base_offset=0
+    )
     db.flush()
     db.refresh(note)
     return note_dto(db, note, kb.name)
+
+
+def append_note(
+    db: Session,
+    *,
+    owner_user_id: UUID,
+    note_id: UUID,
+    content_md: str,
+    section_heading: str | None = None,
+    message_id: UUID | None = None,
+) -> dict[str, Any]:
+    note = _owned_note(db, owner_user_id, note_id, lock=True)
+    cleaned_body = content_md.strip()
+    if not cleaned_body:
+        raise ApiError(422, "validation_error", "追加内容不能为空")
+
+    msg_citations: list[MessageCitation] = []
+    if message_id is not None:
+        msg_citations = _message_citations_for_note(
+            db,
+            owner_user_id=owner_user_id,
+            knowledge_base_id=note.course_id,
+            message_id=message_id,
+            content_md=cleaned_body,
+        )
+
+    max_ordinal = db.scalar(
+        sa.select(sa.func.max(NoteCitation.ordinal)).where(NoteCitation.note_id == note.id)
+    )
+    base_offset = (int(max_ordinal) + 1) if max_ordinal is not None else 0
+    if message_id is not None:
+        cleaned_body = _remap_source_tokens(
+            cleaned_body,
+            {
+                f"[S{citation.ordinal + 1}]": f"[S{base_offset + citation.ordinal + 1}]"
+                for citation in msg_citations
+            },
+        )
+
+    heading = section_heading.strip() if section_heading else ""
+    appended = f"## {heading}\n\n{cleaned_body}" if heading else cleaned_body
+    merged = f"{note.content_md.rstrip()}\n\n---\n\n{appended}"
+    if len(merged) > 200000:
+        raise ApiError(422, "note_too_long", "笔记合并后内容超过 200000 字符")
+
+    note.content_md = merged
+    now = _now()
+    note.edit_revision = (note.edit_revision or 0) + 1
+    note.edited_at = now
+    note.updated_at = now
+    _note_citation_snapshots(
+        db,
+        note_id=note.id,
+        citations=msg_citations,
+        base_offset=base_offset,
+    )
+    db.flush()
+    db.refresh(note)
+    return note_dto(db, note)
 
 
 def update_note(
@@ -703,6 +885,55 @@ def _card_dto(card: Flashcard, sources: list[dict[str, Any]], now: datetime) -> 
         "due_at": card.due_at.isoformat(),
         "is_due": card.due_at <= now,
         "sources": sources,
+    }
+
+
+def _due_flashcards(owner_user_id: UUID, now: datetime, knowledge_base_id: UUID | None):
+    stmt = sa.select(Flashcard).join(FlashcardDeck, Flashcard.deck_id == FlashcardDeck.id).where(
+        FlashcardDeck.owner_user_id == owner_user_id,
+        FlashcardDeck.deleted_at.is_(None),
+        Flashcard.status == "active",
+        Flashcard.due_at <= now,
+    )
+    if knowledge_base_id is not None:
+        stmt = stmt.where(FlashcardDeck.course_id == knowledge_base_id)
+    return stmt
+
+
+def count_due_flashcards(
+    db: Session, owner_user_id: UUID, now: datetime, knowledge_base_id: UUID | None = None,
+) -> int:
+    due = _due_flashcards(owner_user_id, now, knowledge_base_id)
+    return db.scalar(due.with_only_columns(sa.func.count(), maintain_column_froms=True)) or 0
+
+
+def list_due_flashcards(
+    db: Session, owner_user_id: UUID, *, knowledge_base_id: UUID | None = None, limit: int,
+) -> dict[str, Any]:
+    now = _now()
+    due = _due_flashcards(owner_user_id, now, knowledge_base_id)
+    rows = db.execute(
+        due.add_columns(FlashcardDeck.course_id, FlashcardDeck.title, KnowledgeBase.name)
+        .outerjoin(KnowledgeBase, sa.and_(
+            KnowledgeBase.id == FlashcardDeck.course_id,
+            KnowledgeBase.owner_user_id == owner_user_id,
+            KnowledgeBase.deleted_at.is_(None),
+        ))
+        .order_by(Flashcard.due_at, Flashcard.created_at, Flashcard.id)
+        .limit(limit)
+    ).all()
+    sources = _load_flashcard_sources(db, [card.id for card, *_ in rows])
+    return {
+        "total_due": count_due_flashcards(db, owner_user_id, now, knowledge_base_id),
+        "items": [
+            {
+                **_card_dto(card, sources[card.id], now),
+                "knowledge_base_id": str(kb_id),
+                "knowledge_base_name": kb_name,
+                "deck_title": deck_title,
+            }
+            for card, kb_id, deck_title, kb_name in rows
+        ],
     }
 
 

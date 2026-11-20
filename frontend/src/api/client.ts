@@ -1,4 +1,5 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
+import type { DueFlashcard } from './types'
 import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
@@ -207,7 +208,8 @@ export const api = {
   ),
   capabilities: () => request<Capabilities>('/capabilities'),
   turn: (conversationId: string, turnId: string, signal?: AbortSignal) => request<Turn>(turnPath(conversationId, turnId), { signal }),
-  cancelTurn: (conversationId: string, turnId: string) => request<Turn>(turnPath(conversationId, turnId) + '/cancel', json('POST')),
+  cancelTurn: (conversationId: string, turnId: string, signal?: AbortSignal) =>
+    request<Turn>(turnPath(conversationId, turnId) + '/cancel', { ...json('POST'), signal }),
   learning: {
     generateQuiz: (
       knowledgeBaseId: string,
@@ -218,9 +220,9 @@ export const api = {
         `/learning/knowledge-bases/${pathId(knowledgeBaseId)}/quizzes/generate`,
         json('POST', { count, mode: options?.mode ?? 'short_answer', material_ids: options?.material_ids ?? null }),
       ),
-    attempts: (knowledgeBaseId?: string, limit = 15) =>
-      request<{ items: LearningAttemptSummary[] }>(
-        '/learning/attempts' + query({ knowledge_base_id: knowledgeBaseId, limit: String(limit) }),
+    attempts: (knowledgeBaseId?: string, limit = 20, cursor?: string) =>
+      request<Page<LearningAttemptSummary>>(
+        '/learning/attempts' + query({ knowledge_base_id: knowledgeBaseId, limit: String(limit), cursor }),
       ),
     startAttempt: (quizId: string) =>
       request<LearningAttempt>('/learning/attempts', json('POST', { quiz_id: quizId })),
@@ -252,11 +254,11 @@ export const api = {
         `/learning/responses/${pathId(responseId)}/verdict`,
         json('PATCH', body),
       ),
-    wrongQuestions: (knowledgeBaseId?: string) =>
+    wrongQuestions: (knowledgeBaseId?: string, dueOnly = false) =>
       request<{ items: WrongQuestionItem[] }>(
-        '/learning/wrong-questions' + query({ knowledge_base_id: knowledgeBaseId }),
+        '/learning/wrong-questions' + query({ knowledge_base_id: knowledgeBaseId, due_only: dueOnly ? 'true' : undefined }),
       ),
-    retryWrong: (body: { wrong_ids?: string[]; knowledge_base_id?: string } = {}) =>
+    retryWrong: (body: { wrong_ids?: string[]; knowledge_base_id?: string; due_only?: boolean } = {}) =>
       request<LearningAttempt>('/learning/wrong-questions/retry', json('POST', body)),
     masterWrong: (id: string) =>
       request<{ id: string; status: string }>(`/learning/wrong-questions/${pathId(id)}/mastered`, json('POST')),
@@ -277,6 +279,8 @@ export const api = {
     note: (noteId: string) => request<StudyNote>(`/notes/${pathId(noteId)}`),
     updateNote: (noteId: string, body: { title?: string; content_md?: string }) =>
       request<StudyNote>(`/notes/${pathId(noteId)}`, json('PATCH', body)),
+    appendNote: (noteId: string, body: { content_md: string; section_heading?: string; message_id?: string }) =>
+      request<StudyNote>(`/notes/${pathId(noteId)}/append`, json('POST', body)),
     deleteNote: (noteId: string) => request<void>(`/notes/${pathId(noteId)}`, json('DELETE')),
     ingestNote: (noteId: string) => request<UploadResult>(`/notes/${pathId(noteId)}/ingest`, json('POST')),
     flashcardDecks: (knowledgeBaseId?: string) =>
@@ -292,6 +296,10 @@ export const api = {
         json('POST', body),
       ),
     flashcardDeck: (deckId: string) => request<FlashcardDeckDetail>(`/flashcard-decks/${pathId(deckId)}`),
+    dueFlashcards: (knowledgeBaseId?: string, limit?: number) =>
+      request<{ total_due: number; items: DueFlashcard[] }>(
+        '/flashcards/due' + query({ knowledge_base_id: knowledgeBaseId, limit: limit?.toString() }),
+      ),
     deleteFlashcardDeck: (deckId: string) => request<void>(`/flashcard-decks/${pathId(deckId)}`, json('DELETE')),
     reviewFlashcard: (cardId: string, rating: 0 | 1 | 2 | 3, idempotencyKey: string) =>
       request<FlashcardItem>(`/flashcards/${pathId(cardId)}/review`, json('POST', { rating, idempotency_key: idempotencyKey })),
@@ -338,6 +346,7 @@ async function* stream(path: string, body: unknown, idempotencyKey?: string, sig
 }
 export function streamChat(body: ChatRequest, idempotencyKey: string, signal?: AbortSignal) { return stream('/chat/stream', body, idempotencyKey, signal) }
 export function retryTurn(conversationId: string, turnId: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/retry', {}, undefined, signal) }
+export function editTurn(conversationId: string, turnId: string, content: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/edit', { content }, undefined, signal) }
 
 export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal): Promise<UploadResult> {
   return authorized((token) => new Promise((resolve, reject) => {

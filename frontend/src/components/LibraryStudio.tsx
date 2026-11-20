@@ -4,15 +4,17 @@ import { BookMarked, BrainCircuit, Download, FilePlus2, GitBranch, Layers, Penci
 import { useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import { ApiError } from '@/api/stream'
-import type { Citation, StudioArtifactKind, StudyNote } from '@/api/types'
+import type { Citation, Material, StudioArtifactKind, StudyNote } from '@/api/types'
 import { errorMessage } from '@/api/ui'
 import { downloadMarkdownFile, sanitizeMarkdownFilename } from '@/conversationActions'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { Input } from '@/components/arc/input/input'
-import { Textarea } from '@/components/arc/textarea/textarea'
+import { Select } from '@/components/arc/select/select'
 import { useWorkspace } from '../WorkspaceData'
 import { MarkdownContent } from './MarkdownContent'
+import { MindmapView } from './MindmapView'
+import { NoteEditor } from './NoteEditor'
 
 const artifactBadgeLabel: Record<string, string> = {
   study_guide: '学习指南',
@@ -22,10 +24,21 @@ const artifactBadgeLabel: Record<string, string> = {
   note: '研究笔记',
 }
 
+const generationLabel: Record<StudioArtifactKind | 'flashcards', string> = {
+  study_guide: '学习指南',
+  mindmap: '知识导图',
+  formula_sheet: '概念公式速查',
+  flashcards: '记忆闪卡',
+}
+
+type EditorClose = 'create' | 'edit' | 'detail'
+const emptyDraft = { title: '', content: '' }
+
 export function LibraryStudio({
   kbId,
   kbName,
   readyCount,
+  readyMaterials,
   revision,
   initialNotes,
   onIngested,
@@ -36,6 +49,7 @@ export function LibraryStudio({
   kbId: string
   kbName: string
   readyCount: number
+  readyMaterials: Material[]
   revision: number
   initialNotes?: StudyNote[]
   onIngested: () => void
@@ -51,9 +65,16 @@ export function LibraryStudio({
   const notesRequest = useRef<AbortController | null>(null)
   const reportNotesFailure = useEffectEvent(report)
   const [busy, setBusy] = useState<string | null>(null)
+  const [generationTarget, setGenerationTarget] = useState<StudioArtifactKind | 'flashcards' | null>(null)
+  const [allReadyMaterials, setAllReadyMaterials] = useState(true)
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([])
+  const [flashcardCount, setFlashcardCount] = useState('8')
   const [activeNote, setActiveNote] = useState<StudyNote | null>(null)
   const [editing, setEditing] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [editorDraft, setEditorDraft] = useState(emptyDraft)
+  const [discardAction, setDiscardAction] = useState<EditorClose | null>(null)
+  const canSaveDraft = Boolean(editorDraft.title.trim() && editorDraft.content.trim())
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [linkedNoteFailure, setLinkedNoteFailure] = useState('')
   const [requestedNote, setRequestedNote] = useState(linkedNoteId)
@@ -62,6 +83,7 @@ export function LibraryStudio({
     setActiveNote(null)
     setEditing(false)
     setConfirmDelete(false)
+    setDiscardAction(null)
     setLinkedNoteFailure('')
   }
 
@@ -102,21 +124,48 @@ export function LibraryStudio({
     setNotesRetry((value) => value + 1)
   }
 
-  async function generateArtifact(kind: StudioArtifactKind) {
+  function openGenerationConfig(target: StudioArtifactKind | 'flashcards') {
     if (busy) return
     if (readyCount === 0) {
       notify('请先导入并完成至少 1 份资料的索引。')
       return
     }
-    setBusy(kind)
+    setGenerationTarget(target)
+    setAllReadyMaterials(true)
+    setSelectedMaterialIds([])
+    setFlashcardCount('8')
+  }
+
+  async function submitGeneration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const target = generationTarget
+    if (!target || busy) return
+    const materialIds = allReadyMaterials ? null : selectedMaterialIds
+    if (!materialIds && !readyCount) return
+    if (materialIds && !materialIds.length) return
+    const form = new FormData(event.currentTarget)
+    const title = String(form.get('title') ?? '').trim() || null
+    const kind: StudioArtifactKind | null = target === 'flashcards' ? null : target
+    setBusy(target)
     try {
-      const created = await api.studio.generateNote(kbId, { kind })
-      reloadNotes()
-      setNotes((prev) => [created, ...(prev ?? []).filter((item) => item.id !== created.id)])
-      setActiveNote(created)
-      setEditing(false)
-      setConfirmDelete(false)
-      notify(`已生成「${created.title}」。`)
+      if (kind) {
+        const created = await api.studio.generateNote(kbId, { kind, material_ids: materialIds, title })
+        reloadNotes()
+        setNotes((prev) => [created, ...(prev ?? []).filter((item) => item.id !== created.id)])
+        setActiveNote(created)
+        setEditing(false)
+        setConfirmDelete(false)
+        notify(`已生成「${created.title}」。`)
+      } else {
+        const deck = await api.studio.generateFlashcards(kbId, {
+          count: Number(flashcardCount),
+          material_ids: materialIds,
+          title,
+        })
+        notify(`已生成 ${deck.card_count} 张记忆闪卡，可在学习页翻转复习。`)
+        void navigate('/learning', { state: { tab: 'flashcards', deckId: deck.id, kbId } })
+      }
+      setGenerationTarget(null)
     } catch (error) {
       report(error)
     } finally {
@@ -124,30 +173,38 @@ export function LibraryStudio({
     }
   }
 
-  async function generateFlashcards() {
+  function toggleMaterial(id: string, checked: boolean) {
+    setSelectedMaterialIds((current) => {
+      if (checked) return current.includes(id) || current.length >= 50 ? current : [...current, id]
+      return current.filter((materialId) => materialId !== id)
+    })
+  }
+
+  function finishClose(action: EditorClose) {
+    setDiscardAction(null)
+    if (action === 'create') setCreating(false)
+    if (action === 'edit' || action === 'detail') setEditing(false)
+    if (action === 'detail') {
+      if (linkedNoteId) closeLinkedNote?.()
+      setActiveNote(null)
+      setConfirmDelete(false)
+    }
+  }
+
+  function requestClose(action: EditorClose) {
     if (busy) return
-    if (readyCount === 0) {
-      notify('请先导入并完成至少 1 份资料的索引。')
-      return
-    }
-    setBusy('flashcards')
-    try {
-      const deck = await api.studio.generateFlashcards(kbId, { count: 8 })
-      notify(`已生成 ${deck.card_count} 张记忆闪卡，可在学习页翻转复习。`)
-      void navigate('/learning', { state: { tab: 'flashcards', deckId: deck.id, kbId } })
-    } catch (error) {
-      report(error)
-    } finally {
-      setBusy(null)
-    }
+    const original = action === 'create' ? emptyDraft : activeNote && editing
+      ? { title: activeNote.title, content: activeNote.content_md } : null
+    if (original && (original.title !== editorDraft.title || original.content !== editorDraft.content)) {
+      setDiscardAction(action)
+    } else finishClose(action)
   }
 
   async function submitCreateNote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (busy) return
-    const form = new FormData(event.currentTarget)
-    const title = String(form.get('title') ?? '').trim()
-    const content_md = String(form.get('content_md') ?? '').trim()
+    const title = editorDraft.title.trim()
+    const content_md = editorDraft.content.trim()
     if (!title || !content_md) return
     setBusy('create')
     try {
@@ -168,9 +225,8 @@ export function LibraryStudio({
   async function submitUpdateNote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!activeNote || busy) return
-    const form = new FormData(event.currentTarget)
-    const title = String(form.get('title') ?? '').trim()
-    const content_md = String(form.get('content_md') ?? '').trim()
+    const title = editorDraft.title.trim()
+    const content_md = editorDraft.content.trim()
     if (!title || !content_md) return
     setBusy('save')
     try {
@@ -239,7 +295,7 @@ export function LibraryStudio({
           variant="secondary"
           loading={busy === 'study_guide'}
           disabled={Boolean(busy)}
-          onClick={() => void generateArtifact('study_guide')}
+          onClick={() => openGenerationConfig('study_guide')}
         >
           <BookMarked size={15} /> 生成学习指南
         </Button>
@@ -249,7 +305,7 @@ export function LibraryStudio({
           variant="secondary"
           loading={busy === 'mindmap'}
           disabled={Boolean(busy)}
-          onClick={() => void generateArtifact('mindmap')}
+          onClick={() => openGenerationConfig('mindmap')}
         >
           <GitBranch size={15} /> 生成知识导图
         </Button>
@@ -259,7 +315,7 @@ export function LibraryStudio({
           variant="secondary"
           loading={busy === 'formula_sheet'}
           disabled={Boolean(busy)}
-          onClick={() => void generateArtifact('formula_sheet')}
+          onClick={() => openGenerationConfig('formula_sheet')}
         >
           <Sparkles size={15} /> 概念公式速查
         </Button>
@@ -269,7 +325,7 @@ export function LibraryStudio({
           variant="secondary"
           loading={busy === 'flashcards'}
           disabled={Boolean(busy)}
-          onClick={() => void generateFlashcards()}
+          onClick={() => openGenerationConfig('flashcards')}
         >
           <BrainCircuit size={15} /> 生成记忆闪卡
         </Button>
@@ -278,11 +334,84 @@ export function LibraryStudio({
           size="sm"
           variant="ghost"
           disabled={Boolean(busy)}
-          onClick={() => setCreating(true)}
+          onClick={() => { setEditorDraft(emptyDraft); setCreating(true) }}
         >
           <FilePlus2 size={15} /> 新建笔记
         </Button>
       </div>
+
+      <Dialog open={Boolean(generationTarget)} onOpenChange={(open) => { if (!open && !busy) setGenerationTarget(null) }}>
+        {generationTarget && <DialogContent
+          title={`生成${generationLabel[generationTarget]}`}
+          description={`选择「${kbName}」中的资料范围并设置生成标题。`}
+          closeLabel="关闭生成配置"
+        >
+          <form className="studio-generation-form" onSubmit={(event) => void submitGeneration(event)}>
+            <Input label="自定义标题（可选）" name="title" maxLength={255} placeholder="留空则自动命名" />
+            {generationTarget === 'flashcards' && <Select
+              label="闪卡数量"
+              value={flashcardCount}
+              onValueChange={setFlashcardCount}
+              options={[
+                { value: '5', label: '5 张' },
+                { value: '8', label: '8 张' },
+                { value: '12', label: '12 张' },
+                { value: '16', label: '16 张' },
+              ]}
+            />}
+            <fieldset className="studio-generation-scope">
+              <legend>资料范围</legend>
+              <div className="studio-generation-scope-options">
+                <label>
+                  <input
+                    type="radio"
+                    name="studio-material-scope"
+                    value="all"
+                    checked={allReadyMaterials}
+                    onChange={() => setAllReadyMaterials(true)}
+                  />
+                  全部已就绪资料（共 {readyCount} 份）
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="studio-material-scope"
+                    value="selected"
+                    checked={!allReadyMaterials}
+                    onChange={() => setAllReadyMaterials(false)}
+                  />
+                  指定资料
+                </label>
+              </div>
+              {!allReadyMaterials && <div className="learning-material-picker studio-generation-materials">
+                <p className="muted">最多选择 50 份资料。{!selectedMaterialIds.length && '请至少选择 1 份资料。'}</p>
+                <ul>
+                  {readyMaterials.map((material) => <li key={material.id}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        className="material-scope-checkbox"
+                        aria-label={`选择资料：${material.title}`}
+                        checked={selectedMaterialIds.includes(material.id)}
+                        disabled={!selectedMaterialIds.includes(material.id) && selectedMaterialIds.length >= 50}
+                        onChange={(event) => toggleMaterial(material.id, event.target.checked)}
+                      />
+                      <span>{material.title}</span>
+                    </label>
+                  </li>)}
+                </ul>
+              </div>}
+              {!allReadyMaterials && !selectedMaterialIds.length && <p className="studio-generation-scope-error" role="status">请选择至少 1 份资料，或切换为全部已就绪资料。</p>}
+            </fieldset>
+            <div className="form-actions">
+              <Button type="submit" loading={busy === generationTarget} disabled={!allReadyMaterials && !selectedMaterialIds.length}>
+                确认生成
+              </Button>
+              <Button type="button" variant="ghost" disabled={Boolean(busy)} onClick={() => setGenerationTarget(null)}>取消</Button>
+            </div>
+          </form>
+        </DialogContent>}
+      </Dialog>
 
       {notesError && <div role="alert">笔记读取失败：{notesError} <Button type="button" size="sm" variant="ghost" onClick={reloadNotes}>重试读取笔记</Button></div>}
       {!notes?.length ? (
@@ -316,14 +445,15 @@ export function LibraryStudio({
         </ul>
       )}
 
-      <Dialog open={creating} onOpenChange={(open) => { if (!busy) setCreating(open) }}>
-        <DialogContent title="新建研究笔记" description={`保存在「${kbName}」知识空间中，后续可随时编辑或回写为检索资料。`} closeLabel="关闭新建笔记">
+      <Dialog open={creating} onOpenChange={(open) => { if (!open) requestClose('create') }}>
+        <DialogContent className="library-wide-note-dialog" title="新建研究笔记" description={`保存在「${kbName}」知识空间中，后续可随时编辑或回写为检索资料。`} closeLabel="关闭新建笔记">
           <form className="stack-form" onSubmit={(e) => void submitCreateNote(e)}>
-            <Input label="笔记标题" name="title" maxLength={255} required autoFocus placeholder="例如：核心结论整理" />
-            <Textarea label="Markdown 内容" name="content_md" rows={8} maxLength={200000} required placeholder="支持 Markdown 与 $...$ 数学公式…" />
+            <Input label="笔记标题" name="title" maxLength={255} required autoFocus placeholder="例如：核心结论整理"
+              value={editorDraft.title} onChange={(event) => setEditorDraft({ ...editorDraft, title: event.target.value })} />
+            <NoteEditor content={editorDraft.content} onContentChange={(content) => setEditorDraft((draft) => ({ ...draft, content }))} />
             <div className="form-actions">
-              <Button type="submit" loading={busy === 'create'}>保存笔记</Button>
-              <Button type="button" variant="ghost" disabled={Boolean(busy)} onClick={() => setCreating(false)}>取消</Button>
+              <Button type="submit" loading={busy === 'create'} disabled={!canSaveDraft}>保存笔记</Button>
+              <Button type="button" variant="ghost" disabled={Boolean(busy)} onClick={() => requestClose('create')}>取消</Button>
             </div>
           </form>
         </DialogContent>
@@ -331,20 +461,14 @@ export function LibraryStudio({
 
       <Dialog
         open={Boolean(activeNote || linkedNoteId)}
-        onOpenChange={(open) => {
-          if (!open && !busy) {
-            if (linkedNoteId) closeLinkedNote?.()
-            setActiveNote(null)
-            setEditing(false)
-            setConfirmDelete(false)
-          }
-        }}
+        onOpenChange={(open) => { if (!open) requestClose('detail') }}
       >
         {linkedNoteId && !activeNote && <DialogContent title="研究笔记" description="查看搜索命中的笔记。" closeLabel="关闭笔记详情">
           {linkedNoteFailure ? <p className="error-text" role="alert">{linkedNoteFailure}</p> : <p role="status">正在读取笔记…</p>}
         </DialogContent>}
         {activeNote && (
           <DialogContent
+            className={editing || activeNote.artifact_kind === 'mindmap' ? 'library-wide-note-dialog' : undefined}
             title={confirmDelete ? '删除笔记' : editing ? '编辑笔记' : activeNote.title}
             description={
               confirmDelete
@@ -363,22 +487,21 @@ export function LibraryStudio({
               </div>
             ) : editing ? (
               <form className="stack-form" onSubmit={(e) => void submitUpdateNote(e)}>
-                <Input label="标题" name="title" defaultValue={activeNote.title} maxLength={255} required />
-                <Textarea label="Markdown 内容" name="content_md" defaultValue={activeNote.content_md} rows={10} maxLength={200000} required />
+                <Input label="标题" name="title" value={editorDraft.title} maxLength={255} required
+                  onChange={(event) => setEditorDraft({ ...editorDraft, title: event.target.value })} />
+                <NoteEditor content={editorDraft.content} onContentChange={(content) => setEditorDraft((draft) => ({ ...draft, content }))}
+                  citations={activeNote.citations} onSelectCitation={onOpenSource} />
                 <div className="form-actions">
-                  <Button type="submit" loading={busy === 'save'}>保存修改</Button>
-                  <Button type="button" variant="ghost" disabled={Boolean(busy)} onClick={() => setEditing(false)}>取消编辑</Button>
+                  <Button type="submit" loading={busy === 'save'} disabled={!canSaveDraft}>保存修改</Button>
+                  <Button type="button" variant="ghost" disabled={Boolean(busy)} onClick={() => requestClose('edit')}>取消编辑</Button>
                 </div>
               </form>
             ) : (
               <div className="studio-note-viewer">
                 <div className="studio-note-body answer">
-                  <MarkdownContent
-                    citations={activeNote.citations}
-                    onSelectCitation={(cit) => onOpenSource?.(cit)}
-                  >
-                    {activeNote.content_md}
-                  </MarkdownContent>
+                  {activeNote.artifact_kind === 'mindmap'
+                    ? <MindmapView key={activeNote.id} contentMd={activeNote.content_md} citations={activeNote.citations} onSelectCitation={onOpenSource} />
+                    : <MarkdownContent citations={activeNote.citations} onSelectCitation={onOpenSource}>{activeNote.content_md}</MarkdownContent>}
                 </div>
                 {activeNote.citations.length > 0 && (
                   <div className="studio-note-citations">
@@ -402,7 +525,10 @@ export function LibraryStudio({
                   </div>
                 )}
                 <div className="form-actions">
-                  <Button type="button" size="sm" variant="secondary" onClick={() => setEditing(true)}>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => {
+                    setEditorDraft({ title: activeNote.title, content: activeNote.content_md })
+                    setEditing(true)
+                  }}>
                     <Pencil size={14} /> 编辑
                   </Button>
                   <Button
@@ -443,6 +569,14 @@ export function LibraryStudio({
             )}
           </DialogContent>
         )}
+      </Dialog>
+      <Dialog open={discardAction !== null} onOpenChange={(open) => { if (!open) setDiscardAction(null) }}>
+        {discardAction && <DialogContent title="放弃未保存的更改？" description="关闭编辑后，这次输入的内容将被清除。" closeLabel="关闭确认">
+          <div className="form-actions">
+            <Button type="button" variant="secondary" autoFocus onClick={() => setDiscardAction(null)}>继续编辑</Button>
+            <Button type="button" variant="danger" onClick={() => finishClose(discardAction)}>放弃更改</Button>
+          </div>
+        </DialogContent>}
       </Dialog>
     </section>
   )

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, retryTurn, streamChat, uploadMaterial } from './client'
+import { api, editTurn, retryTurn, streamChat, uploadMaterial } from './client'
 import { ApiError, parseChatStream } from './stream'
 
 function byteStream(text: string): ReadableStream<Uint8Array> {
@@ -184,6 +184,19 @@ describe('stream interruption and retry', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/conversations/c/turns/t/retry')
     expect(fetchMock.mock.calls[0][1].headers.get('Idempotency-Key')).toBeNull()
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('sends an edited turn over the retry SSE protocol', async () => {
+    vi.stubGlobal('document', { cookie: 'study_csrf=token' })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(byteStream('data: {"type":"stopped","turn_id":"t"}\n\n')))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    const events = []
+    for await (const event of editTurn('c', 't', '修订后的问题', controller.signal)) events.push(event)
+    expect(events).toEqual([{ type: 'stopped', turn_id: 't' }])
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/conversations/c/turns/t/edit')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ content: '修订后的问题' })
+    expect(fetchMock.mock.calls[0][1].signal).toBe(controller.signal)
+    expect(fetchMock.mock.calls[0][1].headers.get('Idempotency-Key')).toBeNull()
   })
   it('passes abort signals through to fetch', async () => {
     vi.stubGlobal('document', { cookie: '' })

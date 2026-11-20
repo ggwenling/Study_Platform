@@ -33,6 +33,8 @@ from study_platform.persistence.models import (
     Note,
 )
 from study_platform.services.citations import citation_dto, message_dto
+from study_platform.services.learning import count_due_wrong_questions
+from study_platform.services.studio import count_due_flashcards
 
 router = APIRouter()
 
@@ -584,6 +586,8 @@ class DashboardDTO(BaseModel):
     material_count: int
     conversation_count: int
     completed_qa_count: int
+    due_flashcard_count: int
+    due_wrong_question_count: int
     activity: list[ActivityDTO]
 
 
@@ -602,6 +606,7 @@ def activity_days(events, today):
 
 @router.get("/dashboard/overview", response_model=DashboardDTO)
 def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    now = datetime.now(UTC)
     kb_count = db.scalar(
         sa.select(sa.func.count())
         .select_from(KnowledgeBase)
@@ -646,7 +651,9 @@ def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
         "material_count": material_count,
         "conversation_count": conv_count,
         "completed_qa_count": len(runs),
-        "activity": activity_days(events, datetime.now(ZoneInfo("Asia/Shanghai")).date()),
+        "due_flashcard_count": count_due_flashcards(db, user.id, now),
+        "due_wrong_question_count": count_due_wrong_questions(db, user.id, now),
+        "activity": activity_days(events, now.astimezone(ZoneInfo("Asia/Shanghai")).date()),
     }
 
 

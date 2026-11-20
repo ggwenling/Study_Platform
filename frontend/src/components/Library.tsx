@@ -398,6 +398,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         kbId={id}
         kbName={library.name}
         readyCount={overview?.ready_count ?? 0}
+        readyMaterials={materials.filter((material) => material.status === 'ready')}
         revision={fragmentRevision}
         linkedNoteId={noteId}
         closeLinkedNote={closeSearchResult}

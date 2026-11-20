@@ -10,6 +10,8 @@ export type UploadQueueItem = {
   status: 'queued' | 'uploading' | 'done' | 'failed' | 'cancelled'
 }
 
+export type UploadTarget = { libraryId: string; at: number }
+
 const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.txt', '.md', '.markdown', '.png', '.jpg', '.jpeg'])
 
 export function isSupportedUploadFile(filename: string): boolean {
@@ -48,22 +50,21 @@ export function useUploadQueue({
   refresh,
   notify,
   report,
-  onUploadedToLibrary,
 }: {
   userId?: string | null
   maxUploadBytes?: number
   refresh: () => void
   notify: (message: string) => void
   report: (error: unknown) => void
-  onUploadedToLibrary?: (libraryId: string) => void
 }) {
   const [items, setItems] = useState<UploadQueueItem[]>([])
+  const [lastUploaded, setLastUploaded] = useState<UploadTarget | null>(null)
   const itemsRef = useRef<UploadQueueItem[]>([])
   itemsRef.current = items
   const activeController = useRef<{ id: string; controller: AbortController } | null>(null)
   const prevUserId = useRef(userId)
-  const callbacks = useRef({ refresh, notify, report, onUploadedToLibrary })
-  callbacks.current = { refresh, notify, report, onUploadedToLibrary }
+  const callbacks = useRef({ refresh, notify, report })
+  callbacks.current = { refresh, notify, report }
 
   useEffect(() => {
     if (prevUserId.current === userId) return
@@ -71,6 +72,7 @@ export function useUploadQueue({
     activeController.current?.controller.abort()
     activeController.current = null
     setItems([])
+    setLastUploaded(null)
   }, [userId])
 
   useEffect(() => () => {
@@ -92,7 +94,7 @@ export function useUploadQueue({
         activeController.current = null
         setItems((current) => current.map((row) => row.id === next.id ? { ...row, status: 'done' } : row))
         callbacks.current.refresh()
-        callbacks.current.onUploadedToLibrary?.(next.libraryId)
+        setLastUploaded({ libraryId: next.libraryId, at: Date.now() })
       },
       (error) => {
         if (controller.signal.aborted) return
@@ -131,7 +133,7 @@ export function useUploadQueue({
     }
     if (accepted.length) {
       setItems((current) => [...current, ...accepted])
-      callbacks.current.onUploadedToLibrary?.(target.id)
+      setLastUploaded({ libraryId: target.id, at: Date.now() })
     }
     return accepted.length
   }, [maxUploadBytes])
@@ -176,5 +178,5 @@ export function useUploadQueue({
     return ''
   })()
 
-  return { items, uploading, latestNote, enqueue, retryItem, cancelItem, dismissFinished }
+  return { items, uploading, latestNote, lastUploaded, enqueue, retryItem, cancelItem, dismissFinished }
 }

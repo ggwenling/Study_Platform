@@ -3,7 +3,7 @@
 import hashlib
 import io
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -217,6 +217,8 @@ def test_learning_v2_mcq_text_answer_history_and_wrong_retry(learning_env):
     wrongs = learning.list_wrong_questions(db, owner, knowledge_base_id=kb_id)
     assert len(wrongs) == 1
     assert wrongs[0]["status"] == "open"
+    assert wrongs[0]["is_due"] is True
+    assert datetime.fromisoformat(wrongs[0]["next_review_at"]) <= datetime.now(UTC)
     assert wrongs[0]["sources"] and wrongs[0]["sources"][0]["quote"]
 
     # Retry wrong question and answer correctly -> original wrong question becomes reviewing
@@ -234,6 +236,9 @@ def test_learning_v2_mcq_text_answer_history_and_wrong_retry(learning_env):
     updated_wrongs = learning.list_wrong_questions(db, owner, knowledge_base_id=kb_id)
     assert len(updated_wrongs) == 1
     assert updated_wrongs[0]["status"] == "reviewing"
+    scheduled = datetime.fromisoformat(updated_wrongs[0]["next_review_at"])
+    assert scheduled > datetime.now(UTC)
+    assert updated_wrongs[0]["is_due"] is False
 
 
 def test_studio_notes_artifacts_ingest_and_flashcard_sm2_review(learning_env):
@@ -416,6 +421,304 @@ def test_studio_citation_ordinals_and_flashcard_idempotency(learning_env, monkey
 
 
 
+def test_append_note_remaps_sparse_sources_and_preserves_verified_snapshot(learning_env):
+    from study_platform.api.v1.auth import get_current_user
+    from study_platform.persistence.models import (
+        Conversation,
+        Message,
+        MessageCitation,
+        NoteCitation,
+    )
+    from study_platform.services import studio
+
+    http, db, owner, kb_id = learning_env
+    user_obj = db.get(User, owner)
+    http.app.dependency_overrides[get_current_user] = lambda: user_obj
+    try:
+        first_chunk = db.scalar(
+            sa.select(MaterialChunk)
+            .join(MaterialVersion, MaterialVersion.id == MaterialChunk.material_version_id)
+            .join(Material, Material.id == MaterialVersion.material_id)
+            .where(Material.owner_user_id == owner, Material.knowledge_base_id == kb_id)
+        )
+        chunks = [first_chunk]
+        for ordinal, text in ((1, "追加快照二"), (2, "追加快照三")):
+            chunk = MaterialChunk(
+                id=uuid4(),
+                index_version_id=first_chunk.index_version_id,
+                material_version_id=first_chunk.material_version_id,
+                ordinal=ordinal,
+                text=text,
+                text_sha256=hashlib.sha256(text.encode()).hexdigest(),
+                locator={"page": ordinal + 1},
+            )
+            db.add(chunk)
+            db.flush()
+            chunks.append(chunk)
+
+        note = studio.create_note(
+            db,
+            owner_user_id=owner,
+            knowledge_base_id=kb_id,
+            title="已有研究笔记",
+            content_md="已有结论 [S4]。",
+        )
+        db.add(
+            NoteCitation(
+                note_id=UUID(note["id"]),
+                chunk_id=first_chunk.id,
+                material_version_id=first_chunk.material_version_id,
+                index_version_id=first_chunk.index_version_id,
+                locator={"page": 1},
+                quote_text=first_chunk.text,
+                quote_sha256=hashlib.sha256(first_chunk.text.encode()).hexdigest(),
+                ordinal=3,
+            )
+        )
+        conversation = Conversation(id=uuid4(), owner_user_id=owner, title="笔记追加测试")
+        db.add(conversation)
+        db.flush()
+        content = (
+            "## 回答依据 [S2]\n结论见 [S2]、[S4]、[S6]，未匹配来源 [S99]。\n"
+            "行内代码 `[S4]` 保持原样。\n\n```text\n[S2] [S4] [S6]\n```\n"
+        )
+        message = Message(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            role="assistant",
+            content=content,
+            status="completed",
+            sequence_no=1,
+        )
+        db.add(message)
+        db.flush()
+        for ordinal, chunk in ((1, chunks[0]), (3, chunks[1]), (5, chunks[2])):
+            digest = "0" * 64 if ordinal == 5 else hashlib.sha256(chunk.text.encode()).hexdigest()
+            db.add(
+                MessageCitation(
+                    message_id=message.id,
+                    chunk_id=chunk.id,
+                    material_version_id=chunk.material_version_id,
+                    index_version_id=chunk.index_version_id,
+                    locator=chunk.locator,
+                    quote_sha256=digest,
+                    ordinal=ordinal,
+                )
+            )
+        db.flush()
+
+        response = http.post(
+            f"/notes/{note['id']}/append",
+            json={
+                "content_md": content,
+                "section_heading": "追加复盘",
+                "message_id": str(message.id),
+            },
+        )
+        assert response.status_code == 200
+        saved = response.json()
+        assert saved["edit_revision"] == 1
+        assert "\n\n---\n\n## 追加复盘\n\n" in saved["content_md"]
+        assert "结论见 [S6]、[S8]、[S10]" in saved["content_md"]
+        assert "行内代码 `[S4]` 保持原样。" in saved["content_md"]
+        assert "```text\n[S2] [S4] [S6]\n```" in saved["content_md"]
+        assert "未匹配来源 `[S99]`" in saved["content_md"]
+        citations = saved["citations"]
+        assert [citation["source_label"] for citation in citations] == ["S4", "S6", "S8", "S10"]
+        assert citations[1]["quote"] == chunks[0].text
+        assert citations[2]["quote"] == chunks[1].text
+        assert citations[3]["quote"] == ""
+        assert citations[3]["quote_status"] == "unavailable"
+
+        note_citations = db.scalars(
+            sa.select(NoteCitation)
+            .where(NoteCitation.note_id == UUID(note["id"]))
+            .order_by(NoteCitation.ordinal)
+        ).all()
+        assert [citation.ordinal for citation in note_citations] == [3, 5, 7, 9]
+        assert note_citations[1].quote_sha256 == hashlib.sha256(chunks[0].text.encode()).hexdigest()
+        assert note_citations[3].quote_sha256 == "0" * 64
+        assert note_citations[3].quote_text is None
+    finally:
+        http.app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_chat_note_paths_reject_stale_cross_library_unowned_and_oversized_content(learning_env):
+    from study_platform.api.v1.auth import get_current_user
+    from study_platform.persistence.models import (
+        AiWorkflowRun,
+        Conversation,
+        Course,
+        KnowledgeBase,
+        Message,
+    )
+    from study_platform.services import studio
+
+    http, db, owner, kb_id = learning_env
+    user_obj = db.get(User, owner)
+    http.app.dependency_overrides[get_current_user] = lambda: user_obj
+    try:
+        note = studio.create_note(
+            db,
+            owner_user_id=owner,
+            knowledge_base_id=kb_id,
+            title="目标笔记",
+            content_md="已有内容",
+        )
+        other_kb = KnowledgeBase(id=uuid4(), owner_user_id=owner, name="另一知识库")
+        db.add(other_kb)
+        db.flush()
+        db.add(Course(id=other_kb.id, owner_user_id=owner, name=other_kb.name))
+        db.flush()
+
+        def scoped_message(
+            *,
+            target_kb_id: UUID,
+            content: str,
+            status: str = "completed",
+            role: str = "assistant",
+        ):
+            conversation = Conversation(id=uuid4(), owner_user_id=owner, title="消息范围测试")
+            db.add(conversation)
+            db.flush()
+            run = AiWorkflowRun(
+                id=uuid4(),
+                owner_user_id=owner,
+                conversation_id=conversation.id,
+                knowledge_base_id=target_kb_id,
+                answer_mode="knowledge_only",
+                status="completed",
+                source_scope={"knowledge_base_id": str(target_kb_id)},
+            )
+            db.add(run)
+            db.flush()
+            message = Message(
+                id=uuid4(),
+                conversation_id=conversation.id,
+                role=role,
+                content=content,
+                status=status,
+                sequence_no=1,
+                workflow_run_id=run.id,
+            )
+            db.add(message)
+            db.flush()
+            return message
+
+        cross_library = scoped_message(target_kb_id=other_kb.id, content="另一库答案")
+        create_cross = http.post(
+            f"/knowledge-bases/{kb_id}/notes",
+            json={
+                "title": "跨库尝试",
+                "content_md": "另一库答案",
+                "message_id": str(cross_library.id),
+            },
+        )
+        append_cross = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": "另一库答案", "message_id": str(cross_library.id)},
+        )
+        assert create_cross.status_code == append_cross.status_code == 409
+        assert create_cross.json()["code"] == append_cross.json()["code"] == "cross_library_scope"
+
+        canonical = scoped_message(target_kb_id=kb_id, content="新的规范答案")
+        create_stale = http.post(
+            f"/knowledge-bases/{kb_id}/notes",
+            json={"title": "过期回答", "content_md": "旧答案", "message_id": str(canonical.id)},
+        )
+        append_stale = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": "旧答案", "message_id": str(canonical.id)},
+        )
+        assert create_stale.status_code == append_stale.status_code == 409
+        assert create_stale.json()["code"] == append_stale.json()["code"] == "message_changed"
+
+        incomplete = scoped_message(target_kb_id=kb_id, content="仍在生成", status="streaming")
+        incomplete_response = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": incomplete.content, "message_id": str(incomplete.id)},
+        )
+        assert incomplete_response.status_code == 409
+        assert incomplete_response.json()["code"] == "message_not_completed"
+
+        non_assistant = scoped_message(
+            target_kb_id=kb_id, content="用户消息", role="user"
+        )
+        non_assistant_response = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": non_assistant.content, "message_id": str(non_assistant.id)},
+        )
+        assert non_assistant_response.status_code == 409
+        assert non_assistant_response.json()["code"] == "message_not_completed"
+
+        missing_message = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": "正文", "message_id": str(uuid4())},
+        )
+        assert missing_message.status_code == 404
+        assert http.post(f"/notes/{uuid4()}/append", json={"content_md": "正文"}).status_code == 404
+
+        private_user = User(
+            id=uuid4(),
+            email=f"{uuid4().hex}@example.test",
+            password_hash="x",
+            display_name="Other",
+        )
+        db.add(private_user)
+        db.flush()
+        private_conversation = Conversation(
+            id=uuid4(), owner_user_id=private_user.id, title="私有会话"
+        )
+        db.add(private_conversation)
+        db.flush()
+        private_message = Message(
+            id=uuid4(),
+            conversation_id=private_conversation.id,
+            role="assistant",
+            content="私人回答",
+            status="completed",
+            sequence_no=1,
+        )
+        db.add(private_message)
+        db.flush()
+        private_kb = KnowledgeBase(id=uuid4(), owner_user_id=private_user.id, name="私有知识库")
+        db.add(private_kb)
+        db.flush()
+        db.add(Course(id=private_kb.id, owner_user_id=private_user.id, name=private_kb.name))
+        db.flush()
+        private_note = studio.create_note(
+            db,
+            owner_user_id=private_user.id,
+            knowledge_base_id=private_kb.id,
+            title="私有笔记",
+            content_md="私人内容",
+        )
+        private_append = http.post(
+            f"/notes/{private_note['id']}/append", json={"content_md": "越权追加"}
+        )
+        assert private_append.status_code == 404
+        private_message_append = http.post(
+            f"/notes/{note['id']}/append",
+            json={"content_md": "私人回答", "message_id": str(private_message.id)},
+        )
+        assert private_message_append.status_code == 404
+
+        long_note = studio.create_note(
+            db,
+            owner_user_id=owner,
+            knowledge_base_id=kb_id,
+            title="长笔记",
+            content_md="x" * 199995,
+        )
+        oversized = http.post(
+            f"/notes/{long_note['id']}/append", json={"content_md": "再追加一点"}
+        )
+        assert oversized.status_code == 422
+        assert oversized.json()["code"] == "note_too_long"
+    finally:
+        http.app.dependency_overrides.pop(get_current_user, None)
+
+
 def test_learning_regressions_mcq_image_override_cleanup_deleted_kb_and_retry_feedback(
     learning_env, monkeypatch
 ):
@@ -491,6 +794,8 @@ def test_learning_regressions_mcq_image_override_cleanup_deleted_kb_and_retry_fe
         wrongs2 = http.get("/learning/wrong-questions").json()["items"]
         assert wrongs2[0]["wrong_count"] >= 2
         assert wrongs2[0]["last_answer"] == f"{second_wrong}. 重练第二次选错"
+        assert wrongs2[0]["is_due"] is True
+        assert datetime.fromisoformat(wrongs2[0]["next_review_at"]) <= datetime.now(UTC)
 
         # 5. Item 8a: Soft-deleting KB still allows retrying wrong question even when knowledge_base_id is passed
         kb = db.get(KnowledgeBase, kb_id)
@@ -503,6 +808,189 @@ def test_learning_regressions_mcq_image_override_cleanup_deleted_kb_and_retry_fe
         )
         assert retry_deleted_kb.status_code == 200
         assert len(retry_deleted_kb.json()["items"]) == 1
+    finally:
+        http.app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_wrong_review_schedule_due_filters_retry_and_dashboard(learning_env):
+    from study_platform.api.v1.auth import get_current_user
+    from study_platform.persistence.models import WrongQuestion
+
+    http, db, owner, kb_id = learning_env
+    user_obj = db.get(User, owner)
+    http.app.dependency_overrides[get_current_user] = lambda: user_obj
+    try:
+        quiz = learning.generate_learning_quiz(
+            db, owner_user_id=owner, knowledge_base_id=kb_id, count=1, mode="mcq"
+        )
+        initial_attempt = learning.start_attempt(db, owner_user_id=owner, quiz_id=quiz.id)
+        response_id = learning.attempt_payload(db, initial_attempt.id, owner)["items"][0]["response_id"]
+
+        incorrect = http.patch(
+            f"/learning/responses/{response_id}/verdict", json={"verdict": "incorrect"}
+        )
+        assert incorrect.status_code == 200
+        wrong = db.scalar(sa.select(WrongQuestion).where(WrongQuestion.owner_user_id == owner))
+        assert wrong is not None
+        wrong_id = wrong.id
+
+        due_rows = http.get("/learning/wrong-questions", params={"due_only": "true"}).json()["items"]
+        assert [row["id"] for row in due_rows] == [str(wrong_id)]
+        assert due_rows[0]["next_review_at"] is not None
+        assert due_rows[0]["is_due"] is True
+        overview = http.get("/dashboard/overview")
+        assert overview.status_code == 200
+        assert overview.json()["due_wrong_question_count"] == 1
+
+        first_retry = http.post("/learning/wrong-questions/retry", json={"due_only": True})
+        assert first_retry.status_code == 200
+        retry_response_id = first_retry.json()["items"][0]["response_id"]
+        before_three_days = datetime.now(UTC)
+        corrected = http.patch(
+            f"/learning/responses/{retry_response_id}/verdict", json={"verdict": "correct"}
+        )
+        assert corrected.status_code == 200
+        first_schedule = datetime.fromisoformat(
+            http.get("/learning/wrong-questions").json()["items"][0]["next_review_at"]
+        )
+        assert before_three_days + timedelta(days=3) <= first_schedule
+        assert first_schedule <= datetime.now(UTC) + timedelta(days=3, seconds=2)
+        assert http.get("/learning/wrong-questions", params={"due_only": "true"}).json()["items"] == []
+        assert http.post("/learning/wrong-questions/retry", json={"due_only": True}).status_code == 409
+
+        # Explicit wrong IDs keep working even when the user requests a due-only queue.
+        second_retry = http.post(
+            "/learning/wrong-questions/retry",
+            json={"wrong_ids": [str(wrong_id)], "due_only": True},
+        )
+        assert second_retry.status_code == 200
+        retry_response_id = second_retry.json()["items"][0]["response_id"]
+        before_seven_days = datetime.now(UTC)
+        corrected = http.patch(
+            f"/learning/responses/{retry_response_id}/verdict", json={"verdict": "correct"}
+        )
+        assert corrected.status_code == 200
+        second_schedule = datetime.fromisoformat(
+            http.get("/learning/wrong-questions").json()["items"][0]["next_review_at"]
+        )
+        assert before_seven_days + timedelta(days=7) <= second_schedule
+        assert second_schedule <= datetime.now(UTC) + timedelta(days=7, seconds=2)
+
+        # Legacy reviewing rows keep NULL storage and use last_wrong_at + 3d for due checks.
+        wrong.status = "reviewing"
+        wrong.last_wrong_at = datetime.now(UTC) - timedelta(days=2)
+        wrong.next_review_at = None
+        db.flush()
+        legacy = http.get("/learning/wrong-questions").json()["items"][0]
+        assert legacy["next_review_at"] is None
+        assert legacy["is_due"] is False
+        wrong.last_wrong_at = datetime.now(UTC) - timedelta(days=4)
+        db.flush()
+        legacy_due = http.get(
+            "/learning/wrong-questions", params={"due_only": "true"}
+        ).json()["items"]
+        assert legacy_due[0]["is_due"] is True
+        overview = http.get("/dashboard/overview")
+        assert overview.json()["due_wrong_question_count"] == 1
+
+        legacy_retry = http.post("/learning/wrong-questions/retry", json={"due_only": True})
+        assert legacy_retry.status_code == 200
+        retry_response_id = legacy_retry.json()["items"][0]["response_id"]
+        before_legacy_schedule = datetime.now(UTC)
+        corrected = http.patch(
+            f"/learning/responses/{retry_response_id}/verdict", json={"verdict": "correct"}
+        )
+        assert corrected.status_code == 200
+        recovered_schedule = datetime.fromisoformat(
+            http.get("/learning/wrong-questions").json()["items"][0]["next_review_at"]
+        )
+        assert before_legacy_schedule + timedelta(days=3) <= recovered_schedule
+        assert recovered_schedule <= datetime.now(UTC) + timedelta(days=3, seconds=2)
+
+        mastered = http.post(f"/learning/wrong-questions/{wrong_id}/mastered")
+        assert mastered.status_code == 200
+        db.refresh(wrong)
+        assert wrong.status == "mastered"
+        assert wrong.next_review_at is None
+        assert http.get("/dashboard/overview").json()["due_wrong_question_count"] == 0
+    finally:
+        http.app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_learning_attempt_history_cursor_pagination_and_scope(learning_env):
+    from study_platform.api.v1.auth import get_current_user
+    from study_platform.persistence.models import Quiz, QuizItem
+
+    http, db, owner, kb_id = learning_env
+    user_obj = db.get(User, owner)
+    http.app.dependency_overrides[get_current_user] = lambda: user_obj
+    try:
+        quiz = learning.generate_learning_quiz(
+            db, owner_user_id=owner, knowledge_base_id=kb_id, count=1, mode="short_answer"
+        )
+        created_ids = [
+            str(learning.start_attempt(db, owner_user_id=owner, quiz_id=quiz.id).id)
+            for _ in range(21)
+        ]
+
+        first = http.get("/learning/attempts", params={"knowledge_base_id": str(kb_id)})
+        assert first.status_code == 200
+        first_page = first.json()
+        assert len(first_page["items"]) == 20
+        assert first_page["next_cursor"]
+        second = http.get(
+            "/learning/attempts",
+            params={"knowledge_base_id": str(kb_id), "cursor": first_page["next_cursor"]},
+        )
+        assert second.status_code == 200
+        second_page = second.json()
+        assert len(second_page["items"]) == 1
+        assert second_page["next_cursor"] is None
+        listed_ids = [row["id"] for row in first_page["items"] + second_page["items"]]
+        assert len(set(listed_ids)) == len(created_ids)
+        assert set(listed_ids) == set(created_ids)
+        assert isinstance(learning.list_attempts(db, owner, knowledge_base_id=kb_id), list)
+
+        invalid = http.get("/learning/attempts", params={"cursor": str(uuid4())})
+        assert invalid.status_code == 400
+        assert invalid.json()["code"] == "invalid_cursor"
+
+        other_kb = KnowledgeBase(id=uuid4(), owner_user_id=owner, name="另一练习库")
+        db.add(other_kb)
+        db.flush()
+        db.add(Course(id=other_kb.id, owner_user_id=owner, name=other_kb.name))
+        db.flush()
+        other_quiz = Quiz(
+            owner_user_id=owner,
+            course_id=other_kb.id,
+            title="另一库练习",
+            status="ready",
+            difficulty=3,
+            source_scope={},
+        )
+        db.add(other_quiz)
+        db.flush()
+        db.add(
+            QuizItem(
+                quiz_id=other_quiz.id,
+                ordinal=0,
+                item_type="short_answer",
+                stem="另一库题目",
+                options=[],
+                answer_key={"text": "参考答案"},
+                rubric={},
+                difficulty=3,
+                max_score=1,
+            )
+        )
+        db.flush()
+        other_attempt = learning.start_attempt(db, owner_user_id=owner, quiz_id=other_quiz.id)
+        scoped_cursor = http.get(
+            "/learning/attempts",
+            params={"knowledge_base_id": str(kb_id), "cursor": str(other_attempt.id)},
+        )
+        assert scoped_cursor.status_code == 400
+        assert scoped_cursor.json()["code"] == "invalid_cursor"
     finally:
         http.app.dependency_overrides.pop(get_current_user, None)
 
@@ -661,6 +1149,83 @@ def test_concurrent_answer_updates_serialize_attempt_progress():
             assert attempt.total_score == 2
     finally:
         release_first.set()
+        with Session(engine) as db:
+            quiz_ids = sa.select(Quiz.id).where(Quiz.owner_user_id == owner)
+            attempt_ids = sa.select(QuizAttempt.id).where(QuizAttempt.owner_user_id == owner)
+            db.execute(sa.delete(WrongQuestion).where(WrongQuestion.owner_user_id == owner))
+            db.execute(sa.delete(QuizResponse).where(QuizResponse.attempt_id.in_(attempt_ids)))
+            db.execute(sa.delete(QuizAttempt).where(QuizAttempt.owner_user_id == owner))
+            db.execute(sa.delete(QuizItem).where(QuizItem.quiz_id.in_(quiz_ids)))
+            db.execute(sa.delete(Quiz).where(Quiz.owner_user_id == owner))
+            db.execute(sa.delete(Course).where(Course.id == kb_id))
+            db.execute(sa.delete(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+            db.execute(sa.delete(User).where(User.id == owner))
+            db.commit()
+        engine.dispose()
+
+
+def test_concurrent_wrong_answers_create_one_review_record():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from study_platform.persistence.models import (
+        Quiz,
+        QuizAttempt,
+        QuizItem,
+        QuizResponse,
+        WrongQuestion,
+    )
+
+    if os.getenv("RUN_DB_TESTS") != "1" or not os.getenv("TEST_DATABASE_URL"):
+        pytest.skip("explicit PostgreSQL test database required")
+    url = make_url(os.environ["TEST_DATABASE_URL"])
+    if not (url.database or "").endswith("_test"):
+        pytest.fail("isolated *_test database required")
+    engine = sa.create_engine(url.set(drivername="postgresql+psycopg"))
+    owner, kb_id = uuid4(), uuid4()
+    barrier = Barrier(2)
+    try:
+        with Session(engine) as db:
+            db.add(User(id=owner, email=f"{owner.hex}@test.example", password_hash="x", display_name="Test"))
+            db.add(KnowledgeBase(id=kb_id, owner_user_id=owner, name="Test"))
+            db.flush()
+            db.add(Course(id=kb_id, owner_user_id=owner, name="Test"))
+            quiz = Quiz(owner_user_id=owner, course_id=kb_id, title="Test", status="ready", difficulty=3, source_scope={})
+            db.add(quiz)
+            db.flush()
+            item = QuizItem(quiz_id=quiz.id, ordinal=0, item_type="mcq", stem="题", options=["A. 一", "B. 二"], answer_key={"choice": "A"}, rubric={}, difficulty=3, max_score=1)
+            db.add(item)
+            db.flush()
+            responses = []
+            for _ in range(2):
+                attempt = learning.start_attempt(db, owner_user_id=owner, quiz_id=quiz.id)
+                responses.append(learning.attempt_payload(db, attempt.id, owner)["items"][0]["response_id"])
+            response_ids = [UUID(value) for value in responses]
+            db.commit()
+
+        def mark_incorrect(response_id: UUID) -> None:
+            with Session(engine) as db:
+                barrier.wait(timeout=5)
+                learning.override_verdict(
+                    db,
+                    owner_user_id=owner,
+                    response_id=response_id,
+                    verdict="incorrect",
+                    reference_answer=None,
+                )
+                db.commit()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(mark_incorrect, response_id) for response_id in response_ids]
+            for future in futures:
+                future.result(timeout=10)
+
+        with Session(engine) as db:
+            wrongs = db.scalars(sa.select(WrongQuestion).where(WrongQuestion.owner_user_id == owner)).all()
+            assert len(wrongs) == 1
+            assert wrongs[0].wrong_count == 2
+            assert wrongs[0].next_review_at is not None
+    finally:
         with Session(engine) as db:
             quiz_ids = sa.select(Quiz.id).where(Quiz.owner_user_id == owner)
             attempt_ids = sa.select(QuizAttempt.id).where(QuizAttempt.owner_user_id == owner)

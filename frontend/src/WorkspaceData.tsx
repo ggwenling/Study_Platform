@@ -8,6 +8,11 @@ import { useChat } from './useChat'
 import type { ChatController } from './useChat'
 import { useUploadQueue } from './useUploadQueue'
 
+export type NoticeOptions = {
+  action?: { label: string; onClick: () => void }
+  durationMs?: number
+}
+
 type Data = {
   user: User | null
   libraries: KnowledgeBase[]
@@ -17,10 +22,11 @@ type Data = {
   revision: number
   loading: boolean
   refresh: () => void
-  notify: (message: string) => void
+  notify: (message: string, options?: NoticeOptions) => void
   report: (error: unknown) => void
   requireLogin: () => void
   chat: ChatController
+  uploadQueue: ReturnType<typeof useUploadQueue>
   libraryUploadQueue: ReturnType<typeof useUploadQueue>
 }
 
@@ -76,7 +82,7 @@ export function WorkspaceData({ user, notify, requireLogin, onExpired, children 
   }, [user, revision])
 
   return (
-    <Workspace.Provider value={{ user, libraries, recent, overview, capabilities, revision, loading, refresh, notify, report, requireLogin, chat, libraryUploadQueue }}>
+    <Workspace.Provider value={{ user, libraries, recent, overview, capabilities, revision, loading, refresh, notify, report, requireLogin, chat, uploadQueue: libraryUploadQueue, libraryUploadQueue }}>
       {children}
     </Workspace.Provider>
   )

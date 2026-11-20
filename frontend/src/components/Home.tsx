@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronRight, FileText, HelpCircle, Image, Layers, MessageCircle, PanelRight } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ChevronRight, FileText, HelpCircle, Image, Layers, MessageCircle, PanelRight, RotateCcw } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import { animate } from 'motion/mini'
-import { Link, useLocation } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/arc/button/button'
 import { Composer } from './Composer'
 import type { ComposerHandle } from './Composer'
@@ -57,8 +57,11 @@ function HomeOrbit() {
 export function Home() {
   const reduced = useReducedMotion()
   const location = useLocation()
+  const navigate = useNavigate()
   const navState = (location.state ?? null) as { preferredLibrary?: string; initialDraft?: string } | null
-  const [summary, setSummary] = useState(false)
+  const consumeInitialDraft = useCallback(() => {
+    void navigate(location.pathname + location.search + location.hash, { replace: true, state: null })
+  }, [location.pathname, location.search, location.hash, navigate])
   const composer = useRef<ComposerHandle>(null)
   const { overview, user, loading, requireLogin } = useWorkspace()
   const [panelOpen, setPanelOpen] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:overview`, true)
@@ -84,9 +87,9 @@ export function Home() {
           </header>
           <Composer
             ref={composer}
-            summary={summary}
             preferredLibrary={navState?.preferredLibrary}
             initialDraft={navState?.initialDraft}
+            onInitialDraftApplied={consumeInitialDraft}
           />
           <div className="shortcuts">
             {shortcuts.map(({ label, description, icon: Icon }, index) => (
@@ -94,9 +97,7 @@ export function Home() {
                 if (!user) return requireLogin()
                 if (index === 2) composer.current?.chooseImage()
                 else {
-                  const nextSummary = index === 1
-                  setSummary(nextSummary)
-                  composer.current?.setSummaryMode(nextSummary)
+                  composer.current?.setSummaryMode(index === 1)
                   composer.current?.focus()
                 }
               }}>
@@ -130,6 +131,14 @@ export function Home() {
           <Link className="overview-row" to="/knowledge"><Layers size={20} />知识库 <span>{overview?.knowledge_base_count}</span><ChevronRight size={15} /></Link>
           <Link className="overview-row" to="/knowledge"><FileText size={20} />资料 <span>{overview?.material_count}</span><ChevronRight size={15} /></Link>
           <Link className="overview-row" to="/history"><HelpCircle size={20} />问答 <span>{overview?.completed_qa_count}</span><ChevronRight size={15} /></Link>
+          {user && !loading && overview && <>
+            <Link className="overview-row" to="/learning" state={{ tab: 'flashcards', startDueQueue: true }}>
+              <Layers size={20} />待复习闪卡 <span>{overview.due_flashcard_count ?? 0}</span><ChevronRight size={15} />
+            </Link>
+            <Link className="overview-row" to="/learning" state={{ tab: 'wrong', wrongFilter: 'due' }}>
+              <RotateCcw size={20} />待重练错题 <span>{overview.due_wrong_question_count ?? 0}</span><ChevronRight size={15} />
+            </Link>
+          </>}
         </section>
         </motion.div>
       </motion.aside>

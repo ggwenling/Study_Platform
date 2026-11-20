@@ -3,14 +3,18 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api/client'
-import type { LearningAttempt, WrongQuestionItem } from './api/types'
+import type { Dashboard, LearningAttempt, WrongQuestionItem } from './api/types'
 import { Learning } from './components/Learning'
 import { ThemeProvider } from './Theme'
+import { wrongIdsForAttempt } from './learningUi'
 
 const navigateMock = vi.hoisted(() => vi.fn())
+const locationMock = vi.hoisted(() => ({ value: { key: 'initial', state: null as unknown } }))
+const refreshOverview = vi.fn()
 
 vi.mock('react-router', () => ({
   useNavigate: () => navigateMock,
+  useLocation: () => locationMock.value,
   Link: ({ children }: { children: ReactNode }) => <span>{children}</span>,
 }))
 vi.mock('./components/MarkdownContent', () => ({
@@ -25,6 +29,13 @@ vi.mock('./components/arc/select/select', () => ({
 }))
 vi.mock('./components/arc/accordion/accordion', () => ({
   Accordion: ({ items }: any) => <>{items.map((item: any, idx: number) => <section key={idx}>{item.title}{item.content}</section>)}</>,
+}))
+vi.mock('./components/FlashcardPanel', () => ({
+  FlashcardPanel: ({ active, startDueQueue, onDueQueueStarted }: { active: boolean; startDueQueue?: boolean; onDueQueueStarted?: () => void }) => (
+    <div data-testid="flashcard-panel" data-active={active} data-start-due-queue={startDueQueue ? 'true' : 'false'}>
+      {startDueQueue && <button type="button" onClick={onDueQueueStarted}>完成到期队列加载</button>}
+    </div>
+  ),
 }))
 vi.mock('./api/client', () => ({
   api: {
@@ -46,6 +57,16 @@ vi.mock('./api/client', () => ({
 
 let root: Root
 let node: HTMLDivElement
+
+const testOverview: Dashboard = {
+  knowledge_base_count: 1,
+  material_count: 2,
+  conversation_count: 0,
+  completed_qa_count: 0,
+  due_flashcard_count: 0,
+  due_wrong_question_count: 1,
+  activity: [],
+}
 
 const sampleAttempt: LearningAttempt = {
   id: 'att-1',
@@ -101,6 +122,8 @@ const sampleWrong: WrongQuestionItem = {
   status: 'open',
   wrong_count: 1,
   last_wrong_at: '2026-11-18T02:00:00Z',
+  next_review_at: '2026-11-18T02:00:00Z',
+  is_due: true,
 }
 
 async function render(view: ReactNode) {
@@ -111,8 +134,17 @@ function findButtonContaining(text: string) {
   return [...node.querySelectorAll<HTMLButtonElement>('button')].find((b) => !b.closest('[hidden]') && b.textContent?.includes(text))
 }
 
+async function changeSelect(label: string, value: string) {
+  await act(async () => {
+    const select = node.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!
+    select.value = value
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
+  locationMock.value = { key: 'initial', state: null }
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('matchMedia', () => ({ matches: true, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }))
@@ -135,6 +167,7 @@ beforeEach(() => {
         updated_at: '2026-11-18T01:05:00Z',
       },
     ],
+    next_cursor: null,
   })
   vi.mocked(api.learning.wrongQuestions).mockResolvedValue({ items: [sampleWrong] })
   vi.mocked(api.learning.attempt).mockResolvedValue(sampleAttempt)
@@ -147,6 +180,132 @@ afterEach(async () => {
 })
 
 describe('Learning 2.0 workflow', () => {
+  it('starts the daily flashcard queue from route state and the Learning overview', async () => {
+    locationMock.value = { key: 'due-cards', state: { tab: 'flashcards', startDueQueue: true } }
+    const overview = { ...testOverview, due_flashcard_count: 3 }
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={overview} refreshOverview={refreshOverview} />)
+
+    expect(node.querySelector('#learning-tab-flashcards')?.getAttribute('aria-selected')).toBe('true')
+    const panel = node.querySelector('[data-testid="flashcard-panel"]')!
+    expect(panel.getAttribute('data-start-due-queue')).toBe('true')
+    expect(panel.getAttribute('data-active')).toBe('true')
+    await act(async () => findButtonContaining('完成到期队列加载')!.click())
+    expect(panel.getAttribute('data-start-due-queue')).toBe('false')
+    await act(async () => node.querySelector<HTMLButtonElement>('#learning-tab-practice')!.click())
+    expect(panel.getAttribute('data-active')).toBe('false')
+    await act(async () => findButtonContaining('开始今日到期闪卡')!.click())
+    expect(panel.getAttribute('data-start-due-queue')).toBe('true')
+    expect(panel.getAttribute('data-active')).toBe('true')
+  })
+
+  it('shows the due review entry and retries only today’s due wrong questions', async () => {
+    vi.mocked(api.learning.retryWrong).mockResolvedValue(sampleAttempt)
+    locationMock.value = { key: 'due-wrong', state: { tab: 'wrong', wrongFilter: 'due' } }
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => { await Promise.resolve() })
+
+    expect(node.querySelector('#learning-tab-wrong')?.getAttribute('aria-selected')).toBe('true')
+    expect(node.querySelector<HTMLSelectElement>('select[aria-label="复习范围"]')?.value).toBe('due')
+    expect(node.textContent).toContain('今日待重练')
+    expect(node.textContent).toContain('闪卡 0')
+    expect(node.textContent).toContain('错题 1')
+    await act(async () => findButtonContaining('错题重练（1）')!.click())
+    expect(api.learning.retryWrong).toHaveBeenCalledWith(expect.objectContaining({ due_only: true }))
+    expect(vi.mocked(api.learning.retryWrong).mock.calls[0][0]?.wrong_ids).toBeUndefined()
+  })
+
+  it('labels a reviewing wrong question with its next scheduled review date', async () => {
+    vi.mocked(api.learning.wrongQuestions).mockResolvedValue({ items: [{
+      ...sampleWrong,
+      status: 'reviewing',
+      next_review_at: '2026-11-23T12:00:00Z',
+      is_due: false,
+    }] })
+    locationMock.value = { key: 'wrong-list', state: { tab: 'wrong' } }
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => { await Promise.resolve() })
+    expect(node.textContent).toContain('复习中')
+    expect(node.textContent).toContain('下次复习：11-23')
+  })
+
+  it('shows the full-paper three-state recap and retries only matching wrong IDs', async () => {
+    const otherWrong = { ...sampleWrong, id: 'wrong-2', knowledge_base_id: 'kb-2' }
+    const completedAttempt: LearningAttempt = {
+      ...sampleAttempt,
+      items: [
+        { ...sampleAttempt.items[0], verdict: 'incorrect', knowledge_base_id: 'kb-1' },
+        { ...sampleAttempt.items[1], verdict: 'correct' },
+        { ...sampleAttempt.items[1], response_id: 'resp-3', quiz_item_id: 'item-3', ordinal: 2, stem: '需要确认的题目', verdict: 'pending' },
+        { ...sampleAttempt.items[0], response_id: 'resp-4', quiz_item_id: 'clone-from-kb-2', ordinal: 3, verdict: 'incorrect', knowledge_base_id: 'kb-2', origin_wrong_id: otherWrong.id },
+      ],
+    }
+    vi.mocked(api.learning.attempt).mockResolvedValue(completedAttempt)
+    vi.mocked(api.learning.wrongQuestions).mockResolvedValue({ items: [sampleWrong, otherWrong] })
+    vi.mocked(api.learning.retryWrong).mockResolvedValue({ ...sampleAttempt, id: 'att-retry' })
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => findButtonContaining('继续上次练习')!.click())
+
+    expect(node.textContent).toContain('正确 1 题 · 错误 2 题 · 待确认 1 题')
+    expect(node.textContent).not.toContain('分数')
+    expect(node.textContent).not.toContain('排名')
+    await act(async () => findButtonContaining('查看待确认题目')!.click())
+    expect(node.querySelector('[aria-label="第 3 题"]')?.getAttribute('aria-current')).toBe('step')
+    await act(async () => findButtonContaining('立即重练本卷错题（2）')!.click())
+    expect(api.learning.retryWrong).toHaveBeenCalledWith({ wrong_ids: ['wrong-1', 'wrong-2'], knowledge_base_id: undefined })
+
+    const retryClone = {
+      ...completedAttempt,
+      items: [{ ...completedAttempt.items[0], quiz_item_id: 'clone-item-1', origin_wrong_id: 'wrong-1' }],
+    }
+    expect(wrongIdsForAttempt(retryClone, [sampleWrong])).toEqual(['wrong-1'])
+    const unmatchedClone = {
+      ...completedAttempt,
+      items: [{ ...completedAttempt.items[0], quiz_item_id: 'clone-item-without-origin', origin_wrong_id: null }],
+    }
+    expect(wrongIdsForAttempt(unmatchedClone, [sampleWrong])).toEqual([])
+  })
+
+  it('appends cursor history pages without replacing the first page', async () => {
+    const firstPage = {
+      id: 'att-1',
+      quiz_id: 'q-1',
+      title: '高数 · 混合练习',
+      knowledge_base_id: 'kb-1',
+      knowledge_base_name: '高数资料库',
+      status: 'in_progress',
+      item_count: 2,
+      answered_count: 0,
+      correct_count: 0,
+      started_at: '2026-11-18T01:00:00Z',
+      updated_at: '2026-11-18T01:05:00Z',
+    }
+    const secondPage = {
+      id: 'att-2',
+      quiz_id: 'q-2',
+      title: '线代巩固练习',
+      knowledge_base_id: 'kb-1',
+      knowledge_base_name: '高数资料库',
+      status: 'completed',
+      item_count: 2,
+      answered_count: 2,
+      correct_count: 1,
+      started_at: '2026-11-17T01:00:00Z',
+      updated_at: '2026-11-17T01:05:00Z',
+    }
+    vi.mocked(api.learning.attempts)
+      .mockResolvedValueOnce({ items: [firstPage], next_cursor: 'cursor-1' })
+      .mockResolvedValueOnce({ items: [secondPage], next_cursor: null })
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => { await Promise.resolve() })
+    await act(async () => findButtonContaining('历史练习')!.click())
+
+    expect(node.textContent).toContain('高数 · 混合练习')
+    await act(async () => findButtonContaining('加载更多历史记录')!.click())
+    expect(api.learning.attempts).toHaveBeenLastCalledWith(undefined, 20, 'cursor-1')
+    expect(node.textContent).toContain('线代巩固练习')
+    expect(node.textContent).toContain('高数 · 混合练习')
+  })
+
   it('resumes unfinished attempt, grades MCQ & text answers, and supports wrong-book retry & chat follow-up', async () => {
     vi.mocked(api.learning.submitAnswerText)
       .mockResolvedValueOnce({
@@ -176,6 +335,8 @@ describe('Learning 2.0 workflow', () => {
       <Learning
         knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]}
         notify={vi.fn()}
+        overview={testOverview}
+        refreshOverview={refreshOverview}
       />,
     )
     await act(async () => { await Promise.resolve() })
@@ -224,7 +385,7 @@ describe('Learning 2.0 workflow', () => {
     vi.mocked(api.materials).mockResolvedValue({ items: rows, next_cursor: null })
     vi.mocked(api.learning.generateQuiz).mockRejectedValue(new Error('stop after observing request'))
     const notify = vi.fn()
-    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={notify} />)
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={notify} overview={testOverview} refreshOverview={refreshOverview} />)
     const boxes = [...node.querySelectorAll<HTMLInputElement>('.learning-material-picker input[type=checkbox]')]
     for (const box of boxes.slice(0, 50)) await act(async () => box.click())
     expect(boxes[50].disabled).toBe(true)
@@ -240,7 +401,7 @@ describe('Learning 2.0 workflow', () => {
   it('uses each question library for follow-up and reports an unavailable library', async () => {
     const notify = vi.fn()
     vi.mocked(api.learning.attempt).mockResolvedValue({ ...sampleAttempt, knowledge_base_id: 'kb-1', items: [{ ...sampleAttempt.items[0], knowledge_base_id: null }] })
-    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={notify} />)
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={notify} overview={testOverview} refreshOverview={refreshOverview} />)
     await act(async () => findButtonContaining('继续上次练习')!.click())
     await act(async () => findButtonContaining('去对话追问')!.click())
     expect(notify).toHaveBeenCalledWith('原知识库不可用，无法追问此题。')
@@ -258,10 +419,12 @@ describe('Learning 2.0 workflow', () => {
           { id: 'kb-alive', name: '保留库', description: null, created_at: '', updated_at: '' },
         ]}
         notify={notify}
+        overview={testOverview}
+        refreshOverview={refreshOverview}
       />,
     )
     await act(async () => { await Promise.resolve() })
-    const kbSelect = node.querySelector<HTMLSelectElement>('select[aria-label="选择知识库"]')!
+    const kbSelect = node.querySelector<HTMLSelectElement>('select[aria-label="当前知识库"]')!
     expect(kbSelect.value).toBe('kb-deleted')
 
     await render(
@@ -270,10 +433,12 @@ describe('Learning 2.0 workflow', () => {
           { id: 'kb-alive', name: '保留库', description: null, created_at: '', updated_at: '' },
         ]}
         notify={notify}
+        overview={testOverview}
+        refreshOverview={refreshOverview}
       />,
     )
     await act(async () => { await Promise.resolve() })
-    expect(node.querySelector<HTMLSelectElement>('select[aria-label="选择知识库"]')!.value).toBe('kb-alive')
+    expect(node.querySelector<HTMLSelectElement>('select[aria-label="当前知识库"]')!.value).toBe('kb-alive')
 
     await act(async () => findButtonContaining('错题本')!.click())
     await act(async () => findButtonContaining('已掌握')!.click())

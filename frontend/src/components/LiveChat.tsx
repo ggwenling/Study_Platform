@@ -1,24 +1,27 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useDisclosurePreference } from '../useDisclosurePreference'
-import { BookmarkPlus, Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
+import { BookmarkPlus, ChevronLeft, Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { api } from '@/api/client'
-import type { Citation, Conversation, Message } from '@/api/types'
+import type { Citation, Conversation, Message, Scope } from '@/api/types'
 import { allPages, errorMessage } from '@/api/ui'
 import { downloadMarkdownFile, formatConversationMarkdown, sanitizeMarkdownFilename, scopeSummaryText } from '@/conversationActions'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
+import { Textarea } from '@/components/arc/textarea/textarea'
 import { useWorkspace } from '../WorkspaceData'
-import { Composer } from './Composer'
+import { Composer, type ComposerHandle } from './Composer'
 import { ConversationDialogs, type ConversationDialogTarget } from './ConversationDialogs'
 import { MarkdownContent } from './MarkdownContent'
 import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
 import { AssistantActivity, activityLabels } from './AssistantActivity'
+import { SaveChatNoteDialog } from './SaveChatNoteDialog'
 
 const time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const statusText = { pending: '等待生成…', streaming: '正在生成…', stopped: '已停止', failed: '回答失败', completed: '' }
+const mobileSourcesQuery = '(max-width: 760px)'
 
 export default function LiveChat({ id, searchButton }: { id: string; searchButton?: ReactNode }) {
   const { user, chat, revision, refresh, notify, report, requireLogin } = useWorkspace()
@@ -27,39 +30,38 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
   const [saved, setSaved] = useState<Message[]>([])
   const [error, setError] = useState('')
   const [dialogTarget, setDialogTarget] = useState<ConversationDialogTarget | null>(null)
-  const sourcesDefault = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 769px)').matches : true
-  const [panel, setPanel] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:chat-sources`, sourcesDefault)
+  const [mobile, setMobile] = useState(() => window.matchMedia?.(mobileSourcesQuery).matches ?? false)
+  const [panel, setPanel] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:chat-sources`, true)
+  const [drawer, setDrawer] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [sourceId, setSourceId] = useState<string | null>(null)
   const [source, setSource] = useState<Citation | null>(null)
   const [sourceError, setSourceError] = useState('')
-  const [savingNoteId, setSavingNoteId] = useState<string | null>(null)
+  const [noteTarget, setNoteTarget] = useState<{ message: Message; scope: Scope; title: string } | null>(null)
+  const [editing, setEditing] = useState<{ id: string; content: string } | null>(null)
+  const composer = useRef<ComposerHandle>(null)
+  const sourceTrigger = useRef<HTMLElement | null>(null)
   const scroll = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
+  const active = chat.activeFor(id)
+  const busy = chat.isBusy(id)
   const live = chat.cached[id] ?? []
   const rows = new Map(saved.filter((message) => message.conversation_id === id).map((message) => [message.id, message]))
   for (const message of live) {
     const stored = rows.get(message.id)
-    const generating = chat.active?.conversationId === id && chat.active.turnId === message.turn_id
+    const generating = active?.turnId === message.turn_id
     const storedTerminal = stored && !['pending', 'streaming'].includes(stored.status)
     if (!storedTerminal || generating) rows.set(message.id, message)
   }
+  for (const message of chat.accepted[id] ?? []) rows.set(message.id, message)
   const messages = [...rows.values()].filter((message) => message.role !== 'system_summary')
     .sort((a, b) => a.sequence_no - b.sequence_no)
   const latest = messages.at(-1)
   const focused = messages.find((message) => message.id === selectedId) ?? [...messages].reverse().find((message) => message.role === 'assistant')
-  const activeHere = chat.active?.conversationId === id
-  const recovering = [...new Set(messages.filter((message) => !chat.busy && message.role === 'assistant'
-    && ['pending', 'streaming'].includes(message.status) && message.turn_id !== chat.active?.turnId
+  const latestIsTerminal = latest?.role === 'assistant' && ['completed', 'failed', 'stopped'].includes(latest.status)
+  const recovering = [...new Set(messages.filter((message) => !busy && message.role === 'assistant'
+    && ['pending', 'streaming'].includes(message.status) && message.turn_id !== active?.turnId
     && !chat.recoveryErrors[message.turn_id!]).map((message) => message.turn_id).filter(Boolean))].join(',')
-
-  useEffect(() => {
-    if (chat.active?.conversationId === id) {
-      // Retry reuses message ids. Drop the previous attempt's saved terminal
-      // snapshot before the active attempt finishes and loses its live priority.
-      setSaved((current) => current.filter((message) => message.role !== 'assistant' || message.turn_id !== chat.active?.turnId))
-    }
-  }, [id, chat.active?.conversationId, chat.active?.turnId])
 
   useEffect(() => {
     if (!user || !recovering) return
@@ -75,6 +77,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
         if (!mounted) return
         setConversation(conversation)
         setSaved(messages)
+        chat.acknowledgeSaved(id, messages)
         setError('')
       },
       (error) => {
@@ -102,6 +105,17 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
   }, [user, error])
 
   useEffect(() => {
+    const media = window.matchMedia?.(mobileSourcesQuery)
+    if (!media) return
+    const change = () => {
+      setMobile(media.matches)
+      if (!media.matches) setDrawer(false)
+    }
+    media.addEventListener?.('change', change)
+    return () => media.removeEventListener?.('change', change)
+  }, [])
+
+  useEffect(() => {
     if (!sourceId) return
     let mounted = true
     void api.source(sourceId).then(
@@ -117,6 +131,15 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
     setSourceId(citation.id)
   }
 
+  function openCitations(messageId: string, citation: Citation) {
+    setSelectedId(messageId)
+    if (mobile) {
+      sourceTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      setDrawer(true)
+    } else setPanel(true)
+    openSource(citation)
+  }
+
   const displayTitle = conversation?.title || live.find((item) => item.role === 'user')?.content.slice(0, 80) || '对话'
 
   if (!user || (error && !conversation && !live.length)) {
@@ -128,8 +151,44 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
     )
   }
 
+  const sources = <>
+    {focused?.scope && (
+      <section className="source-section">
+        <span className="muted">本轮回答范围</span>
+        <h3>{focused.scope.knowledge_base_name}</h3>
+        <p>{[
+          focused.scope.intent === 'summary' ? '摘要提炼' : null,
+          focused.scope.selected_material_ids?.length ? `限定 ${focused.scope.selected_material_ids.length} 份资料` : null,
+          focused.scope.answer_mode === 'with_general' ? '含通用知识补充' : '仅知识库',
+        ].filter(Boolean).join(' · ')}</p>
+      </section>
+    )}
+    <section className="source-section">
+      <h3>已使用的资料</h3>
+      {focused?.citations.length ? <div className="source-cards">
+        {focused.citations.map((citation) => <Button key={citation.id} variant="secondary" className="source-card" onClick={() => openSource(citation)}>
+          <span className="source-card-content">
+            <span className="source-card-title"><span className="source-badge">{citation.source_label}</span><FileText size={16} /><span>{citation.title}</span></span>
+            {citation.availability === 'available' && citation.quote && <span className="source-excerpt">{citation.quote}</span>}
+            <small>{citation.availability === 'available' ? citation.location_label : '来源已不可用'}
+              {citation.availability === 'available' && citation.quote_status === 'unavailable' && ' · 历史引文不可用'}
+            </small>
+          </span>
+        </Button>)}
+      </div> : <p>这轮还没有可查看的资料引用。</p>}
+    </section>
+  </>
+
+  const sourceDetail = sourceError ? <p className="error-text" role="alert">{sourceError}</p> : source?.availability === 'unavailable'
+    ? <p>此来源已不可访问。</p>
+    : source ? <div className="source-detail">
+      {source.quote_status === 'unavailable' ? <p>历史引文不可用。</p> : <p>{source.quote}</p>}
+      {source.preview_url?.includes('/pages/') && <MaterialPage key={source.preview_url} version={source.material_version_id} page={Number(source.preview_url.split('/').at(-1))} title={`${source.title} · ${source.location_label}`} />}
+      {source.content_url && <DownloadMaterial version={source.material_version_id} title={source.title} />}
+    </div> : <p role="status">正在核实来源…</p>
+
   return (
-    <div className="chat live-chat" data-sources={panel}>
+    <div className="chat live-chat" data-sources={!mobile && panel}>
       <section className="chat-main" aria-label="会话">
         <header className="chat-header">
           <h1>{displayTitle}</h1>
@@ -152,7 +211,12 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
               } },
             ]}
           />
-          <Button variant="ghost" className="icon-button" aria-label={panel ? '收起引用与来源' : '展开引用与来源'} aria-expanded={panel} aria-controls="live-sources" onClick={() => setPanel(!panel)}><PanelRight size={18} /></Button>
+          <Button variant="ghost" className="icon-button" aria-label={mobile ? '引用与来源' : panel ? '收起引用与来源' : '展开引用与来源'}
+            aria-expanded={mobile ? drawer || Boolean(sourceId) : panel} aria-controls={mobile ? 'live-sources-drawer' : 'live-sources'}
+            onClick={(event) => {
+              if (mobile) { sourceTrigger.current = event.currentTarget; setDrawer(true) }
+              else setPanel(!panel)
+            }}><PanelRight size={18} /></Button>
         </header>
         <div className="conversation" ref={scroll} tabIndex={0} aria-label="消息" onScroll={(event) => {
           const node = event.currentTarget
@@ -164,27 +228,52 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
               const isUser = message.role === 'user'
               const stopped = message.status === 'stopped' || message.status === 'failed'
               const phase = !isUser && ['pending', 'streaming'].includes(message.status)
-                && chat.active?.assistantId === message.id ? chat.active.phase : null
+                && active?.assistantId === message.id ? active.phase : null
               const status = phase ? activityLabels[phase] : ['pending', 'streaming'].includes(message.status)
                 ? '正在确认生成状态…' : statusText[message.status]
+              const isLastTurn = Boolean(message.turn_id && message.turn_id === latest?.turn_id)
               return (
-                <article key={message.id} className={`message ${isUser ? 'user-message' : 'ai-message'}`} aria-label={isUser ? '用户消息' : 'AI 消息'}>
+                <article key={message.id} className={`message ${isUser ? 'user-message' : 'ai-message'}`}
+                  data-editing={editing?.id === message.id || undefined} aria-label={isUser ? '用户消息' : 'AI 消息'}>
                   <div className="message-meta">
                     {isUser ? <span className="message-avatar">你</span> : <AssistantActivity phase={phase} />}
                     <span>{isUser ? '你' : '知循'}</span><time dateTime={message.created_at}>{time.format(new Date(message.created_at))}</time>
                   </div>
                   {message.scope && <span className="pill"><Folder size={13} />{scopeSummaryText(message.scope)}</span>}
-                  {isUser ? <div className="user-bubble">{message.content}</div> : (
+                  {isUser ? (
+                    editing?.id === message.id && message.turn_id ? (
+                      <form className="user-bubble chat-question-editor" onSubmit={(event) => {
+                        event.preventDefault()
+                        if (!editing.content.trim() || busy) return
+                        void chat.edit(id, message.turn_id!, editing.content.trim(), () => setEditing(null))
+                      }}>
+                        <Textarea label="编辑问题" rows={3} maxLength={8000} autoFocus
+                          value={editing.content} disabled={busy}
+                          onChange={(event) => setEditing({ id: message.id, content: event.target.value })} />
+                        <div className="form-actions">
+                          <Button type="submit" size="sm" disabled={!editing.content.trim()} loading={busy}>保存并重新生成</Button>
+                          <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(null)}>取消</Button>
+                        </div>
+                      </form>
+                    ) : (
+                      <>
+                        <div className="user-bubble">{message.content}</div>
+                        {isLastTurn ? latestIsTerminal && (
+                          <Button type="button" variant="ghost" size="sm" className="chat-question-action" disabled={busy}
+                            onClick={() => setEditing({ id: message.id, content: message.content })}><Pencil size={14} /> 编辑并重发</Button>
+                        ) : (
+                          <Button type="button" variant="ghost" size="sm" className="chat-question-action"
+                            onClick={() => composer.current?.editAsNew(message.content, message.scope)}><Pencil size={14} /> 编辑为新提问</Button>
+                        )}
+                      </>
+                    )
+                  ) : (
                     <>
                       <div className="answer">
                         {message.content && (
                           <MarkdownContent
                             citations={message.citations}
-                            onSelectCitation={(citation) => {
-                              setSelectedId(message.id)
-                              setPanel(true)
-                              openSource(citation)
-                            }}
+                            onSelectCitation={(citation) => openCitations(message.id, citation)}
                           >
                             {message.content}
                           </MarkdownContent>
@@ -195,7 +284,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                       </div>
                       <div className="citation-list">
                         {message.citations.map((citation) => (
-                          <Button key={citation.id} size="sm" variant="secondary" className="citation" onClick={() => { setSelectedId(message.id); setPanel(true); openSource(citation) }}>
+                          <Button key={citation.id} size="sm" variant="secondary" className="citation" onClick={() => openCitations(message.id, citation)}>
                             <FileText size={15} />{citation.title} · {citation.location_label}
                           </Button>
                         ))}
@@ -206,33 +295,20 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                           <Button
                             size="sm"
                             variant="ghost"
-                            loading={savingNoteId === message.id}
-                            disabled={savingNoteId !== null}
-                            onClick={async () => {
-                              if (!message.scope || savingNoteId) return
-                              setSavingNoteId(message.id)
+                            disabled={busy && isLastTurn}
+                            onClick={() => {
+                              if (!message.scope) return
                               const promptRow = messages.find((m) => m.role === 'user' && m.turn_id === message.turn_id)
-                              const noteTitle = (promptRow?.content.slice(0, 60) || displayTitle || '问答沉淀笔记').trim()
-                              try {
-                                await api.studio.createNote(message.scope.knowledge_base_id, {
-                                  title: noteTitle,
-                                  content_md: message.content,
-                                  note_type: 'summary',
-                                  message_id: message.id,
-                                })
-                                notify(`已保存至「${message.scope.knowledge_base_name}」研究笔记。`)
-                              } catch (failure) {
-                                report(failure)
-                              } finally {
-                                setSavingNoteId(null)
-                              }
+                              const title = (promptRow?.content.trim().slice(0, 60) || displayTitle || '问答沉淀笔记').replace(/\s+/g, ' ').trim()
+                              setNoteTarget({ message, scope: message.scope, title })
                             }}
                           >
                             <BookmarkPlus size={15} />存为笔记
                           </Button>
                         )}
-                        {message === latest && message.turn_id && stopped && <Button size="sm" variant="secondary" disabled={chat.busy} onClick={() => void chat.retry(id, message.turn_id!)}>重试本轮</Button>}
-                        {message === latest && message.turn_id && message.status === 'streaming' && !activeHere && <Button size="sm" variant="secondary" onClick={() => void chat.stop(id, message.turn_id!)}>停止生成</Button>}
+                        {message === latest && message.turn_id && (stopped || message.status === 'completed') && <Button size="sm" variant="secondary" disabled={busy}
+                          onClick={() => void chat.retry(id, message.turn_id!)}>{stopped ? '重试本轮' : '重新生成'}</Button>}
+                        {message === latest && message.turn_id && message.status === 'streaming' && !active && !busy && <Button size="sm" variant="secondary" onClick={() => void chat.stop(id, message.turn_id!)}>停止生成</Button>}
                       </div>
                     </>
                   )}
@@ -241,52 +317,62 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
             })}
           </div>
         </div>
-        <div className="chat-footer"><Composer conversationId={id} preferredLibrary={latest?.scope?.knowledge_base_id ?? conversation?.project_knowledge_base_id ?? undefined} /></div>
+        <div className="chat-footer"><Composer ref={composer} conversationId={id} preferredLibrary={latest?.scope?.knowledge_base_id ?? conversation?.project_knowledge_base_id ?? undefined} /></div>
       </section>
-      <aside className="source-panel" id="live-sources" aria-label="引用与来源" inert={!panel} aria-hidden={!panel}>
-        <div className="source-panel-inner">
-          <h2>引用与来源</h2>
-          {focused?.scope && (
-            <section className="source-section">
-              <span className="muted">本轮回答范围</span>
-              <h3>{focused.scope.knowledge_base_name}</h3>
-              <p>
-                {[
-                  focused.scope.intent === 'summary' ? '摘要提炼' : null,
-                  focused.scope.selected_material_ids?.length ? `限定 ${focused.scope.selected_material_ids.length} 份资料` : null,
-                  focused.scope.answer_mode === 'with_general' ? '含通用知识补充' : '仅知识库',
-                ].filter(Boolean).join(' · ')}
-              </p>
-            </section>
-          )}
-          <section className="source-section">
-            <h3>已使用的资料</h3>
-            {focused?.citations.length ? <div className="source-cards">
-              {focused.citations.map((citation) => <Button key={citation.id} variant="secondary" className="source-card" onClick={() => openSource(citation)}>
-                <span className="source-card-content">
-                  <span className="source-card-title"><span className="source-badge">{citation.source_label}</span><FileText size={16} /><span>{citation.title}</span></span>
-                  {citation.availability === 'available' && citation.quote && <span className="source-excerpt">{citation.quote}</span>}
-                  <small>{citation.availability === 'available' ? citation.location_label : '来源已不可用'}
-                    {citation.availability === 'available' && citation.quote_status === 'unavailable' && ' · 历史引文不可用'}
-                  </small>
-                </span>
-              </Button>)}
-            </div> : <p>这轮还没有可查看的资料引用。</p>}
-          </section>
-        </div>
-      </aside>
-      <Dialog open={Boolean(sourceId)} onOpenChange={(open) => { if (!open) setSourceId(null) }}>
-        <DialogContent title={source?.title || '资料来源'} description={source?.location_label || '查看当前引用。'}>
-          {sourceError ? <p className="error-text" role="alert">{sourceError}</p> : source?.availability === 'unavailable'
-            ? <p>此来源已不可访问。</p>
-            : source ? <div className="source-detail">
-              {source.quote_status === 'unavailable' ? <p>历史引文不可用。</p> : <p>{source.quote}</p>}
-              {source.preview_url?.includes('/pages/') && <MaterialPage key={source.preview_url} version={source.material_version_id} page={Number(source.preview_url.split('/').at(-1))} title={`${source.title} · ${source.location_label}`} />}
-              {source.content_url && <DownloadMaterial version={source.material_version_id} title={source.title} />}
-            </div>
-              : <p role="status">正在核实来源…</p>}
-        </DialogContent>
-      </Dialog>
+      {mobile ? (
+        <Dialog open={drawer || Boolean(sourceId)} onOpenChange={(open) => { if (!open) { setDrawer(false); setSourceId(null) } }}>
+          <DialogContent id="live-sources-drawer" className="chat-source-drawer" closeLabel="关闭引用抽屉"
+            title={sourceId ? source?.title || '资料来源' : '引用与来源'}
+            description={sourceId ? source?.location_label || '查看当前引用。' : '本轮回答的范围与引用资料。'}
+            onCloseAutoFocus={(event) => {
+              if (!sourceTrigger.current?.isConnected) return
+              event.preventDefault()
+              sourceTrigger.current.focus()
+            }}>
+            {sourceId ? (
+              <div className="chat-source-drawer-detail">
+                <Button type="button" size="sm" variant="ghost" onClick={() => { setDrawer(true); setSourceId(null) }}>
+                  <ChevronLeft size={16} /> 返回引用列表
+                </Button>
+                {sourceDetail}
+              </div>
+            ) : sources}
+          </DialogContent>
+        </Dialog>
+      ) : (
+        <>
+          <aside className="source-panel" id="live-sources" aria-label="引用与来源" inert={!panel} aria-hidden={!panel}>
+            <div className="source-panel-inner"><h2>引用与来源</h2>{sources}</div>
+          </aside>
+          <Dialog open={Boolean(sourceId)} onOpenChange={(open) => { if (!open) setSourceId(null) }}>
+            <DialogContent title={source?.title || '资料来源'} description={source?.location_label || '查看当前引用。'} closeLabel="关闭资料来源">
+              {sourceDetail}
+            </DialogContent>
+          </Dialog>
+        </>
+      )}
+      {noteTarget && <SaveChatNoteDialog
+        key={noteTarget.message.id}
+        libraryId={noteTarget.scope.knowledge_base_id}
+        libraryName={noteTarget.scope.knowledge_base_name}
+        titleSuggestion={noteTarget.title}
+        content={noteTarget.message.content}
+        onClose={() => setNoteTarget(null)}
+        onSave={async (request) => {
+          const kbId = noteTarget.scope.knowledge_base_id
+          const source = { content_md: noteTarget.message.content, message_id: noteTarget.message.id }
+          const note = 'noteId' in request
+            ? await api.studio.appendNote(request.noteId, { ...source, section_heading: request.sectionHeading || undefined })
+            : await api.studio.createNote(kbId, { ...source, title: request.title, note_type: 'summary' })
+          setNoteTarget(null)
+          notify(`已保存至「${note.title}」研究笔记。`, {
+            action: {
+              label: '查看笔记',
+              onClick: () => void navigate(`/knowledge?${new URLSearchParams({ id: kbId, note: note.id })}`),
+            },
+          })
+        }}
+      />}
       <ConversationDialogs
         target={dialogTarget}
         onClose={() => setDialogTarget(null)}

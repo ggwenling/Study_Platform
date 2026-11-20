@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import contractText from '../../../contracts/frontend.openapi.json?raw'
-import { api, retryTurn, streamChat, uploadMaterial } from './client'
+import { api, editTurn, retryTurn, streamChat, uploadMaterial } from './client'
 
 const contract = JSON.parse(contractText) as { paths: Record<string, Record<string, unknown>>; components: { schemas: Record<string, { required?: string[]; properties: Record<string, unknown> }> } }
 
@@ -12,7 +12,7 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   const calls: [string, string][] = []
   vi.stubGlobal('fetch', vi.fn(async (url: string, options: RequestInit = {}) => {
     calls.push([url.split('?')[0], (options.method ?? 'GET').toLowerCase()])
-    if (url.endsWith('/stream') || url.endsWith('/retry') && url.includes('/turns/')) {
+    if (url.endsWith('/stream') || url.includes('/turns/') && (url.endsWith('/retry') || url.endsWith('/edit'))) {
       return new Response('data: {"type":"stopped","turn_id":"t"}\n\n')
     }
     return new Response('{}')
@@ -36,6 +36,8 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.conversations(); await api.createConversation(); await api.conversation('id'); await api.updateConversation('id', { title: 'x' }); await api.deleteConversation('id'); await api.messages('id')
   await api.conversations(undefined, undefined, true); await api.archiveConversation('id', true)
   await api.overview(); await api.search('q'); await api.capabilities(); await api.turn('id', 'id'); await api.cancelTurn('id', 'id')
+  await api.studio.dueFlashcards('id', 10)
+  await api.studio.appendNote('id', { content_md: 'x', message_id: 'id' })
   await api.modelUsage(30)
   await api.modelConnections()
   const connection = { name: '模型', kind: 'llm' as const, base_url: 'https://api.example/v1', model: 'model', api_key: 'test-key' }
@@ -43,7 +45,8 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.testModelConnection('id'); await api.defaultModelConnection('llm', 'id'); await api.deleteModelConnection('id')
   for await (const _ of streamChat({ knowledge_base_id: 'id', answer_mode: 'knowledge_only', intent: 'qa', content: 'x' }, 'key')) { /* consume */ }
   for await (const _ of retryTurn('id', 'id')) { /* consume */ }
-  expect(calls).toHaveLength(48)
+  for await (const _ of editTurn('id', 'id', 'edited')) { /* consume */ }
+  expect(calls).toHaveLength(51)
   for (const [url, method] of calls) {
     const path = Object.keys(contract.paths).find((template) => new RegExp('^' + template.replace(/\{[^}]+\}/g, '[^/]+') + '$').test(url))
     expect(path, `${method.toUpperCase()} ${url}`).toBeDefined()
@@ -72,10 +75,14 @@ it('publishes the fields consumed by the frontend', () => {
     PreviewSection: ['text', 'locator'],
     SearchPage: ['items', 'next_cursor'],
     SearchItem: ['id', 'type', 'title'],
-    DashboardDTO: ['knowledge_base_count', 'material_count', 'conversation_count', 'completed_qa_count', 'activity'],
+    DashboardDTO: ['knowledge_base_count', 'material_count', 'conversation_count', 'completed_qa_count', 'due_flashcard_count', 'due_wrong_question_count', 'activity'],
+    DueFlashcardsDTO: ['total_due', 'items'],
+    DueFlashcardDTO: ['id', 'deck_id', 'deck_title', 'knowledge_base_id', 'knowledge_base_name', 'front', 'back', 'due_at', 'is_due', 'sources'],
+    AppendNoteBody: ['content_md'],
     ActivityDTO: ['date', 'count'],
     CapabilitiesDTO: ['rag', 'ocr', 'answer_modes', 'upload_mime_types', 'max_upload_bytes'],
     ChatRequest: ['knowledge_base_id', 'content'],
+    EditTurnBody: ['content'],
     RegisterBody: ['email', 'password', 'display_name'],
     LoginBody: ['email', 'password'],
     NameBody: ['name'],
@@ -90,6 +97,13 @@ it('publishes the fields consumed by the frontend', () => {
   expect(contract.paths['/api/v1/conversations'].get).toMatchObject({
     parameters: expect.arrayContaining([expect.objectContaining({ name: 'archived', in: 'query' })]),
   })
+  expect(contract.paths['/api/v1/learning/attempts'].get).toMatchObject({
+    parameters: expect.arrayContaining([expect.objectContaining({ name: 'cursor', in: 'query' })]),
+  })
+  expect(contract.paths['/api/v1/learning/wrong-questions'].get).toMatchObject({
+    parameters: expect.arrayContaining([expect.objectContaining({ name: 'due_only', in: 'query' })]),
+  })
+  expect(contract.components.schemas.RetryWrongBody.properties).toHaveProperty('due_only')
   expect(contract.components.schemas.SearchItem.properties).toHaveProperty('knowledge_base_id')
   expect(contract.components.schemas.ChatRequest.properties).toEqual(expect.objectContaining({
     conversation_id: expect.any(Object), answer_mode: expect.any(Object), intent: expect.any(Object), material_ids: expect.any(Object),

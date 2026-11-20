@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react'
+import { act, cloneElement, isValidElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { api, uploadMaterial } from './api/client'
 import type { Material, UploadResult } from './api/types'
 import { CurrentMaterials } from './components/CurrentMaterials'
 import { Composer } from './components/Composer'
+import { useUploadQueue } from './useUploadQueue'
+import { clearAllChatDrafts } from './useChatDrafts'
 import { locatorLabel } from './api/ui'
 import { PasteTextDialog } from './components/PasteTextDialog'
 import { ThemeProvider } from './Theme'
@@ -27,7 +29,19 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done })
   return { promise, resolve }
 }
-async function render(view: ReactNode) { await act(async () => root.render(<ThemeProvider>{view}</ThemeProvider>)) }
+function SharedQueue({ children }: { children: ReactNode }) {
+  const queue = useUploadQueue({
+    userId: workspace.value.user?.id,
+    maxUploadBytes: workspace.value.capabilities?.max_upload_bytes,
+    refresh: workspace.value.refresh,
+    notify: workspace.value.notify,
+    report: workspace.value.report,
+  })
+  workspace.value.uploadQueue = queue
+  workspace.value.libraryUploadQueue = queue
+  return isValidElement(children) ? cloneElement(children) : children
+}
+async function render(view: ReactNode) { await act(async () => root.render(<ThemeProvider><SharedQueue>{view}</SharedQueue></ThemeProvider>)) }
 async function click(text: string) {
   const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === text)!
   expect(button).toBeTruthy()
@@ -35,13 +49,14 @@ async function click(text: string) {
 }
 
 beforeEach(() => {
+  clearAllChatDrafts()
   vi.useFakeTimers()
   vi.resetAllMocks()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('matchMedia', () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }))
   node = document.body.appendChild(document.createElement('div'))
   root = createRoot(node)
-  workspace.value = { user: { id: 'one' }, libraries: [library('A'), library('B')], revision: 0, capabilities: { rag: true, max_upload_bytes: 1000 }, refresh: vi.fn(), report: vi.fn(), notify: vi.fn(), requireLogin: vi.fn(), chat: { busy: false, send: vi.fn() } }
+  workspace.value = { user: { id: 'one' }, libraries: [library('A'), library('B')], revision: 0, capabilities: { rag: true, max_upload_bytes: 1000 }, refresh: vi.fn(), report: vi.fn(), notify: vi.fn(), requireLogin: vi.fn(), chat: { isBusy: () => false, activeFor: () => null, pendingFor: () => null, send: vi.fn() } }
   vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
 })
 afterEach(async () => { await act(async () => root.unmount()); node.remove(); vi.useRealTimers(); vi.unstubAllGlobals() })

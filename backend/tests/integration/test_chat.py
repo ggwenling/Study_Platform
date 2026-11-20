@@ -178,6 +178,89 @@ def test_cancel_retry_and_expired_lease_reject_stale_publication(chat_db):
     assert len(state["messages"]) == 2
 
 
+def test_completed_turn_restarts_and_edits_in_place_with_original_scope(chat_db):
+    s = chat_db
+    evidence = seed_evidence(s)
+    data = request(s.kb_a, content="Original question")
+    data["material_ids"] = [str(evidence["material_id"])]
+    run, fence, _ = chat.prepare(s.owner, data, uuid4().hex)
+    conv = conversation_for(s, run)
+    assert chat.checkpoint(run, fence, "Old answer [S2]", "completed", [evidence])
+    original = chat.turn(s.owner, conv, run)
+    assert original["messages"][1]["citations"]
+
+    assert chat.retry(s.owner, conv, run) == (run, fence + 1, False)
+    restarted = chat.turn(s.owner, conv, run)
+    assert restarted["scope"] == original["scope"]
+    assert restarted["messages"][0]["content"] == "Original question"
+    assert restarted["messages"][1]["content"] == "" and not restarted["messages"][1]["citations"]
+    assert not chat.checkpoint(run, fence, "Late answer", "completed", [])
+    with pytest.raises(ApiError) as active:
+        chat.retry(s.owner, conv, run, edited_content="Blocked edit")
+    assert active.value.status_code == 409
+    assert chat.checkpoint(run, fence + 1, "New answer [S2]", "completed", [evidence])
+
+    assert chat.retry(s.owner, conv, run, edited_content="Edited question") == (run, fence + 2, False)
+    assert chat.context(run)[0]["content"] == "Edited question"
+    assert chat.checkpoint(run, fence + 2, "Edited answer", "completed", [])
+    edited = chat.turn(s.owner, conv, run)
+    assert [msg["id"] for msg in edited["messages"]] == [msg["id"] for msg in original["messages"]]
+    assert [msg["content"] for msg in edited["messages"]] == ["Edited question", "Edited answer"]
+    assert edited["scope"] == original["scope"]
+
+    chat.prepare(s.owner, request(s.kb_b, conv), uuid4().hex)
+    with pytest.raises(ApiError) as older:
+        chat.retry(s.owner, conv, run, edited_content="Edit older question")
+    assert older.value.status_code == 409
+    assert chat.turn(s.owner, conv, run) == edited
+
+
+def test_unavailable_original_material_rejects_edit_without_resetting_turn(chat_db):
+    from study_platform.persistence.models import Material
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+    conv = conversation_for(s, run)
+    assert chat.checkpoint(run, fence, "Answer [S2]", "completed", [evidence])
+    with s.factory.begin() as db:
+        db.get(Material, evidence["material_id"]).deleted_at = chat.now()
+    before = chat.turn(s.owner, conv, run)
+
+    with pytest.raises(ApiError) as unavailable:
+        chat.retry(s.owner, conv, run, edited_content="Edit question")
+    assert unavailable.value.status_code == 409 and unavailable.value.code == "scope_unavailable"
+    assert chat.turn(s.owner, conv, run) == before
+
+
+def test_edit_endpoint_returns_the_existing_turn_as_sse(chat_db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from study_platform.api.v1.auth import get_current_user
+    from study_platform.api.v1.chat import router
+
+    s = chat_db
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+    conv = conversation_for(s, run)
+    assert chat.checkpoint(run, fence, "Original answer", "completed", [])
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=s.owner)
+    path = f"/conversations/{conv}/turns/{run}/edit"
+    with TestClient(app) as http:
+        assert http.post(path, json={"content": "  "}).status_code == 422
+        result = http.post(path, json={"content": "  Edited on the same turn  "})
+
+    assert result.status_code == 200 and result.headers["content-type"].startswith("text/event-stream")
+    events = [payload(frame) for frame in result.text.split("\n\n") if frame.strip()]
+    assert events[0]["type"] == "meta" and events[0]["turn_id"] == str(run)
+    assert events[-1]["type"] == "done"
+    messages = chat.turn(s.owner, conv, run)["messages"]
+    assert messages[0]["content"] == "Edited on the same turn"
+    assert messages[1]["status"] == "completed" and messages[1]["content"] != "Original answer"
+
+
 def test_with_general_empty_kb_still_composes(chat_db, monkeypatch):
     s = chat_db
 

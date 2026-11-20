@@ -27,7 +27,15 @@ export interface SearchItem {
   locator?: Record<string, unknown>
   retrieval_enabled?: boolean
 }
-export interface Dashboard { knowledge_base_count: number; material_count: number; conversation_count: number; completed_qa_count: number; activity: { date: string; count: number }[] }
+export interface Dashboard {
+  knowledge_base_count: number
+  material_count: number
+  conversation_count: number
+  completed_qa_count: number
+  due_flashcard_count: number
+  due_wrong_question_count: number
+  activity: { date: string; count: number }[]
+}
 export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
 export interface ModelUsageBucket { key: string; label?: string | null; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }
 export interface ModelUsageTotals { calls: number; successes: number; failures: number; fallback_calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }
@@ -60,6 +68,7 @@ export interface LearningResponseResult {
 export interface LearningItem {
   response_id: string
   quiz_item_id: string
+  origin_wrong_id?: string | null
   knowledge_base_id?: string | null
   ordinal: number
   stem: string
@@ -114,6 +123,8 @@ export interface WrongQuestionItem {
   status: string
   wrong_count: number
   last_wrong_at: string
+  next_review_at: string | null
+  is_due: boolean
 }
 
 export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null }
@@ -201,6 +212,12 @@ export interface FlashcardDeckSummary {
   card_count: number
   due_count: number
   created_at: string
+}
+
+export interface DueFlashcard extends FlashcardItem {
+  deck_title: string
+  knowledge_base_id: string
+  knowledge_base_name: string | null
 }
 
 export interface FlashcardDeckDetail extends FlashcardDeckSummary {

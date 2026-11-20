@@ -2805,6 +2805,70 @@
         }
       }
     },
+    "/api/v1/conversations/{conversation_id}/turns/{turn_id}/edit": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Edit Turn",
+        "operationId": "edit_turn_api_v1_conversations__conversation_id__turns__turn_id__edit_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "turn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Turn Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditTurnBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/learning/knowledge-bases/{kb_id}/quizzes/generate": {
       "post": {
         "tags": [
@@ -2899,8 +2963,25 @@
               "type": "integer",
               "maximum": 50,
               "minimum": 1,
-              "default": 15,
+              "default": 20,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],
@@ -3210,6 +3291,16 @@
                 }
               ],
               "title": "Knowledge Base Id"
+            }
+          },
+          {
+            "name": "due_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Due Only"
             }
           }
         ],
@@ -3951,6 +4042,62 @@
         }
       }
     },
+    "/api/v1/notes/{note_id}/append": {
+      "post": {
+        "tags": [
+          "studio"
+        ],
+        "summary": "Append To Note",
+        "operationId": "append_to_note_api_v1_notes__note_id__append_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendNoteBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/notes/{note_id}/ingest": {
       "post": {
         "tags": [
@@ -4246,6 +4393,73 @@
           }
         }
       }
+    },
+    "/api/v1/flashcards/due": {
+      "get": {
+        "tags": [
+          "studio"
+        ],
+        "summary": "List Due Cards",
+        "operationId": "list_due_cards_api_v1_flashcards_due_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "knowledge_base_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Knowledge Base Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 30,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DueFlashcardsDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4302,6 +4516,45 @@
           "answer_text"
         ],
         "title": "AnswerTextBody"
+      },
+      "AppendNoteBody": {
+        "properties": {
+          "content_md": {
+            "type": "string",
+            "maxLength": 200000,
+            "minLength": 1,
+            "title": "Content Md"
+          },
+          "section_heading": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section Heading"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content_md"
+        ],
+        "title": "AppendNoteBody"
       },
       "AttemptBody": {
         "properties": {
@@ -4433,6 +4686,12 @@
       },
       "ChatRequest": {
         "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Content"
+          },
           "conversation_id": {
             "anyOf": [
               {
@@ -4468,12 +4727,6 @@
             "title": "Intent",
             "default": "qa"
           },
-          "content": {
-            "type": "string",
-            "maxLength": 8000,
-            "minLength": 1,
-            "title": "Content"
-          },
           "material_ids": {
             "anyOf": [
               {
@@ -4493,8 +4746,8 @@
         },
         "type": "object",
         "required": [
-          "knowledge_base_id",
-          "content"
+          "content",
+          "knowledge_base_id"
         ],
         "title": "ChatRequest"
       },
@@ -5159,6 +5412,14 @@
             "type": "integer",
             "title": "Completed Qa Count"
           },
+          "due_flashcard_count": {
+            "type": "integer",
+            "title": "Due Flashcard Count"
+          },
+          "due_wrong_question_count": {
+            "type": "integer",
+            "title": "Due Wrong Question Count"
+          },
           "activity": {
             "items": {
               "$ref": "#/components/schemas/ActivityDTO"
@@ -5173,6 +5434,8 @@
           "material_count",
           "conversation_count",
           "completed_qa_count",
+          "due_flashcard_count",
+          "due_wrong_question_count",
           "activity"
         ],
         "title": "DashboardDTO"
@@ -5234,6 +5497,150 @@
           "count"
         ],
         "title": "DocumentLocation"
+      },
+      "DueFlashcardDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "deck_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Deck Id"
+          },
+          "deck_title": {
+            "type": "string",
+            "title": "Deck Title"
+          },
+          "knowledge_base_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Knowledge Base Id"
+          },
+          "knowledge_base_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Base Name"
+          },
+          "front": {
+            "type": "string",
+            "title": "Front"
+          },
+          "back": {
+            "type": "string",
+            "title": "Back"
+          },
+          "ease_factor": {
+            "type": "number",
+            "title": "Ease Factor"
+          },
+          "interval_days": {
+            "type": "integer",
+            "title": "Interval Days"
+          },
+          "repetition_count": {
+            "type": "integer",
+            "title": "Repetition Count"
+          },
+          "due_at": {
+            "type": "string",
+            "title": "Due At"
+          },
+          "is_due": {
+            "type": "boolean",
+            "title": "Is Due"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/FlashcardSourceDTO"
+            },
+            "type": "array",
+            "title": "Sources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "deck_id",
+          "deck_title",
+          "knowledge_base_id",
+          "knowledge_base_name",
+          "front",
+          "back",
+          "ease_factor",
+          "interval_days",
+          "repetition_count",
+          "due_at",
+          "is_due",
+          "sources"
+        ],
+        "title": "DueFlashcardDTO"
+      },
+      "DueFlashcardsDTO": {
+        "properties": {
+          "total_due": {
+            "type": "integer",
+            "title": "Total Due"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DueFlashcardDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_due",
+          "items"
+        ],
+        "title": "DueFlashcardsDTO"
+      },
+      "EditTurnBody": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "EditTurnBody"
+      },
+      "FlashcardSourceDTO": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "unavailable"
+            ],
+            "title": "Availability"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "availability"
+        ],
+        "title": "FlashcardSourceDTO"
       },
       "Fragment": {
         "properties": {
@@ -6526,6 +6933,11 @@
               }
             ],
             "title": "Knowledge Base Id"
+          },
+          "due_only": {
+            "type": "boolean",
+            "title": "Due Only",
+            "default": false
           }
         },
         "type": "object",

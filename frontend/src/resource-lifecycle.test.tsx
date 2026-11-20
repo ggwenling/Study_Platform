@@ -7,6 +7,7 @@ import { useUploadQueue } from './useUploadQueue'
 import type { Conversation, LibraryOverview, Material, Message } from './api/types'
 import { formatConversationMarkdown, sanitizeMarkdownFilename } from './conversationActions'
 import { ConversationDialogs } from './components/ConversationDialogs'
+import { Composer } from './components/Composer'
 import { CurrentMaterials } from './components/CurrentMaterials'
 import Library from './components/Library'
 import { ThemeProvider } from './Theme'
@@ -40,6 +41,8 @@ vi.mock('./api/client', () => ({
 vi.mock('./components/arc/accordion/accordion', () => ({
   Accordion: ({ items }: any) => <>{items.map((item: any, index: number) => <section key={index}>{item.title}{item.content}</section>)}</>,
 }))
+vi.mock('./components/FadingTextarea', () => ({ FadingTextarea: ({ label, ...props }: any) => <textarea aria-label={label} {...props} /> }))
+vi.mock('./components/arc/select/select', () => ({ Select: ({ label, options, value, onValueChange }: any) => <select aria-label={label} value={value} onChange={(event) => onValueChange(event.target.value)}>{options.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> }))
 
 let root: Root
 let node: HTMLDivElement
@@ -106,8 +109,10 @@ beforeEach(() => {
     notify: vi.fn(),
     report: vi.fn(),
     requireLogin: vi.fn(),
+    chat: { activeFor: () => null, pendingFor: () => null, isBusy: () => false, send: vi.fn(), stop: vi.fn(), resend: vi.fn() },
     libraryUploadQueue: { items: [], uploading: false, latestNote: '', enqueue: vi.fn(), retryItem: vi.fn(), cancelItem: vi.fn(), dismissFinished: vi.fn() },
   }
+  workspace.value.uploadQueue = workspace.value.libraryUploadQueue
 })
 
 afterEach(async () => {
@@ -225,31 +230,39 @@ describe('conversation export & lifecycle dialogs', () => {
 })
 
 describe('material cancel/delete & knowledge base deletion', () => {
-  it('continues library uploads across switching and leaving the page', async () => {
+  it('shares Composer uploads with the library page and keeps retry available across route changes', async () => {
     vi.mocked(api.libraryOverview).mockResolvedValue(overviewData)
     vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
     vi.mocked(api.fragments).mockResolvedValue({ total: 0, page_size: 20, items: [] })
-    let resolveFirst!: (value: any) => void
-    vi.mocked(uploadMaterial).mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve })).mockResolvedValue({ material_id: 'm', version_id: 'v', job_id: 'j', status: 'queued' })
-    function Harness({ libraryId }: { libraryId?: string }) {
+    let rejectFirst!: (error: Error) => void
+    vi.mocked(uploadMaterial).mockReturnValueOnce(new Promise((_resolve, reject) => { rejectFirst = reject })).mockResolvedValue({ material_id: 'm', version_id: 'v', job_id: 'j', status: 'queued' })
+    function Harness({ page }: { page: 'composer' | 'library' | 'empty' }) {
       const queue = useUploadQueue({ userId: workspace.value.user?.id, refresh: workspace.value.refresh, notify: workspace.value.notify, report: workspace.value.report })
       workspace.value.libraryUploadQueue = queue
-      return libraryId ? <Library preferredId={libraryId} /> : null
+      workspace.value.uploadQueue = queue
+      return page === 'composer' ? <Composer /> : page === 'library' ? <Library preferredId="kb-1" /> : null
     }
-    await render(<Harness libraryId="kb-1" />)
+    await render(<Harness page="composer" />)
     const files = [new File(['a'], '一.txt'), new File(['b'], '二.txt')]
     const input = node.querySelector<HTMLInputElement>('input[type=file]')!
     Object.defineProperty(input, 'files', { value: files })
     await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
     const signal = vi.mocked(uploadMaterial).mock.calls[0][3]!
-    await render(<Harness libraryId="kb-2" />)
+    await render(<Harness page="library" />)
     expect(signal.aborted).toBe(false)
-    await render(<Harness />)
-    expect(signal.aborted).toBe(false)
-    await act(async () => resolveFirst({ material_id: 'm', version_id: 'v', job_id: 'j', status: 'queued' }))
+    expect(node.textContent).toContain('正在上传「一.txt」至「高数资料库」')
+    await act(async () => rejectFirst(new Error('network error')))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(uploadMaterial).toHaveBeenNthCalledWith(2, 'kb-1', files[1], undefined, expect.any(AbortSignal))
-    await render(<Harness libraryId="kb-2" />)
-    expect(node.textContent).toContain('已提交至「高数资料库」')
+    expect(node.textContent).toContain('「一.txt」上传至「高数资料库」失败')
+    expect(findButton('重试上传')).toBeTruthy()
+    await render(<Harness page="empty" />)
+    expect(signal.aborted).toBe(false)
+    await render(<Harness page="library" />)
+    expect(node.textContent).toContain('「一.txt」上传至「高数资料库」失败')
+    await act(async () => findButton('重试上传')!.click())
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(uploadMaterial).toHaveBeenCalledTimes(3)
   })
 
   it('keeps the library usable when notes and fragments fail and retries notes independently', async () => {
