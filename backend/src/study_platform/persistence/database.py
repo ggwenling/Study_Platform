@@ -38,14 +38,15 @@ def connection_failure(error: DBAPIError) -> bool:
 
 
 @lru_cache
-def _factory(url: str) -> sessionmaker[Session]:
-    engine = create_engine(url, pool_pre_ping=True, hide_parameters=True,
+def _factory(url: str, pool_size: int) -> sessionmaker[Session]:
+    engine = create_engine(url, pool_size=pool_size, pool_pre_ping=True, hide_parameters=True,
                            connect_args={"connect_timeout": 5, "options": "-c timezone=UTC"})
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
 def session_factory() -> sessionmaker[Session]:
-    return _factory(get_settings().database_url)
+    settings = get_settings()
+    return _factory(settings.database_url, settings.database_pool_size)
 
 
 def get_db():

@@ -14,6 +14,8 @@ import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { FlashcardReviewSummary, type FlashcardRating, type FlashcardRatingCounts } from './FlashcardReviewSummary'
 import { MarkdownContent } from './MarkdownContent'
 import { downloadExportResponse } from '@/studyExports'
+import { useWorkspace } from '../WorkspaceData'
+import { AiJobProgress } from './AiJobProgress'
 
 type ReviewCard = FlashcardItem & Pick<DueFlashcard, 'deck_title' | 'knowledge_base_id' | 'knowledge_base_name'>
 type QueueMode = 'due' | 'deck-due' | 'deck-all' | 'weak' | null
@@ -47,6 +49,7 @@ export function FlashcardPanel({
   onOverviewRefresh?: () => void
 }) {
   const navigate = useNavigate()
+  const { aiJobs, revision } = useWorkspace()
   const [kbId, setKbId] = useState(defaultKbId || knowledgeBases[0]?.id || '')
   const [cardCount, setCardCount] = useState('8')
   const [deckTitle, setDeckTitle] = useState('')
@@ -95,7 +98,7 @@ export function FlashcardPanel({
     } catch (error) {
       if (error instanceof ApiError) notify(errorMessage(error))
     }
-  }, [notify, onDeckCountChange])
+  }, [notify, onDeckCountChange, revision])
 
   const setDeckQueue = useCallback((detail: FlashcardDeckDetail, mode: 'deck-due' | 'deck-all') => {
     setActiveDeck(detail)
@@ -227,15 +230,13 @@ export function FlashcardPanel({
     }
     setBusy(true)
     try {
-      const created = await api.studio.generateFlashcards(kbId, {
+      const job = await api.studio.generateFlashcards(kbId, {
         count: Number(cardCount) || 8,
         material_ids: scoped ? selectedMaterialIds : null,
         title: deckTitle.trim() || null,
       })
-      setDeckQueue(created, 'deck-due')
-      await loadDecks()
-      onOverviewRefresh?.()
-      notify(`已生成 ${created.card_count} 张记忆闪卡。`)
+      aiJobs.track(job)
+      notify(`已提交「${job.title}」生成任务。`)
     } catch (error) {
       notify(error instanceof ApiError ? errorMessage(error) : '生成闪卡失败')
     } finally {
@@ -397,6 +398,10 @@ export function FlashcardPanel({
 
   return (
     <div className="flashcard-workspace">
+      {active && <AiJobProgress
+        jobs={aiJobs.jobs.filter((job) => job.job_type === 'flashcards' && job.knowledge_base_id === kbId)}
+        cancel={aiJobs.cancel}
+      />}
       <div className="learning-config">
         <div className="learning-config-grid">
           <Select

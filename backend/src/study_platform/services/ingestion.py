@@ -7,6 +7,7 @@ import zipfile
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from threading import Lock
 from uuid import uuid4
 
 import sqlalchemy as sa
@@ -35,6 +36,7 @@ from study_platform.services.storage import source_path, version_dir
 from study_platform.services.vision_pipeline import extract_vision
 
 _ocr = None
+_ocr_lock = Lock()
 
 
 def now():
@@ -43,13 +45,14 @@ def now():
 
 def ocr_image(image):
     global _ocr
-    if _ocr is None:
-        from rapidocr import RapidOCR
-
-        _ocr = RapidOCR()
     import numpy as np
 
-    result = _ocr(np.asarray(image.convert("RGB")))
+    with _ocr_lock, image.convert("RGB") as rgb:
+        if _ocr is None:
+            from rapidocr import RapidOCR
+
+            _ocr = RapidOCR()
+        result = _ocr(np.asarray(rgb))
     texts = getattr(result, "txts", None)
     if texts is None:
         texts = []

@@ -118,6 +118,7 @@ beforeEach(() => {
     notify: vi.fn(),
     report: vi.fn(),
     requireLogin: vi.fn(),
+    aiJobs: { jobs: [], track: vi.fn(), cancel: vi.fn() },
     chat: { activeFor: () => null, pendingFor: () => null, isBusy: () => false, send: vi.fn(), stop: vi.fn(), resend: vi.fn() },
     libraryUploadQueue: { items: [], uploading: false, latestNote: '', enqueue: vi.fn(), retryItem: vi.fn(), cancelItem: vi.fn(), dismissFinished: vi.fn() },
   }

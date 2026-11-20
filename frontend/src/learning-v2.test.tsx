@@ -13,7 +13,7 @@ import { wrongIdsForAttempt } from './learningUi'
 const navigateMock = vi.hoisted(() => vi.fn())
 const locationMock = vi.hoisted(() => ({ value: { key: 'initial', state: null as unknown } }))
 const refreshOverview = vi.fn()
-const workspace = vi.hoisted(() => ({ libraries: [{ id: 'kb-1', name: '高数资料库' }], notify: vi.fn(), report: vi.fn(), capabilities: null as { vision?: boolean } | null }))
+const workspace = vi.hoisted(() => ({ libraries: [{ id: 'kb-1', name: '高数资料库' }], notify: vi.fn(), report: vi.fn(), capabilities: null as { vision?: boolean } | null, aiJobs: { jobs: [] as any[], track: vi.fn(), cancel: vi.fn() } }))
 
 vi.mock('react-router', () => ({
   useNavigate: () => navigateMock,
@@ -512,6 +512,34 @@ describe('Learning 2.0 workflow', () => {
     await act(async () => findButtonContaining('使用全库')!.click())
     await act(async () => findButtonContaining('从当前库出题')!.click())
     expect(api.learning.generateQuiz).toHaveBeenCalledWith('kb-1', 5, expect.objectContaining({ material_ids: null }))
+  })
+
+  it('queues quiz generation and tracks its progress instead of starting an attempt inline', async () => {
+    const job = {
+      job_id: 'quiz-job', job_type: 'quiz' as const, status: 'queued' as const,
+      knowledge_base_id: 'kb-1', title: '高数资料库 · 练习题',
+    }
+    vi.mocked(api.learning.generateQuiz).mockResolvedValue(job)
+    const notify = vi.fn()
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={notify} overview={testOverview} refreshOverview={refreshOverview} />)
+
+    await act(async () => findButtonContaining('从当前库出题')!.click())
+
+    expect(api.learning.generateQuiz).toHaveBeenCalledWith('kb-1', 5, expect.objectContaining({ material_ids: null }))
+    expect(workspace.aiJobs.track).toHaveBeenCalledWith(job)
+    expect(api.learning.startAttempt).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith('已提交「高数资料库 · 练习题」出题任务。')
+  })
+
+  it('opens the attempt selected from a completed quiz job', async () => {
+    locationMock.value = { key: 'completed-quiz', state: { tab: 'practice', attemptId: 'attempt-2', kbId: 'kb-1' } }
+    vi.mocked(api.learning.attempt).mockResolvedValue({ ...sampleAttempt, id: 'attempt-2' })
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(api.learning.attempt).toHaveBeenCalledWith('attempt-2')
+    expect(node.textContent).toContain('下列哪一项关于特征向量正确？')
   })
 
   it('uses each question library for follow-up and reports an unavailable library', async () => {

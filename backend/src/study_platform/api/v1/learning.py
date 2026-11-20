@@ -6,16 +6,18 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from study_platform.api.v1.ai_jobs import SubmittedJob
 from study_platform.api.v1.auth import get_current_user
 from study_platform.api.v1.materials import owned_kb
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import KnowledgeBase, QuizItem, User
-from study_platform.services import learning
+from study_platform.services import ai_jobs, learning
 
 router = APIRouter(prefix="/learning", tags=["learning"])
 
@@ -70,13 +72,17 @@ def _response_payload(db: Session, row) -> dict:
     }
 
 
-@router.post("/knowledge-bases/{kb_id}/quizzes/generate")
+@router.post("/knowledge-bases/{kb_id}/quizzes/generate", status_code=202, response_model=SubmittedJob,
+             responses={200: {"description": "Generated quiz (wait=true)"}})
 def generate_quiz(
     kb_id: UUID,
     body: GenerateBody,
+    wait: bool = False,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not wait:
+        return ai_jobs.enqueue(db, user.id, kb_id, "quiz", body.model_dump(mode="json"))
     owned_kb(db, user, kb_id)
     get_settings()
     quiz = learning.generate_learning_quiz(
@@ -92,7 +98,7 @@ def generate_quiz(
         sa.select(sa.func.count()).select_from(QuizItem).where(QuizItem.quiz_id == quiz.id)
     )
     db.commit()
-    return {"quiz_id": str(quiz.id), "title": quiz.title, "item_count": int(item_count or 0)}
+    return JSONResponse({"quiz_id": str(quiz.id), "title": quiz.title, "item_count": int(item_count or 0)})
 
 
 @router.get("/attempts")

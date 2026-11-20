@@ -65,3 +65,23 @@ it('switches to a selected model after the replacement index finishes', async ()
     vi.unstubAllGlobals()
   }
 })
+
+it('refreshes a stale library binding when the index finished on another page', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const node = document.body.appendChild(document.createElement('div'))
+  const root = createRoot(node)
+  const onPublished = vi.fn()
+  const library = { id: 'kb', name: '我的资料', description: null, created_at: '', updated_at: '',
+    embedding_connection_id: 'old', embedding_binding: { model: 'old-model', base_url: '', dimensions: 1024 } }
+  vi.mocked(api.reindexStatus).mockReset().mockResolvedValue({ job_id: 'reindex', status: 'succeeded',
+    total: 1, succeeded: 1, failed: 0, running: 0, target_model: 'new-model',
+    target_connection_id: 'next', failures: [], error_code: null })
+  try {
+    await act(async () => root.render(<LibraryReindex library={library} open={false} onOpenChange={vi.fn()} onPublished={onPublished} />))
+    expect(onPublished).toHaveBeenCalledTimes(1)
+  } finally {
+    await act(async () => root.unmount())
+    node.remove()
+    vi.unstubAllGlobals()
+  }
+})

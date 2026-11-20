@@ -241,6 +241,7 @@ def update_knowledge_base(
 def delete_knowledge_base(
     kb_id: UUID, db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
+    from study_platform.services import ai_jobs
     from study_platform.services.reindex import cancel_for_deleted_library
 
     row = db.scalar(
@@ -288,6 +289,7 @@ def delete_knowledge_base(
             .values(outcome="cancelled", finished_at=now)
         )
     cancel_for_deleted_library(db, row)
+    ai_jobs.cancel_for_deleted_library(db, row)
     runs = db.scalars(
         sa.select(AiWorkflowRun)
         .where(

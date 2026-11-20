@@ -6,6 +6,7 @@ import type { Capabilities, Conversation, Dashboard, KnowledgeBase, User } from 
 import { allPages, errorMessage } from '@/api/ui'
 import { useChat } from './useChat'
 import type { ChatController } from './useChat'
+import { useAiJobs } from './useAiJobs'
 import { useUploadQueue } from './useUploadQueue'
 
 export type NoticeOptions = {
@@ -28,6 +29,7 @@ type Data = {
   chat: ChatController
   uploadQueue: ReturnType<typeof useUploadQueue>
   libraryUploadQueue: ReturnType<typeof useUploadQueue>
+  aiJobs: ReturnType<typeof useAiJobs>
 }
 
 const Workspace = createContext<Data | null>(null)
@@ -62,6 +64,7 @@ export function WorkspaceData({ user, notify, requireLogin, onExpired, children 
   }
 
   const chat = useChat(refresh, report)
+  const aiJobs = useAiJobs({ userId: user?.id, notify, report, refresh })
   const libraryUploadQueue = useUploadQueue({ userId: user?.id, maxUploadBytes: capabilities?.max_upload_bytes, refresh, notify, report })
   useEffect(() => {
     if (!user) return
@@ -82,7 +85,7 @@ export function WorkspaceData({ user, notify, requireLogin, onExpired, children 
   }, [user, revision])
 
   return (
-    <Workspace.Provider value={{ user, libraries, recent, overview, capabilities, revision, loading, refresh, notify, report, requireLogin, chat, uploadQueue: libraryUploadQueue, libraryUploadQueue }}>
+    <Workspace.Provider value={{ user, libraries, recent, overview, capabilities, revision, loading, refresh, notify, report, requireLogin, chat, uploadQueue: libraryUploadQueue, libraryUploadQueue, aiJobs }}>
       {children}
     </Workspace.Provider>
   )

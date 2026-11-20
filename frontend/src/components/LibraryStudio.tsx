@@ -1,7 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { BookMarked, BrainCircuit, Download, FilePlus2, GitBranch, Layers, Pencil, Sparkles, Trash2, Upload } from 'lucide-react'
-import { useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import { ApiError } from '@/api/stream'
 import type { Citation, Material, StudioArtifactKind, StudyNote } from '@/api/types'
@@ -16,6 +15,7 @@ import { useWorkspace } from '../WorkspaceData'
 import { MarkdownContent } from './MarkdownContent'
 import { MindmapView } from './MindmapView'
 import { NoteEditor } from './NoteEditor'
+import { AiJobProgress } from './AiJobProgress'
 
 const artifactBadgeLabel: Record<string, string> = {
   study_guide: '学习指南',
@@ -58,8 +58,7 @@ export function LibraryStudio({
   linkedNoteId?: string | null
   closeLinkedNote?: () => void
 }) {
-  const { notify, report, refresh } = useWorkspace()
-  const navigate = useNavigate()
+  const { notify, report, refresh, aiJobs, revision: workspaceRevision } = useWorkspace()
   const [notes, setNotes] = useState<StudyNote[] | null>(initialNotes ?? null)
   const [notesError, setNotesError] = useState('')
   const [notesRetry, setNotesRetry] = useState(0)
@@ -106,7 +105,7 @@ export function LibraryStudio({
   }, [kbId, linkedNoteId])
 
   useEffect(() => {
-    if (initialNotes && revision === 0 && notesRetry === 0) return
+    if (initialNotes && revision === 0 && workspaceRevision === 0 && notesRetry === 0) return
     const controller = new AbortController()
     notesRequest.current = controller
     void api.studio.notes(kbId, controller.signal).then(
@@ -118,7 +117,7 @@ export function LibraryStudio({
       },
     )
     return () => controller.abort()
-  }, [initialNotes, kbId, revision, notesRetry])
+  }, [initialNotes, kbId, revision, notesRetry, workspaceRevision])
 
   function reloadNotes() {
     notesRequest.current?.abort()
@@ -150,21 +149,17 @@ export function LibraryStudio({
     setBusy(target)
     try {
       if (kind) {
-        const created = await api.studio.generateNote(kbId, { kind, material_ids: materialIds, title })
-        reloadNotes()
-        setNotes((prev) => [created, ...(prev ?? []).filter((item) => item.id !== created.id)])
-        setActiveNote(created)
-        setEditing(false)
-        setConfirmDelete(false)
-        notify(`已生成「${created.title}」。`)
+        const job = await api.studio.generateNote(kbId, { kind, material_ids: materialIds, title })
+        aiJobs.track(job)
+        notify(`已提交「${job.title}」生成任务。`)
       } else {
-        const deck = await api.studio.generateFlashcards(kbId, {
+        const job = await api.studio.generateFlashcards(kbId, {
           count: Number(flashcardCount),
           material_ids: materialIds,
           title,
         })
-        notify(`已生成 ${deck.card_count} 张记忆闪卡，可在学习页翻转复习。`)
-        void navigate('/learning', { state: { tab: 'flashcards', deckId: deck.id, kbId } })
+        aiJobs.track(job)
+        notify(`已提交「${job.title}」生成任务。`)
       }
       setGenerationTarget(null)
     } catch (error) {
@@ -364,6 +359,11 @@ export function LibraryStudio({
           <Download size={15} /> 批量导出笔记 (.zip)
         </Button>
       </div>
+
+      <AiJobProgress
+        jobs={aiJobs.jobs.filter((job) => job.knowledge_base_id === kbId)}
+        cancel={aiJobs.cancel}
+      />
 
       <Dialog open={Boolean(generationTarget)} onOpenChange={(open) => { if (!open && !busy) setGenerationTarget(null) }}>
         {generationTarget && <DialogContent

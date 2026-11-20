@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from study_platform.api.v1 import (
     account_recovery,
+    ai_jobs,
     auth,
     chat,
     learning,
@@ -24,3 +25,4 @@ router.include_router(learning.router)
 router.include_router(model_usage.router, tags=["account"])
 router.include_router(model_connections.router)
 router.include_router(studio.router)
+router.include_router(ai_jobs.router)

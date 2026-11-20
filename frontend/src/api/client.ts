@@ -1,6 +1,7 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
 import type { DueFlashcard, ExtractionMode, ModelConnectionKind } from './types'
 import type { ReindexStatus, ReindexSubmitted } from './types'
+import type { AiGenerationJobType, AiJob, SubmittedAiJob } from './types'
 import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, MaterialReader, Message, ModelUsageSummary, Page, RetrievalSettings, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
@@ -201,6 +202,21 @@ export const api = {
     request<UploadResult>(`/materials/${pathId(id)}/reparse`, json('POST', { extraction_mode: extractionMode })),
   job: (id: string) => request<Job>(`/jobs/${pathId(id)}`),
   cancelJob: (id: string) => request<Pick<Job, 'id' | 'status'>>(`/jobs/${pathId(id)}/cancel`, json('POST')),
+  aiJobs: {
+    list: (options: {
+      knowledgeBaseId?: string
+      jobTypes?: AiGenerationJobType[]
+      status?: 'active' | 'all'
+      limit?: number
+    } = {}) => {
+      const params = new URLSearchParams({ status: options.status ?? 'active', limit: String(options.limit ?? 20) })
+      if (options.knowledgeBaseId) params.set('knowledge_base_id', options.knowledgeBaseId)
+      for (const jobType of options.jobTypes ?? []) params.append('job_types', jobType)
+      return request<AiJob[]>(`/ai-jobs?${params}`)
+    },
+    get: (id: string) => request<AiJob>(`/ai-jobs/${pathId(id)}`),
+    cancel: (id: string) => request<AiJob>(`/ai-jobs/${pathId(id)}/cancel`, json('POST')),
+  },
   preview: (id: string) => request<MaterialPreview>(`/material-versions/${pathId(id)}/preview`),
   materialReader: (id: string, chunkId?: string | null, window = 3, signal?: AbortSignal) =>
     request<MaterialReader>(`/material-versions/${pathId(id)}/reader` + query({ chunk_id: chunkId ?? undefined, window: String(window) }), { signal }),
@@ -228,7 +244,7 @@ export const api = {
       count: number,
       options?: { mode?: 'short_answer' | 'mcq' | 'mixed'; material_ids?: string[] | null },
     ) =>
-      request<{ quiz_id: string; title: string; item_count: number }>(
+      request<SubmittedAiJob>(
         `/learning/knowledge-bases/${pathId(knowledgeBaseId)}/quizzes/generate`,
         json('POST', { count, mode: options?.mode ?? 'short_answer', material_ids: options?.material_ids ?? null }),
       ),
@@ -288,7 +304,7 @@ export const api = {
       knowledgeBaseId: string,
       body: { kind: StudioArtifactKind; material_ids?: string[] | null; title?: string | null },
     ) =>
-      request<StudyNote>(`/knowledge-bases/${pathId(knowledgeBaseId)}/notes/generate`, json('POST', body)),
+      request<SubmittedAiJob>(`/knowledge-bases/${pathId(knowledgeBaseId)}/notes/generate`, json('POST', body)),
     note: (noteId: string) => request<StudyNote>(`/notes/${pathId(noteId)}`),
     updateNote: (noteId: string, body: { title?: string; content_md?: string }) =>
       request<StudyNote>(`/notes/${pathId(noteId)}`, json('PATCH', body)),
@@ -308,7 +324,7 @@ export const api = {
       knowledgeBaseId: string,
       body: { count?: number; material_ids?: string[] | null; title?: string | null } = {},
     ) =>
-      request<FlashcardDeckDetail>(
+      request<SubmittedAiJob>(
         `/knowledge-bases/${pathId(knowledgeBaseId)}/flashcard-decks/generate`,
         json('POST', body),
       ),

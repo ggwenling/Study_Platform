@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     )
     model_connections_key: SecretStr = SecretStr("")
     model_allowed_origins: list[str] = []
-    database_pool_size: int = 5
+    database_pool_size: int = 10
     storage_dir: Path = Path(__file__).resolve().parents[4] / ".local" / "storage"
     session_ttl_seconds: int = 604800
     cookie_secure: bool = False
@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     max_vlm_pages_per_material: int = Field(default=20, ge=1)
     max_image_pixels: int = 20_000_000
     worker_poll_seconds: float = 1
+    worker_heavy_concurrency: int = Field(default=1, ge=1, le=2)
+    worker_generation_concurrency: int = Field(default=2, ge=1, le=4)
     job_lease_seconds: int = 300
     chat_lease_seconds: int = 90
     model_timeout_seconds: float = 60

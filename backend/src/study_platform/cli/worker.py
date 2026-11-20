@@ -1,42 +1,36 @@
-"""Run the PostgreSQL ingestion worker."""
+"""Run the PostgreSQL task worker until SIGINT or SIGTERM."""
 
 import logging
-import time
+import signal
+from threading import Event
 
 from sqlalchemy.exc import DBAPIError
 
 from study_platform.core.config import get_settings
-from study_platform.persistence.database import connection_failure
-from study_platform.services.ingestion import run_once
+from study_platform.services.worker_runner import run
 
 logger = logging.getLogger(__name__)
 
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    delay = 1
-    while True:
-        try:
-            worked = run_once()
-        except DBAPIError as error:
-            if not connection_failure(error):
-                logger.error("Worker stopped: database configuration or credentials rejected")
-                raise SystemExit(1) from None
-            # Do not log the exception: SQL parameters can contain private document text.
-            logger.warning("Database unavailable; retrying in %s seconds", delay)
-            time.sleep(delay)
-            delay = min(delay * 2, 30)
-            continue
-        except Exception as error:
-            logger.error(
-                "Worker stopped: %s; check local configuration and storage", type(error).__name__
-            )
-            raise SystemExit(1) from None
-        if delay > 1:
-            logger.info("Database connection recovered")
-        delay = 1
-        if not worked:
-            time.sleep(get_settings().worker_poll_seconds)
+    stop = Event()
+
+    def stop_claiming(_signal, _frame):
+        stop.set()
+
+    previous = {kind: signal.signal(kind, stop_claiming) for kind in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        run(stop, get_settings())
+    except DBAPIError:
+        logger.error("Worker stopped: database configuration or credentials rejected")
+        raise SystemExit(1) from None
+    except Exception as error:
+        logger.error("Worker stopped: %s; check local configuration and storage", type(error).__name__)
+        raise SystemExit(1) from None
+    finally:
+        for kind, handler in previous.items():
+            signal.signal(kind, handler)
 
 
 if __name__ == "__main__":

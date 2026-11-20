@@ -82,10 +82,13 @@ def extract_vision(path: Path, mime: str, phase, *, owner, saved):
     import pypdfium2 as pdfium
 
     results = []
+    document = None
     try:
-        with pdfium.PdfDocument(path) as document:
+        with PDFIUM_LOCK:
+            document = pdfium.PdfDocument(path)
             count = check_vision_page_count(len(document))
-            for number in range(count):
+        for number in range(count):
+            with PDFIUM_LOCK:
                 page = document[number]
                 try:
                     width, height = page.get_size()
@@ -97,11 +100,15 @@ def extract_vision(path: Path, mime: str, phase, *, owner, saved):
                         bitmap.close()
                 finally:
                     page.close()
-                result = interpret(data, {"page": number + 1})
-                if result:
-                    results.append(result)
+            result = interpret(data, {"page": number + 1})
+            if result:
+                results.append(result)
     except pdfium.PdfiumError as error:
         raise ApiError(422, "invalid_pdf", "无法解析该 PDF。") from error
+    finally:
+        if document is not None:
+            with PDFIUM_LOCK:
+                document.close()
     return count, results
 
 

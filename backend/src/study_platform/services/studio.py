@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
@@ -633,12 +634,15 @@ def generate_studio_artifact(
     kind: ArtifactKind,
     material_ids: list[UUID] | None = None,
     title: str | None = None,
+    before_publish: Callable[[], object] | None = None,
 ) -> dict[str, Any]:
     if kind not in _STUDIO_PROMPTS:
         raise ApiError(422, "invalid_artifact_kind", "不支持的知识产物类型")
     kb = _owned_kb(db, owner_user_id, knowledge_base_id)
-    ensure_course_anchor(db, kb)
     evidence = _collect_evidence_chunks(db, owner_user_id, knowledge_base_id, material_ids)
+    if before_publish:
+        # The queued path owns its transaction. Release the read connection during model work.
+        db.commit()
     note_type, suffix, instruction = _STUDIO_PROMPTS[kind]
     final_title = (title or "").strip()[:255] or f"{kb.name} · {suffix}"
 
@@ -681,6 +685,9 @@ def generate_studio_artifact(
     if material_ids:
         scope["material_ids"] = [str(m) for m in material_ids]
 
+    if before_publish:
+        before_publish()
+    ensure_course_anchor(db, kb)
     note = Note(
         id=uuid4(),
         owner_user_id=owner_user_id,
@@ -755,12 +762,14 @@ def generate_flashcard_deck(
     count: int = 8,
     material_ids: list[UUID] | None = None,
     title: str | None = None,
+    before_publish: Callable[[], object] | None = None,
 ) -> dict[str, Any]:
     kb = _owned_kb(db, owner_user_id, knowledge_base_id)
-    ensure_course_anchor(db, kb)
     evidence = _collect_evidence_chunks(
         db, owner_user_id, knowledge_base_id, material_ids, max_chunks=max(count * 3, 15)
     )
+    if before_publish:
+        db.commit()
     settings = get_settings()
     use_llm = not settings.learning_stub_grader and llm_available(owner_user_id)
     cards_data: list[tuple[str, str, list[int]]] = []
@@ -799,6 +808,9 @@ def generate_flashcard_deck(
     if material_ids:
         scope["material_ids"] = [str(m) for m in material_ids]
 
+    if before_publish:
+        before_publish()
+    ensure_course_anchor(db, kb)
     deck = FlashcardDeck(
         id=uuid4(),
         owner_user_id=owner_user_id,

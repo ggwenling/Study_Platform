@@ -34,6 +34,7 @@ import {
 import { MarkdownContent } from './MarkdownContent'
 import { FlashcardPanel } from './FlashcardPanel'
 import { SourceReaderDrawer, type ReaderActionContext, type SourceReaderTarget } from './SourceReaderDrawer'
+import { AiJobProgress } from './AiJobProgress'
 
 type Props = {
   knowledgeBases: KnowledgeBase[]
@@ -89,13 +90,14 @@ function SourceList({ sources, onOpenSource, disabled = false }: {
 }
 
 export function Learning({ knowledgeBases, notify, overview, refreshOverview }: Props) {
-  const { capabilities } = useWorkspace()
+  const { capabilities, aiJobs } = useWorkspace()
   const navigate = useNavigate()
   const location = useLocation()
   const historyState = location.state as {
     tab?: 'practice' | 'history' | 'wrong' | 'flashcards'
     deckId?: string
     kbId?: string
+    attemptId?: string
     startDueQueue?: boolean
     wrongFilter?: 'all' | 'due'
   } | null
@@ -207,6 +209,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
     setStartDueQueue(Boolean(state?.startDueQueue))
     setWrongDueOnly(state?.wrongFilter === 'due')
     if (state?.kbId) setKbId(state.kbId)
+    if (state?.attemptId) void openAttemptById(state.attemptId)
   }, [location.key])
 
   useEffect(() => {
@@ -284,16 +287,12 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
     }
     setBusy(true)
     try {
-      const gen = await api.learning.generateQuiz(kbId, Number(quizCount) || 5, {
+      const job = await api.learning.generateQuiz(kbId, Number(quizCount) || 5, {
         mode: quizMode,
         material_ids: scoped ? selectedMaterialIds : null,
       })
-      const next = await api.learning.startAttempt(gen.quiz_id)
-      setAttempt(next)
-      setIndex(0)
-      setTab('practice')
-      await refreshAttempts()
-      notify('已生成练习题')
+      aiJobs.track(job)
+      notify(`已提交「${job.title}」出题任务。`)
     } catch (error) {
       notify(error instanceof ApiError ? errorMessage(error) : '出题失败')
     } finally {
@@ -484,6 +483,11 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
           >重练今日到期错题</Button>
         </div>
       </section>
+
+      <AiJobProgress
+        jobs={aiJobs.jobs.filter((job) => job.job_type === 'quiz')}
+        cancel={aiJobs.cancel}
+      />
 
       <div className="learning-tabs" role="tablist" aria-label="学习视图">
         <button

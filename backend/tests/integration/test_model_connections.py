@@ -762,7 +762,7 @@ def test_end_to_end_chat_summary_learning_and_failure_preserve_indexes(connectio
         events = asyncio.run(collect())
         assert "event: done" in events, events
     result = state.client.post(
-        f"/learning/knowledge-bases/{kb['id']}/quizzes/generate", json={"count": 1}
+        f"/learning/knowledge-bases/{kb['id']}/quizzes/generate?wait=true", json={"count": 1}
     )
     assert result.status_code == 200 and result.json()["item_count"] == 1, result.text
     assert any(

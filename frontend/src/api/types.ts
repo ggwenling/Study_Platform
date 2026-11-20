@@ -141,6 +141,30 @@ export interface WrongQuestionItem {
 
 export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null; source_url?: string | null; page_count?: number | null }
 export interface Job { id: string; status: string; phase: string | null; progress: number; error_code: string | null; attempt_count: number }
+export type AiGenerationJobType = 'notes' | 'flashcards' | 'quiz'
+export type AiJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export interface SubmittedAiJob {
+  job_id: string
+  job_type: AiGenerationJobType
+  status: 'queued'
+  knowledge_base_id: string
+  title: string
+}
+export interface AiJob {
+  id: string
+  job_type: AiGenerationJobType
+  knowledge_base_id: string | null
+  status: AiJobStatus
+  phase: string
+  progress: number
+  title: string
+  result_resource_type: string | null
+  result_resource_id: string | null
+  error_code: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+}
 export interface MaterialPreview { version_id: string; mime_type: string; page_count: number | null; sections: { text: string; locator: Record<string, unknown> }[] }
 export interface MaterialReaderChunk { id: string; ordinal: number; text: string; locator: Record<string, unknown>; location_label: string; is_target: boolean }
 export interface MaterialReader {

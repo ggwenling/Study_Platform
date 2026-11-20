@@ -18,10 +18,16 @@ export function LibraryReindex({ library, open, onOpenChange, onPublished }: {
   const [modelError, setModelError] = useState('')
   const [busy, setBusy] = useState(false)
   const requestVersion = useRef(0)
+  const publishedJobId = useRef<string>(undefined)
   const active = status?.status === 'queued' || status?.status === 'running'
-  const publish = useEffectEvent(() => {
-    notify('已启用重建后的知识库索引。')
-    onPublished()
+  const publish = useEffectEvent((next: ReindexStatus, wasActive: boolean) => {
+    if (publishedJobId.current === next.job_id) return
+    if (wasActive) notify('已启用重建后的知识库索引。')
+    if (wasActive || next.target_connection_id !== (library.embedding_connection_id ?? null)
+      || next.target_model !== library.embedding_binding?.model) {
+      publishedJobId.current = next.job_id
+      onPublished()
+    }
   })
 
   useEffect(() => {
@@ -33,7 +39,7 @@ export function LibraryReindex({ library, open, onOpenChange, onPublished }: {
         const next = await api.reindexStatus(id, controller.signal)
         if (controller.signal.aborted || version !== requestVersion.current) return
         setStatus(next)
-        if (active && next?.status === 'succeeded') publish()
+        if (next?.status === 'succeeded') publish(next, active)
         if (next?.status === 'queued' || next?.status === 'running') timer = window.setTimeout(poll, 1800)
       } catch {
         if (active && !controller.signal.aborted && version === requestVersion.current) timer = window.setTimeout(poll, 1800)
