@@ -36,7 +36,7 @@ export interface Dashboard {
   due_wrong_question_count: number
   activity: { date: string; count: number }[]
 }
-export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
+export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; vision?: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
 export interface ModelUsageBucket { key: string; label?: string | null; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }
 export interface ModelUsageTotals { calls: number; successes: number; failures: number; fallback_calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }
 export interface ModelUsageSummary { days: number; since: string; totals: ModelUsageTotals; by_day: ModelUsageBucket[]; by_purpose: ModelUsageBucket[]; by_model: ModelUsageBucket[]; by_connection: ModelUsageBucket[] }
@@ -130,7 +130,7 @@ export interface WrongQuestionItem {
   is_due: boolean
 }
 
-export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null; source_url?: string | null }
+export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null; source_url?: string | null; page_count?: number | null }
 export interface Job { id: string; status: string; phase: string | null; progress: number; error_code: string | null; attempt_count: number }
 export interface MaterialPreview { version_id: string; mime_type: string; page_count: number | null; sections: { text: string; locator: Record<string, unknown> }[] }
 export interface MaterialReaderChunk { id: string; ordinal: number; text: string; locator: Record<string, unknown>; location_label: string; is_target: boolean }
@@ -182,8 +182,11 @@ export interface ClassificationState extends Classification {
   ready: boolean; suggestion_id: string | null; status: string; suggestion: Classification | null
 }
 export interface ClassificationDecision extends Classification { suggestion_id: string; ignore?: boolean }
+export type ModelConnectionKind = 'llm' | 'embedding' | 'vision'
+export type ExtractionMode = 'ocr' | 'vlm'
+
 export interface ModelConnection {
-  id: string; name: string; kind: 'llm' | 'embedding'; base_url: string; model: string;
+  id: string; name: string; kind: ModelConnectionKind; base_url: string; model: string;
   dimensions: number | null; key_configured: boolean; key_suffix: string; revision: number;
   status: 'draft' | 'testing' | 'ready' | 'failed'; is_default: boolean;
   tested_at: string | null; error_code: string | null; libraries: { id: string; name: string }[]
@@ -193,7 +196,7 @@ export interface ModelConnections {
   platform_llm: string | null; platform_embedding: string | null
 }
 export interface ModelConnectionInput {
-  name: string; kind: 'llm' | 'embedding'; base_url: string; model: string; api_key?: string
+  name: string; kind: ModelConnectionKind; base_url: string; model: string; api_key?: string
 }
 
 export type StudioArtifactKind = 'study_guide' | 'mindmap' | 'formula_sheet'

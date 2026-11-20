@@ -59,7 +59,7 @@ def test_material_response_serializes_uuid_dates_and_nullable_errors(monkeypatch
         "mime_type": "text/plain", "byte_size": 3, "status": "ready",
         "version_id": str(version_id), "job_id": str(job_id),
         "created_at": "2026-01-01T00:00:00Z", "error_code": None, "error_message": None,
-        "source_url": None,
+        "source_url": None, "page_count": None,
     }
 
 
@@ -78,10 +78,11 @@ def test_failure_reason_distinguishes_user_recovery_actions(monkeypatch, code, s
     material = SimpleNamespace(
         id="m", knowledge_base_id="k", title="t", source_url=None, created_at=None
     )
-    version = SimpleNamespace(id="v", source_mime="text/plain", byte_size=1)
+    version = SimpleNamespace(id="v", source_mime="text/plain", byte_size=1, page_count=None)
     job = SimpleNamespace(id="j", status=state, result={}, failure_code=code)
     monkeypatch.setattr(materials, "latest_version", lambda *_: version)
     monkeypatch.setattr(materials, "latest_job", lambda *_: job)
+    monkeypatch.setattr(materials, "pending_reparse_job", lambda *_: None)
     result = materials.dto(None, material)
     assert expected in result["error_message"]
     assert result["status"] == state

@@ -1,14 +1,16 @@
 """Authenticated material upload and preview endpoints."""
 
 import hashlib
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from study_platform.api.v1.auth import get_current_user
@@ -31,6 +33,7 @@ from study_platform.services.upload_validation import (
     expected_mime,
     validate_upload_content,
 )
+from study_platform.services.vision_pipeline import vision_pdf_page_count
 from study_platform.services.web_clip import fetch_public_webpage
 
 router = APIRouter()
@@ -59,11 +62,16 @@ class WebClipRequest(BaseModel):
     title: str | None = Field(default=None, max_length=255)
 
 
+class ReparseRequest(BaseModel):
+    extraction_mode: Literal["ocr", "vlm"]
+
+
 class MaterialResponse(BaseModel):
     id: UUID
     knowledge_base_id: UUID
     title: str
     source_url: str | None = None
+    page_count: int | None = None
     mime_type: str | None
     byte_size: int | None
     status: str
@@ -165,9 +173,26 @@ def latest_version(db, material):
     )
 
 
+def pending_reparse_job(db, version):
+    return db.scalar(
+        select(AiJob)
+        .join(MaterialVersion, MaterialVersion.id == AiJob.resource_id)
+        .where(
+            MaterialVersion.material_id == version.material_id,
+            MaterialVersion.version_no > version.version_no,
+            AiJob.job_type == "ingest",
+            AiJob.status.in_(("queued", "running")),
+        )
+        .order_by(AiJob.created_at.desc())
+        .limit(1)
+    )
+
+
 def dto(db, material):
     version = latest_version(db, material)
     job = latest_job(db, version) if version else None
+    if version and (job is None or job.status not in ("queued", "running")):
+        job = pending_reparse_job(db, version) or job
     if job:
         state = {"succeeded": "ready", "running": (job.result or {}).get("phase", "parsing")}.get(
             job.status, job.status
@@ -190,6 +215,8 @@ def dto(db, material):
         "model_address_blocked": "模型地址未获允许，请使用公网 HTTPS 或联系管理员放行指定内网地址。",
         "model_decryption_failed": "模型凭据无法解密，请检查部署加密密钥或在设置中替换 API Key。",
         "lease_expired": "后台处理多次中断，请重新启动后台处理后重试。",
+        "vision_page_limit": "资料超过视觉解析页数上限，请拆分文件或改用本地解析。",
+        "vision_not_configured": "请先在设置中测试并启用默认视觉模型。",
     }.get(error, "资料处理失败，请检查原件后重试。") if error else None
     if error and state == "queued":
         message = "上次处理暂时中断，正在等待自动重试。"
@@ -198,6 +225,7 @@ def dto(db, material):
         "knowledge_base_id": material.knowledge_base_id,
         "title": material.title,
         "source_url": material.source_url,
+        "page_count": version.page_count if version else None,
         "mime_type": version.source_mime if version else None,
         "byte_size": version.byte_size if version else None,
         "status": state,
@@ -209,10 +237,15 @@ def dto(db, material):
     }
 
 
-def create_job(db, user, version):
+def create_job(db, user, version, *, vision=None, activate_version=False):
     from study_platform.services.model_connections import library_snapshot
     material = db.get(Material, version.material_id)
     embedding = library_snapshot(db, user.id, material.knowledge_base_id)
+    payload = {"embedding_connection": embedding}
+    if vision is not None:
+        payload.update(extraction_mode="vlm", vision_connection=vision)
+    if activate_version:
+        payload["activate_version"] = True
     job = AiJob(
         id=uuid4(),
         owner_user_id=user.id,
@@ -221,14 +254,22 @@ def create_job(db, user, version):
         resource_id=version.id,
         status="queued",
         progress=0,
-        payload={"embedding_connection": embedding},
+        payload=payload,
         attempt_count=0,
-        max_attempts=3,
+        max_attempts=1 if vision is not None else 3,
         fencing=0,
         next_run_at=datetime.now(timezone.utc),
     )
     db.add(job)
     return job
+
+
+def _material_vision_snapshot(db, owner, mime):
+    from study_platform.services.model_connections import vision_snapshot
+
+    if mime not in IMAGE_MIMES and mime != "application/pdf":
+        raise ApiError(422, "vision_unsupported_type", "视觉解析仅支持 PDF、PNG 和 JPEG 资料。")
+    return vision_snapshot(db, owner)
 
 
 @router.post("/knowledge-bases/{kb_id}/materials", status_code=202, response_model=UploadResponse)
@@ -237,12 +278,14 @@ def upload(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
+    extraction_mode: Annotated[Literal["ocr", "vlm"], Form()] = "ocr",
 ):
     owned_kb(db, user, kb_id, lock=True)
     title = Path((file.filename or "").replace("\\", "/")).name[:512]
     mime = expected_mime(title)
     if not title or not mime:
         raise ApiError(400, "unsupported_file", "Unsupported file type")
+    vision = _material_vision_snapshot(db, user.id, mime) if extraction_mode == "vlm" else None
     version_id = uuid4()
     path = source_path(version_id)
     digest = hashlib.sha256()
@@ -268,6 +311,8 @@ def upload(
             text_validator.finish()
         else:
             validate_upload_content(header, mime, title, path=path)
+        if vision is not None and mime == "application/pdf":
+            vision_pdf_page_count(path)
         material = Material(
             id=uuid4(),
             owner_user_id=user.id,
@@ -292,7 +337,7 @@ def upload(
         db.flush()
         db.add(version)
         db.flush()
-        job = create_job(db, user, version)
+        job = create_job(db, user, version, vision=vision)
         db.commit()
     except Exception:
         path.unlink(missing_ok=True)
@@ -460,7 +505,7 @@ def retry(material_id: UUID, db: Session = Depends(get_db), user=Depends(get_cur
     if not version or not source_path(version.id).is_file():
         raise ApiError(409, "source_unavailable", "资料原件不可用，请重新上传")
     job = latest_job(db, version)
-    if job and job.status not in ("failed", "cancelled"):
+    if (job and job.status not in ("failed", "cancelled")) or pending_reparse_job(db, version):
         raise ApiError(409, "job_active", "当前处理任务不可重试")
     job = create_job(db, user, version)
     db.commit()
@@ -470,6 +515,63 @@ def retry(material_id: UUID, db: Session = Depends(get_db), user=Depends(get_cur
         "job_id": job.id,
         "status": "queued",
     }
+
+
+@router.post("/materials/{material_id}/reparse", status_code=202, response_model=UploadResponse)
+def reparse(
+    material_id: UUID, body: ReparseRequest, db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    material = owned_material(db, user, material_id)
+    owned_kb(db, user, material.knowledge_base_id, lock=True)
+    material = db.scalar(
+        select(Material)
+        .where(Material.id == material_id, Material.deleted_at.is_(None))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if not material:
+        raise missing()
+    current = latest_version(db, material)
+    if not current or not source_path(current.id).is_file():
+        raise ApiError(409, "source_unavailable", "资料原件不可用，请重新上传")
+    versions = select(MaterialVersion.id).where(MaterialVersion.material_id == material.id)
+    if db.scalar(select(AiJob.id).where(
+        AiJob.resource_id.in_(versions), AiJob.job_type == "ingest", AiJob.status.in_(("queued", "running")),
+    ).limit(1)):
+        raise ApiError(409, "job_active", "资料正在处理，请等待当前任务结束。")
+    mime = current.source_mime
+    if mime not in IMAGE_MIMES and mime != "application/pdf":
+        raise ApiError(422, "reparse_unsupported_type", "仅支持重新解析 PDF、PNG 和 JPEG 资料。")
+    vision = _material_vision_snapshot(db, user.id, mime) if body.extraction_mode == "vlm" else None
+    original = source_path(current.id)
+    if vision is not None and mime == "application/pdf":
+        vision_pdf_page_count(original)
+
+    latest = db.scalar(select(func.max(MaterialVersion.version_no)).where(MaterialVersion.material_id == material.id))
+    version_id = uuid4()
+    path = source_path(version_id)
+    try:
+        path.parent.mkdir()
+        shutil.copyfile(original, path)
+        version = MaterialVersion(
+            id=version_id,
+            material_id=material.id,
+            version_no=latest + 1,
+            is_current=False,
+            source_mime=mime,
+            source_sha256=current.source_sha256,
+            byte_size=current.byte_size,
+            object_key=f"{version_id}/source",
+            parse_status="pending",
+        )
+        db.add(version)
+        db.flush()
+        job = create_job(db, user, version, vision=vision, activate_version=True)
+        db.commit()
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return {"material_id": material.id, "version_id": version.id, "job_id": job.id, "status": "queued"}
 
 
 def owned_job(db, user, job_id):

@@ -15,6 +15,7 @@ import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { Input } from '@/components/arc/input/input'
 import { Stepper } from '@/components/arc/stepper/stepper'
+import { Switch } from '@/components/arc/switch/switch'
 import { Textarea } from '@/components/arc/textarea/textarea'
 import { TreeView } from '@/components/arc/tree-view/tree-view'
 import type { TreeNode } from '@/components/arc/tree-view/tree-view'
@@ -23,11 +24,13 @@ import { LibraryClassification } from './LibraryClassification'
 import { LibraryFragments, number } from './LibraryFragments'
 import { LibraryStudio } from './LibraryStudio'
 import { LibraryHitTest } from './LibraryHitTest'
+import { VisionReparseDialog } from './VisionReparseDialog'
 import { SourceReaderDrawer, type ReaderActionContext, type SourceReaderTarget } from './SourceReaderDrawer'
+import { canUseVisionForMime } from '@/visionUi'
 import './Library.css'
 
 const phases: Record<string, string> = {
-  queued: '等待处理', parsing: '解析中', ocr: '识别文字中', indexing: '建立索引中',
+  queued: '等待处理', parsing: '解析中', ocr: '识别文字中', vision: '视觉解析中', indexing: '建立索引中',
   ready: '已完成', failed: '处理失败', cancelled: '已取消',
 }
 
@@ -104,7 +107,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   library: KnowledgeBase; libraries: KnowledgeBase[]; select: (id: string) => void; create: () => void; onDeleted: () => void;
   fragmentId: string | null; noteId: string | null; closeSearchResult: () => void;
 }) {
-  const { revision, refresh, notify, report, libraryUploadQueue: uploadQueue } = useWorkspace()
+  const { revision, refresh, notify, report, capabilities, libraryUploadQueue: uploadQueue } = useWorkspace()
   const navigate = useNavigate()
   const id = library.id
   const [overview, setOverview] = useState<LibraryOverview>()
@@ -116,8 +119,11 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   const [panel, setPanel] = useState<Panel>()
   const [pasteOpen, setPasteOpen] = useState(false)
   const [webClipOpen, setWebClipOpen] = useState(false)
+  const [visionForNextUpload, setVisionForNextUpload] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [confirmMaterial, setConfirmMaterial] = useState<Material | null>(null)
+  const [visionMaterial, setVisionMaterial] = useState<Material | null>(null)
+  const [visionJobs, setVisionJobs] = useState<{ title: string; jobId: string }[]>([])
   const [scope, setScope] = useState<DocumentScope>({})
   const [day, setDay] = useState<string>()
   const [readerTarget, setReaderTarget] = useState<SourceReaderTarget | null>(null)
@@ -150,6 +156,44 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     )
     return () => { live = false }
   }, [id, fragmentId])
+
+  useEffect(() => {
+    if (!visionJobs.length) return
+    let live = true
+    let timer: number | undefined
+    async function pollVisionJob() {
+      const finished: string[] = []
+      let pending = false
+      for (const submitted of visionJobs) {
+        try {
+          const job = await api.job(submitted.jobId)
+          if (!live) return
+          if (job.status === 'queued' || job.status === 'running') { pending = true; continue }
+          finished.push(job.id)
+          const message = job.status === 'succeeded'
+            ? `资料「${submitted.title}」已完成视觉解析。`
+            : job.status === 'failed'
+              ? `资料「${submitted.title}」视觉解析失败，请查看资料状态并重试。`
+              : `资料「${submitted.title}」视觉解析已取消。`
+          notify(message)
+        } catch (error) {
+          if (!live) return
+          if (error instanceof ApiError && [403, 404].includes(error.status ?? 0)) finished.push(submitted.jobId)
+          else if (error instanceof ApiError && error.status === 401) { finished.push(submitted.jobId); report(error) }
+          else pending = true
+        }
+      }
+      if (!live) return
+      if (finished.length) {
+        setVisionJobs((current) => current.filter((job) => !finished.includes(job.jobId)))
+        reloadData()
+        refresh()
+      }
+      if (pending) timer = window.setTimeout(pollVisionJob, 2200)
+    }
+    void pollVisionJob()
+    return () => { live = false; if (timer !== undefined) window.clearTimeout(timer) }
+  }, [visionJobs])
   const fileInput = useRef<HTMLInputElement>(null)
   const fragmentPanel = useRef<HTMLElement>(null)
   const [expanded, setExpanded] = useState([id])
@@ -191,8 +235,15 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     }
   }, [expanded, id, locations, materials])
 
+  useEffect(() => {
+    if (!capabilities?.vision) setVisionForNextUpload(false)
+  }, [capabilities?.vision])
+
   const reloadData = () => setReload((value) => value + 1)
-  const addFiles = (files: FileList | File[]) => uploadQueue.enqueue(files, { id, name: library.name })
+  const addFiles = (files: FileList | File[]) => {
+    uploadQueue.enqueue(files, { id, name: library.name }, visionForNextUpload && capabilities?.vision ? 'vlm' : 'ocr')
+    setVisionForNextUpload(false)
+  }
   const failedUploads = uploadQueue.items.filter((row) => row.status === 'failed')
 
   function onDragOver(event: DragEvent<HTMLElement>) {
@@ -244,6 +295,18 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     setBusy(material.id)
     try { await api.retryMaterial(material.id); reloadData(); notify('已重新提交处理。') }
     catch (error) { report(error) } finally { setBusy(undefined) }
+  }
+
+  async function reparseWithVision(material: Material) {
+    if (busy) return
+    setBusy(`vision:${material.id}`)
+    try {
+      const result = await api.reparseMaterial(material.id, 'vlm')
+      setVisionJobs((current) => [...current.filter((job) => job.jobId !== result.job_id), { title: material.title, jobId: result.job_id }])
+      reloadData()
+      refresh()
+      notify('已提交视觉理解重新解析，完成后会通知你。')
+    } finally { setBusy(undefined) }
   }
 
   async function cancelJob(material: Material) {
@@ -378,6 +441,10 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
           if (files.length) addFiles(files)
         }} />
       </header>
+      {capabilities?.vision && <p className="muted library-upload-note">
+        <Switch aria-label="本次导入的图片或 PDF 使用视觉解析（可能产生费用）" label="本次导入的图片或 PDF 使用视觉解析（可能产生费用）"
+          checked={visionForNextUpload} onCheckedChange={setVisionForNextUpload} />
+      </p>}
       {dragging && <p className="library-processing-banner" role="status">松开鼠标，将文件批量导入「{library.name}」。</p>}
       {overview && overview.processing_count > 0 && (
         <p className="library-processing-banner" role="status">
@@ -527,6 +594,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
                   {item.status === 'ready' && item.version_id && <Button size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => openSource({ materialVersionId: item.version_id!, materialId: item.id, title: item.title })}>查看原文</Button>}
                   {inProgress && item.job_id && <Button size="sm" variant="secondary" loading={busy === `cancel:${item.id}`} disabled={Boolean(busy)} onClick={() => void cancelJob(item)}>取消处理</Button>}
                   {['failed', 'cancelled'].includes(item.status) && <Button size="sm" variant="secondary" loading={busy === item.id} disabled={Boolean(busy)} onClick={() => void retry(item)}>重试处理</Button>}
+                  {capabilities?.vision && item.version_id && canUseVisionForMime(item.mime_type) && !inProgress && <Button size="sm" variant="secondary" loading={busy === `vision:${item.id}`} disabled={Boolean(busy)} onClick={() => setVisionMaterial(item)}>使用视觉理解重新解析（VLM）</Button>}
                   <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => setConfirmMaterial(item)}>删除</Button>
                 </div>
               </li>
@@ -543,6 +611,8 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       onSubmitFile={(file) => addFiles([file])}
     />
     <WebClipDialog open={webClipOpen} onOpenChange={setWebClipOpen} libraryId={id} libraryName={library.name} />
+    {visionMaterial && <VisionReparseDialog title={visionMaterial.title} mimeType={visionMaterial.mime_type} pageCount={visionMaterial.page_count}
+      onConfirm={() => reparseWithVision(visionMaterial)} onClose={() => setVisionMaterial(null)} />}
     <SourceReaderDrawer open={Boolean(readerTarget)} target={readerTarget} onOpenChange={(open) => {
       if (!open) {
         setReaderTarget(null)

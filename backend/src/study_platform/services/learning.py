@@ -46,6 +46,7 @@ from study_platform.services.learning_llm import (
 from study_platform.services.material_reader import locator_label, reader_locator
 from study_platform.services.model_connections import llm_available
 from study_platform.services.model_task import learning_task
+from study_platform.services.vision_pipeline import grade_vision_image
 
 _QUESTION_LINE = re.compile(r"^\s*(?:\d+[\.\)、．]|第\s*\d+\s*题)", re.M)
 _OPTION_LETTER = re.compile(r"^\s*([A-Fa-f])(?:[\.\)、:：\s]|$)")
@@ -510,6 +511,7 @@ def submit_image_answer(
     owner_user_id: UUID,
     response_id: UUID,
     image_bytes: bytes,
+    vision_mime: str | None = None,
 ) -> QuizResponse:
     row = _lock_answer(db, owner_user_id, response_id)
     if row is None:
@@ -518,37 +520,54 @@ def submit_image_answer(
     item = db.get(QuizItem, row.quiz_item_id)
     if item is None:
         raise ApiError(404, "item_not_found", "题目不存在")
-    ocr_text, ocr_conf = ocr_answer_bytes(image_bytes)
-    if item.item_type == "mcq":
+    if vision_mime:
         reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
-        if not ocr_text.strip():
-            verdict, conf, feedback, grader_profile = (
-                "pending",
-                0.0,
-                "未能识别作答文字，请重拍或手动判题。",
-                "learning_mcq_v1",
-            )
-        else:
-            raw_verdict, _, raw_fb, grader_profile, reference = _grade_mcq_choice(item, ocr_text)
-            verdict, conf, feedback = _apply_threshold(
-                raw_verdict, max(0.0, min(1.0, ocr_conf)), raw_fb
-            )
+        saved = model_connections.vision_snapshot(db, owner_user_id)
+        grader_profile = "learning_vision_v1"
+        try:
+            with model_connections.task(
+                owner_user_id, vision=saved, llm={"id": None, "kind": "llm"},
+            ):
+                transcribed, verdict, conf, feedback = grade_vision_image(
+                    image_bytes, vision_mime, item.stem, reference, owner=owner_user_id, saved=saved,
+                )
+            answer_data = {"extraction": "vlm", "transcribed_text": transcribed}
+            if item.item_type == "mcq" and verdict != "pending":
+                verdict, _, feedback, _, reference = _grade_mcq_choice(item, transcribed)
+        except ApiError as exc:
+            if exc.code == "invalid_image":
+                raise
+            verdict, conf, feedback = "pending", 0.0, "视觉模型暂不可用，请手动判题或改用本地识别重试。"
+            answer_data = {"extraction": "vlm_failed"}
     else:
-        reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
-        with model_connections.task(owner_user_id):
-            verdict, conf, feedback, grader_profile = grade_text_answer(
-                ocr_text, reference, ocr_conf, stem=item.stem, owner_user_id=owner_user_id
-            )
-        if item.explanation and item.explanation not in feedback:
-            feedback = f"{feedback} {item.explanation}".strip()
+        ocr_text, ocr_conf = ocr_answer_bytes(image_bytes)
+        answer_data = {"ocr_text": ocr_text, "ocr_confidence": ocr_conf}
+        if item.item_type == "mcq":
+            reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
+            if not ocr_text.strip():
+                verdict, conf, feedback, grader_profile = (
+                    "pending", 0.0, "未能识别作答文字，请重拍或手动判题。", "learning_mcq_v1",
+                )
+            else:
+                raw_verdict, _, raw_fb, grader_profile, reference = _grade_mcq_choice(item, ocr_text)
+                verdict, conf, feedback = _apply_threshold(
+                    raw_verdict, max(0.0, min(1.0, ocr_conf)), raw_fb
+                )
+        else:
+            reference = row.reference_answer_effective or _reference_from_answer_key(item.answer_key)
+            with model_connections.task(owner_user_id):
+                verdict, conf, feedback, grader_profile = grade_text_answer(
+                    ocr_text, reference, ocr_conf, stem=item.stem, owner_user_id=owner_user_id
+                )
+            if item.explanation and item.explanation not in feedback:
+                feedback = f"{feedback} {item.explanation}".strip()
     path = _answer_storage_path(row.id)
     try:
         path.write_bytes(image_bytes)
         row.answer = {
             "type": "image",
             "storage_key": str(path.relative_to(Path(get_settings().storage_dir).resolve())),
-            "ocr_text": ocr_text,
-            "ocr_confidence": ocr_conf,
+            **answer_data,
         }
         row.reference_answer_effective = reference
         row.confidence = Decimal(str(round(conf, 4)))
@@ -892,7 +911,11 @@ def list_wrong_questions(
         )
         last_answer_text = None
         if effective_resp and isinstance(effective_resp.answer, dict):
-            last_answer_text = effective_resp.answer.get("text") or effective_resp.answer.get("ocr_text")
+            last_answer_text = (
+                effective_resp.answer.get("text")
+                or effective_resp.answer.get("transcribed_text")
+                or effective_resp.answer.get("ocr_text")
+            )
         out.append(
             {
                 "id": str(wrong.id),

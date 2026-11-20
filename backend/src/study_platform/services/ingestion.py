@@ -32,6 +32,7 @@ from study_platform.services.lexical import lexical_column_values
 from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.models import embed_texts
 from study_platform.services.storage import source_path, version_dir
+from study_platform.services.vision_pipeline import extract_vision
 
 _ocr = None
 
@@ -443,7 +444,7 @@ def locked_job(db, job_id, fence):
 def update_phase(db, job_id, fence, phase, **details):
     job = locked_job(db, job_id, fence)
     job.result = {**job.result, "phase": phase, **details}
-    job.progress = {"parsing": 10, "ocr": 30, "indexing": 60}[phase]
+    job.progress = {"parsing": 10, "ocr": 30, "vision": 30, "indexing": 60}[phase]
     job.lease_expires_at = now() + timedelta(seconds=get_settings().job_lease_seconds)
     owner_id = job.owner_user_id
     db.commit()
@@ -468,8 +469,9 @@ def run_once():
             try:
                 embedding = (job.payload.get("embedding_connection") or model_connections.library_snapshot(db, owner, material.knowledge_base_id)) if is_ingestion else None
                 llm = job.payload.get("llm_connection", {"id": None, "kind": "llm"})
+                vision = job.payload.get("vision_connection") if is_ingestion else None
                 db.commit()
-                task_scope.enter_context(model_connections.task(owner, llm=llm, embedding=embedding))
+                task_scope.enter_context(model_connections.task(owner, llm=llm, embedding=embedding, vision=vision))
                 if not is_ingestion:
                     job = locked_job(db, job_id, fence)
                     payload = classification.suggestion_input(db, job)
@@ -496,10 +498,20 @@ def run_once():
                 if version.parse_status != "ready":
                     version.parse_status = "processing"
                 db.commit()
-                extracted = list(
-                    extract(version, staging, lambda phase: update_phase(db, job_id, fence, phase))
-                )
-                page_count = version.page_count
+                def phase_changed(phase):
+                    update_phase(db, job_id, fence, phase)
+
+                pipeline = "document-v1"
+                if job.payload.get("extraction_mode") == "vlm":
+                    if not vision:
+                        raise ApiError(409, "vision_not_configured", "当前任务没有就绪的视觉模型连接。")
+                    pipeline = "document-vision-v1"
+                    page_count, extracted = extract_vision(
+                        source_path(version.id), version.source_mime, phase_changed, owner=owner, saved=vision,
+                    )
+                else:
+                    extracted = list(extract(version, staging, phase_changed))
+                    page_count = version.page_count
                 if not extracted:
                     raise ApiError(422, "no_text_extracted", "未提取到可用文字")
                 update_phase(db, job_id, fence, "indexing", parsed=True,
@@ -518,7 +530,7 @@ def run_once():
                     id=uuid4(),
                     material_version_id=version_id,
                     generation=generation,
-                    pipeline_profile="document-v1",
+                    pipeline_profile=pipeline,
                     embedding_profile=profile,
                     embedding_dim=1024,
                     status="building",
@@ -595,8 +607,21 @@ def run_once():
                 index.chunk_count = len(chunk_rows)
                 version.page_count = page_count
                 version.parse_status = "ready"
-                version.parser_profile = "document-v1"
+                version.parser_profile = pipeline
                 version.failure_code = None
+                if job.payload.get("activate_version"):
+                    prior = (
+                        select(MaterialVersion.id)
+                        .where(MaterialVersion.material_id == version.material_id, MaterialVersion.is_current.is_(True))
+                    )
+                    db.execute(sa.update(IndexVersion).where(
+                        IndexVersion.material_version_id.in_(prior),
+                        IndexVersion.is_active.is_(True),
+                    ).values(is_active=False, status="retired"))
+                    db.execute(sa.update(MaterialVersion).where(
+                        MaterialVersion.id.in_(prior),
+                    ).values(is_current=False))
+                    version.is_current = True
                 job.status = "succeeded"
                 job.progress = 100
                 job.result = {**job.result, "phase": "ready", "embedded_count": len(vectors)}

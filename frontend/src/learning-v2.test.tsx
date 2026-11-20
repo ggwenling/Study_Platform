@@ -13,7 +13,7 @@ import { wrongIdsForAttempt } from './learningUi'
 const navigateMock = vi.hoisted(() => vi.fn())
 const locationMock = vi.hoisted(() => ({ value: { key: 'initial', state: null as unknown } }))
 const refreshOverview = vi.fn()
-const workspace = vi.hoisted(() => ({ libraries: [{ id: 'kb-1', name: '高数资料库' }], notify: vi.fn(), report: vi.fn() }))
+const workspace = vi.hoisted(() => ({ libraries: [{ id: 'kb-1', name: '高数资料库' }], notify: vi.fn(), report: vi.fn(), capabilities: null as { vision?: boolean } | null }))
 
 vi.mock('react-router', () => ({
   useNavigate: () => navigateMock,
@@ -161,6 +161,7 @@ async function changeSelect(label: string, value: string) {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  workspace.capabilities = null
   locationMock.value = { key: 'initial', state: null }
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
@@ -198,6 +199,64 @@ afterEach(async () => {
 })
 
 describe('Learning 2.0 workflow', () => {
+  it('requires explicit vision consent for photo grading and labels pending or failed vision results', async () => {
+    workspace.capabilities = { vision: true }
+    vi.mocked(api.learning.submitAnswerImage)
+      .mockResolvedValueOnce({
+        response_id: 'resp-2', verdict: 'pending', verdict_source: 'auto', confidence: 0.2,
+        feedback: '结果待确认。', answer: { type: 'image', extraction: 'ocr', ocr_text: 'x' },
+        reference_answer: 'ref',
+      })
+      .mockResolvedValueOnce({
+        response_id: 'resp-2', verdict: 'pending', verdict_source: 'auto', confidence: 0.4,
+        feedback: '置信度不足，请手动判题。', answer: { type: 'image', extraction: 'vlm', transcribed_text: 'x²' },
+        reference_answer: 'ref',
+      })
+      .mockResolvedValueOnce({
+        response_id: 'resp-2', verdict: 'pending', verdict_source: 'auto', confidence: 0,
+        feedback: '视觉模型暂不可用，请手动判题或改用本地识别重试。', answer: { extraction: 'vlm_failed' },
+        reference_answer: 'ref',
+      })
+
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => findButtonContaining('继续上次练习')!.click())
+    await act(async () => findButtonContaining('下一题')!.click())
+
+    const consent = node.querySelector<HTMLInputElement>('input[aria-label="视觉模型辅助识别手写公式/草图（可选，可能产生费用）"]')!
+    expect(consent).toBeTruthy()
+    expect(consent.checked).toBe(false)
+
+    async function upload(fileName: string) {
+      const file = new File(['image'], fileName, { type: 'image/png' })
+      const input = node.querySelector<HTMLInputElement>('.learning-upload input')!
+      Object.defineProperty(input, 'files', { configurable: true, value: [file] })
+      await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+      return file
+    }
+
+    const localPhoto = await upload('local.png')
+    expect(api.learning.submitAnswerImage).toHaveBeenNthCalledWith(1, 'resp-2', localPhoto)
+    expect(node.textContent).not.toContain('视觉模型辅助识别，结果待确认')
+
+    await act(async () => consent.click())
+    const visionPhoto = await upload('vision.png')
+    expect(api.learning.submitAnswerImage).toHaveBeenNthCalledWith(2, 'resp-2', visionPhoto, true)
+    expect(node.textContent).toContain('视觉模型辅助识别，结果待确认，请手动判题。')
+    expect(consent.checked).toBe(false)
+
+    await act(async () => consent.click())
+    await upload('fallback.png')
+    expect(api.learning.submitAnswerImage).toHaveBeenNthCalledWith(3, 'resp-2', expect.any(File), true)
+    expect(node.textContent).toContain('视觉模型不可用，已转为待确认。')
+  })
+
+  it('hides the vision photo opt-in when vision capability is unavailable', async () => {
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => findButtonContaining('继续上次练习')!.click())
+    await act(async () => findButtonContaining('下一题')!.click())
+    expect(node.querySelector('input[aria-label="视觉模型辅助识别手写公式/草图（可选，可能产生费用）"]')).toBeNull()
+  })
+
   it('keeps practice sources closed until revealed and opens wrong-book sources immediately', async () => {
     await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
     await act(async () => findButtonContaining('继续上次练习')!.click())

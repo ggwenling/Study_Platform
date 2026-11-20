@@ -11,6 +11,7 @@ export function isReferenceRevealed(item: Pick<LearningItem, 'verdict' | 'answer
 export function extractSubmittedAnswerText(answer: Record<string, unknown> | null | undefined): string {
   if (!answer || typeof answer !== 'object') return ''
   if (typeof answer.text === 'string') return answer.text
+  if (typeof answer.transcribed_text === 'string') return answer.transcribed_text
   if (typeof answer.ocr_text === 'string') return answer.ocr_text
   return ''
 }

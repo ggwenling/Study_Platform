@@ -1,5 +1,5 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
-import type { DueFlashcard } from './types'
+import type { DueFlashcard, ExtractionMode, ModelConnectionKind } from './types'
 import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, MaterialReader, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
@@ -133,7 +133,7 @@ export const api = {
   updateModelConnection: (id: string, body: ModelConnectionInput) => request<ModelConnection>(`/me/model-connections/${pathId(id)}`, json('PATCH', body)),
   deleteModelConnection: (id: string) => request<void>(`/me/model-connections/${pathId(id)}`, json('DELETE')),
   testModelConnection: (id: string) => request<ModelConnection>(`/me/model-connections/${pathId(id)}/test`, json('POST')),
-  defaultModelConnection: (kind: 'llm' | 'embedding', id: string | null) => request<void>(`/me/model-connections/defaults/${kind}`, json('PUT', { connection_id: id })),
+  defaultModelConnection: (kind: ModelConnectionKind, id: string | null) => request<void>(`/me/model-connections/defaults/${kind}`, json('PUT', { connection_id: id })),
   modelUsage: (days = 30) => request<ModelUsageSummary>('/me/model-usage' + query({ days: String(days) })),
   refresh,
   clearSession,
@@ -190,6 +190,8 @@ export const api = {
   material: (id: string) => request<Material>(`/materials/${pathId(id)}`),
   deleteMaterial: (id: string) => request<void>(`/materials/${pathId(id)}`, json('DELETE')),
   retryMaterial: (id: string) => request<UploadResult>(`/materials/${pathId(id)}/retry`, json('POST')),
+  reparseMaterial: (id: string, extractionMode: ExtractionMode) =>
+    request<UploadResult>(`/materials/${pathId(id)}/reparse`, json('POST', { extraction_mode: extractionMode })),
   job: (id: string) => request<Job>(`/jobs/${pathId(id)}`),
   cancelJob: (id: string) => request<Pick<Job, 'id' | 'status'>>(`/jobs/${pathId(id)}/cancel`, json('POST')),
   preview: (id: string) => request<MaterialPreview>(`/material-versions/${pathId(id)}/preview`),
@@ -235,9 +237,10 @@ export const api = {
         `/learning/responses/${pathId(responseId)}/answer-text`,
         json('POST', { answer_text: answerText }),
       ),
-    submitAnswerImage: async (responseId: string, file: File) => {
+    submitAnswerImage: async (responseId: string, file: File, useVision = false) => {
       const form = new FormData()
       form.append('file', file)
+      if (useVision) form.append('use_vision', 'true')
       return authorized(async (token) => {
         const headers = new Headers()
         if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -355,7 +358,7 @@ export function streamChat(body: ChatRequest, idempotencyKey: string, signal?: A
 export function retryTurn(conversationId: string, turnId: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/retry', {}, undefined, signal) }
 export function editTurn(conversationId: string, turnId: string, content: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/edit', { content }, undefined, signal) }
 
-export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal): Promise<UploadResult> {
+export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal, extractionMode: ExtractionMode = 'ocr'): Promise<UploadResult> {
   return authorized((token) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     const abort = () => xhr.abort()
@@ -377,6 +380,7 @@ export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?:
     xhr.onabort = () => { signal?.removeEventListener('abort', abort); reject(new DOMException('Aborted', 'AbortError')) }
     const form = new FormData()
     form.append('file', file)
+    if (extractionMode === 'vlm') form.append('extraction_mode', 'vlm')
     xhr.send(form)
   }))
 }

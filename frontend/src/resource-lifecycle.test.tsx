@@ -29,6 +29,8 @@ vi.mock('./api/client', () => ({
     cancelJob: vi.fn(),
     deleteMaterial: vi.fn(),
     retryMaterial: vi.fn(),
+    reparseMaterial: vi.fn(),
+    job: vi.fn(),
     libraryOverview: vi.fn(),
     syncLibrary: vi.fn(),
     documentLocations: vi.fn(),
@@ -59,6 +61,7 @@ const materialRow = (status: string, id = 'm1'): Material => ({
   created_at: '2026-11-18T00:00:00Z',
   error_code: null,
   error_message: null,
+  page_count: 8,
 })
 
 const overviewData: LibraryOverview = {
@@ -276,6 +279,39 @@ describe('material cancel/delete & knowledge base deletion', () => {
     expect(node.querySelector('.library-fragment-panel [role="alert"]')?.textContent).toContain('请求失败')
     await act(async () => findButton('重试读取笔记')!.click())
     expect(node.textContent).toContain('暂无研究笔记')
+  })
+
+  it('offers one-shot VLM upload and confirms eligible material reparse with page and status feedback', async () => {
+    workspace.value.capabilities = { rag: true, max_upload_bytes: 10_000_000, vision: true }
+    vi.mocked(api.libraryOverview).mockResolvedValue(overviewData)
+    vi.mocked(api.materials).mockResolvedValue({ items: [materialRow('ready')], next_cursor: null })
+    vi.mocked(api.documentLocations).mockResolvedValue([])
+    vi.mocked(api.fragments).mockResolvedValue({ total: 0, page_size: 20, items: [] })
+    vi.mocked(api.studio.notes).mockResolvedValue({ items: [] })
+    vi.mocked(api.reparseMaterial).mockResolvedValue({ material_id: 'm1', version_id: 'v2', job_id: 'j2', status: 'queued' })
+    vi.mocked(api.job).mockResolvedValue({ id: 'j2', status: 'failed', phase: 'vision', progress: 0, error_code: 'model_timeout', attempt_count: 1 })
+
+    await render(<Library preferredId="kb-1" />)
+    const visionSwitch = node.querySelector<HTMLButtonElement>('button[role="switch"]')!
+    expect(visionSwitch.getAttribute('aria-checked')).toBe('false')
+    await act(async () => visionSwitch.click())
+    const fileInput = node.querySelector<HTMLInputElement>('.library-header input[type=file]')!
+    const pdf = new File(['PDF'], '新讲义.pdf', { type: 'application/pdf' })
+    Object.defineProperty(fileInput, 'files', { value: [pdf], configurable: true })
+    await act(async () => fileInput.dispatchEvent(new Event('change', { bubbles: true })))
+    expect(workspace.value.libraryUploadQueue.enqueue).toHaveBeenCalledWith([pdf], { id: 'kb-1', name: '高数资料库' }, 'vlm')
+    expect(visionSwitch.getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => findButton('管理资料')!.click())
+    await act(async () => findButton('使用视觉理解重新解析（VLM）')!.click())
+    expect(document.body.textContent).toContain('预计处理 8 页，约调用视觉模型 8 次。')
+    expect(api.reparseMaterial).not.toHaveBeenCalled()
+    await act(async () => findButton('确认并开始视觉解析')!.click())
+
+    expect(api.reparseMaterial).toHaveBeenCalledWith('m1', 'vlm')
+    expect(api.job).toHaveBeenCalledWith('j2')
+    expect(workspace.value.notify).toHaveBeenCalledWith('已提交视觉理解重新解析，完成后会通知你。')
+    expect(workspace.value.notify).toHaveBeenCalledWith('资料「线性代数讲义.pdf」视觉解析失败，请查看资料状态并重试。')
   })
 
   it('reveals the library before notes and fragments finish, and keeps the empty note state during sync', async () => {

@@ -1652,6 +1652,64 @@
         }
       }
     },
+    "/api/v1/materials/{material_id}/reparse": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Reparse",
+        "operationId": "reparse_api_v1_materials__material_id__reparse_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReparseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs/{job_id}": {
       "get": {
         "tags": [
@@ -3788,7 +3846,8 @@
             "schema": {
               "enum": [
                 "llm",
-                "embedding"
+                "embedding",
+                "vision"
               ],
               "type": "string",
               "title": "Kind"
@@ -4846,6 +4905,11 @@
             "type": "string",
             "contentMediaType": "application/octet-stream",
             "title": "File"
+          },
+          "use_vision": {
+            "type": "boolean",
+            "title": "Use Vision",
+            "default": false
           }
         },
         "type": "object",
@@ -4860,6 +4924,15 @@
             "type": "string",
             "contentMediaType": "application/octet-stream",
             "title": "File"
+          },
+          "extraction_mode": {
+            "type": "string",
+            "enum": [
+              "ocr",
+              "vlm"
+            ],
+            "title": "Extraction Mode",
+            "default": "ocr"
           }
         },
         "type": "object",
@@ -4885,6 +4958,10 @@
             "type": "boolean",
             "title": "Ocr"
           },
+          "vision": {
+            "type": "boolean",
+            "title": "Vision"
+          },
           "answer_modes": {
             "items": {
               "type": "string"
@@ -4908,6 +4985,7 @@
         "required": [
           "rag",
           "ocr",
+          "vision",
           "answer_modes",
           "upload_mime_types",
           "max_upload_bytes"
@@ -5261,7 +5339,8 @@
             "type": "string",
             "enum": [
               "llm",
-              "embedding"
+              "embedding",
+              "vision"
             ],
             "title": "Kind"
           },
@@ -5367,7 +5446,8 @@
             "type": "string",
             "enum": [
               "llm",
-              "embedding"
+              "embedding",
+              "vision"
             ],
             "title": "Kind"
           },
@@ -6898,6 +6978,17 @@
             ],
             "title": "Source Url"
           },
+          "page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Count"
+          },
           "mime_type": {
             "anyOf": [
               {
@@ -7282,6 +7373,23 @@
           "display_name"
         ],
         "title": "RegisterBody"
+      },
+      "ReparseRequest": {
+        "properties": {
+          "extraction_mode": {
+            "type": "string",
+            "enum": [
+              "ocr",
+              "vlm"
+            ],
+            "title": "Extraction Mode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "extraction_mode"
+        ],
+        "title": "ReparseRequest"
       },
       "ResetPassword": {
         "properties": {

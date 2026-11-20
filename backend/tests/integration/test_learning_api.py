@@ -3,6 +3,7 @@
 import hashlib
 import io
 import os
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from study_platform.core.config import Settings
 from study_platform.core.config import get_settings as load_settings
+from study_platform.core.errors import ApiError
 from study_platform.main import create_app
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import (
@@ -27,7 +29,7 @@ from study_platform.persistence.models import (
     MaterialVersion,
     User,
 )
-from study_platform.services import chat, learning
+from study_platform.services import chat, learning, model_calls, model_connections
 
 pytestmark = pytest.mark.integration
 
@@ -715,6 +717,54 @@ def test_chat_note_paths_reject_stale_cross_library_unowned_and_oversized_conten
         )
         assert oversized.status_code == 422
         assert oversized.json()["code"] == "note_too_long"
+    finally:
+        http.app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_vision_grading_is_opt_in_and_safely_pending_on_low_confidence_or_failure(learning_env, monkeypatch):
+    from study_platform.api.v1.auth import get_current_user
+
+    http, db, owner, kb_id = learning_env
+    http.app.dependency_overrides[get_current_user] = lambda: db.get(User, owner)
+    quiz = learning.generate_learning_quiz(db, owner_user_id=owner, knowledge_base_id=kb_id, count=1)
+    attempt = learning.start_attempt(db, owner_user_id=owner, quiz_id=quiz.id)
+    response_id = learning.attempt_payload(db, attempt.id, owner)["items"][0]["response_id"]
+    route = f"/learning/responses/{response_id}/answer-image"
+    image = {"file": ("answer.png", _png_with_text("x"), "image/png")}
+    calls = []
+    snapshot = {"id": str(uuid4()), "kind": "vision", "revision": 1}
+
+    def interpret(*_args, context, saved):
+        assert saved == snapshot and context.purpose == "vision_grade"
+        calls.append(saved)
+        if len(calls) > 1:
+            raise ApiError(504, "model_timeout", "fake timeout")
+        return '{"transcribed_text":"x", "verdict":"correct", "confidence":0.4, "feedback":"检查结果"}'
+
+    monkeypatch.setattr(learning, "ocr_answer_bytes", lambda _: ("local OCR", 0.9))
+    monkeypatch.setattr(model_calls, "invoke_vision", interpret)
+    try:
+        regular = http.post(route, files=image)
+        assert regular.status_code == 200 and regular.json()["answer"]["ocr_text"] == "local OCR"
+        assert not calls
+
+        no_model = http.post(route, files=image, data={"use_vision": "true"})
+        assert no_model.status_code == 409 and no_model.json()["code"] == "vision_not_configured"
+        monkeypatch.setattr(model_connections, "vision_snapshot", lambda *_: snapshot)
+        monkeypatch.setattr(model_connections, "task", lambda *_, **_kwargs: nullcontext())
+        opted_in = http.post(route, files=image, data={"use_vision": "true"})
+        assert opted_in.status_code == 200
+        data = opted_in.json()
+        assert data["verdict"] == "pending" and data["confidence"] == 0.4
+        assert data["answer"]["extraction"] == "vlm" and data["answer"]["transcribed_text"] == "x"
+        assert "ocr_text" not in data["answer"]
+
+        timed_out = http.post(route, files=image, data={"use_vision": "true"})
+        assert timed_out.status_code == 200 and timed_out.json()["verdict"] == "pending"
+        assert timed_out.json()["answer"]["extraction"] == "vlm_failed"
+        manual = http.patch(f"/learning/responses/{response_id}/verdict", json={"verdict": "incorrect"})
+        assert manual.status_code == 200 and manual.json()["verdict"] == "incorrect"
+        assert len(http.get("/learning/wrong-questions").json()["items"]) == 1
     finally:
         http.app.dependency_overrides.pop(get_current_user, None)
 

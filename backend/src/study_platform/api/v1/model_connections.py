@@ -27,7 +27,7 @@ router = APIRouter(prefix="/me/model-connections", tags=["model connections"])
 
 class ConnectionInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    kind: Literal["llm", "embedding"]
+    kind: Literal["llm", "embedding", "vision"]
     base_url: str = Field(min_length=1, max_length=500)
     model: str = Field(min_length=1, max_length=120)
     api_key: SecretStr | None = Field(default=None, max_length=4096)
@@ -44,7 +44,7 @@ class ConnectionInput(BaseModel):
 class ConnectionDTO(BaseModel):
     id: UUID
     name: str
-    kind: Literal["llm", "embedding"]
+    kind: Literal["llm", "embedding", "vision"]
     base_url: str
     model: str
     dimensions: int | None
@@ -128,7 +128,10 @@ def busy(db, row):
             AiWorkflowRun.owner_user_id == row.owner_user_id,
             AiWorkflowRun.status.in_(("created", "running")),
             AiWorkflowRun.lease_expires_at > current,
-            AiWorkflowRun.source_scope["llm_connection"]["id"].astext == str(row.id),
+            sa.or_(
+                AiWorkflowRun.source_scope["llm_connection"]["id"].astext == str(row.id),
+                AiWorkflowRun.source_scope["vision_connection"]["id"].astext == str(row.id),
+            ),
         )
         .limit(1)
     )
@@ -137,7 +140,10 @@ def busy(db, row):
         .where(
             AiJob.owner_user_id == row.owner_user_id,
             AiJob.status.in_(("queued", "running")),
-            AiJob.payload["llm_connection"]["id"].astext == str(row.id),
+            sa.or_(
+                AiJob.payload["llm_connection"]["id"].astext == str(row.id),
+                AiJob.payload["vision_connection"]["id"].astext == str(row.id),
+            ),
         )
         .limit(1)
     )
@@ -238,7 +244,7 @@ class DefaultInput(BaseModel):
 
 @router.put("/defaults/{kind}", status_code=204)
 def set_default(
-    kind: Literal["llm", "embedding"],
+    kind: Literal["llm", "embedding", "vision"],
     body: DefaultInput,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),

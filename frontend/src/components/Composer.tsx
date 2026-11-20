@@ -15,6 +15,7 @@ import { Button } from '@/components/arc/button/button'
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { Select } from '@/components/arc/select/select'
 import { Tooltip } from '@/components/arc/tooltip/tooltip'
+import { Switch } from '@/components/arc/switch/switch'
 import { FadingTextarea } from './FadingTextarea'
 import { CurrentMaterials } from './CurrentMaterials'
 import { PasteTextDialog } from './PasteTextDialog'
@@ -57,6 +58,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   const [panelReveal, setPanelReveal] = useState<{ id: string; at: number } | null>(null)
   const [pasteOpen, setPasteOpen] = useState(false)
   const [webClipOpen, setWebClipOpen] = useState(false)
+  const [visionForNextUpload, setVisionForNextUpload] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createBusy, setCreateBusy] = useState(false)
@@ -94,6 +96,10 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   useEffect(() => {
     if (!reducedMotion) void import('./ComposerMetalSend')
   }, [reducedMotion])
+
+  useEffect(() => {
+    setVisionForNextUpload(false)
+  }, [libraryId, capabilities?.vision])
 
   function applySummaryMode(enabled: boolean) {
     setDraftState((current) => ({ ...current, summaryMode: enabled }))
@@ -164,7 +170,8 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
 
   function addFiles(files: FileList | File[]) {
     if (!ensureImportReady() || !currentLibrary) return
-    uploadQueue.enqueue(files, { id: currentLibrary.id, name: currentLibrary.name })
+    uploadQueue.enqueue(files, { id: currentLibrary.id, name: currentLibrary.name }, visionForNextUpload && capabilities?.vision ? 'vlm' : 'ocr')
+    setVisionForNextUpload(false)
   }
 
   useImperativeHandle(ref, () => ({
@@ -305,6 +312,10 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
           </div>
         )}
       </div>
+      {!demo && capabilities?.vision && <p className="composer-hint">
+        <Switch aria-label="本次上传中的图片或 PDF 使用视觉解析（可能产生费用）" label="本次上传中的图片或 PDF 使用视觉解析（可能产生费用）"
+          checked={visionForNextUpload} onCheckedChange={setVisionForNextUpload} />
+      </p>}
       {uploadQueue.latestNote && <span className="composer-hint" role="status">{uploadQueue.latestNote}</span>}
       {failedUploads.length > 0 && (
         <div className="upload-queue-failures">

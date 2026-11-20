@@ -32,12 +32,16 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.authOptions(); await api.refresh(); await api.googleLink('b'); await api.forgotPassword('a'); await api.resetPassword('token', 'b')
   await api.knowledgeBases(); await api.knowledgeBase('id'); await api.createKnowledgeBase({ name: 'x' }); await api.updateKnowledgeBase('id', { name: 'x' }); await api.deleteKnowledgeBase('id')
   await api.materials('id'); await uploadMaterial('id', new File(['x'], 'x.txt')); await api.material('id'); await api.deleteMaterial('id'); await api.retryMaterial('id')
+  await api.webClip('id', { url: 'https://example.com/article' }); await api.reparseMaterial('id', 'vlm')
   await api.job('id'); await api.cancelJob('id'); await api.preview('id'); await api.content('id'); await api.pageImage('id', 1); await api.source('id')
+  await api.materialReader('id', 'id')
   await api.conversations(); await api.createConversation(); await api.conversation('id'); await api.updateConversation('id', { title: 'x' }); await api.deleteConversation('id'); await api.messages('id')
   await api.conversations(undefined, undefined, true); await api.archiveConversation('id', true)
   await api.overview(); await api.search('q'); await api.capabilities(); await api.turn('id', 'id'); await api.cancelTurn('id', 'id')
   await api.studio.dueFlashcards('id', 10)
+  await api.studio.exportNotes('id'); await api.studio.exportFlashcardDeck('id', 'anki_tsv')
   await api.studio.appendNote('id', { content_md: 'x', message_id: 'id' })
+  await api.learning.submitAnswerImage('id', new File(['x'], 'answer.png'), true)
   await api.modelUsage(30)
   await api.modelConnections()
   const connection = { name: '模型', kind: 'llm' as const, base_url: 'https://api.example/v1', model: 'model', api_key: 'test-key' }
@@ -46,7 +50,7 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   for await (const _ of streamChat({ knowledge_base_id: 'id', answer_mode: 'knowledge_only', intent: 'qa', content: 'x' }, 'key')) { /* consume */ }
   for await (const _ of retryTurn('id', 'id')) { /* consume */ }
   for await (const _ of editTurn('id', 'id', 'edited')) { /* consume */ }
-  expect(calls).toHaveLength(51)
+  expect(calls).toHaveLength(57)
   for (const [url, method] of calls) {
     const path = Object.keys(contract.paths).find((template) => new RegExp('^' + template.replace(/\{[^}]+\}/g, '[^/]+') + '$').test(url))
     expect(path, `${method.toUpperCase()} ${url}`).toBeDefined()
@@ -58,7 +62,7 @@ it('publishes the fields consumed by the frontend', () => {
   const models: Record<string, string[]> = {
     TurnDTO: ['turn_id', 'conversation_id', 'status', 'scope', 'messages', 'error_code'],
     MessageDTO: ['id', 'conversation_id', 'sequence_no', 'role', 'content', 'status', 'created_at', 'scope', 'citations', 'turn_id'],
-    CitationDTO: ['id', 'source_label', 'material_id', 'material_version_id', 'knowledge_base_id', 'title', 'quote', 'locator', 'location_label', 'version_no', 'availability'],
+    CitationDTO: ['id', 'chunk_id', 'source_label', 'material_id', 'material_version_id', 'knowledge_base_id', 'title', 'quote', 'locator', 'location_label', 'version_no', 'availability'],
     ScopeDTO: ['knowledge_base_id', 'knowledge_base_name', 'answer_mode', 'index_version_ids'],
     UploadResponse: ['material_id', 'version_id', 'job_id', 'status'],
     UserDTO: ['id', 'email', 'display_name'],
@@ -72,6 +76,7 @@ it('publishes the fields consumed by the frontend', () => {
     JobResponse: ['id', 'status', 'phase', 'progress', 'error_code', 'attempt_count'],
     JobCancelResponse: ['id', 'status'],
     MaterialPreviewResponse: ['version_id', 'mime_type', 'page_count', 'sections'],
+    MaterialReaderResponse: ['version_id', 'knowledge_base_id', 'target_chunk_id', 'chunks', 'preview_page_count', 'can_render_pages'],
     PreviewSection: ['text', 'locator'],
     SearchPage: ['items', 'next_cursor'],
     SearchItem: ['id', 'type', 'title'],
@@ -80,7 +85,7 @@ it('publishes the fields consumed by the frontend', () => {
     DueFlashcardDTO: ['id', 'deck_id', 'deck_title', 'knowledge_base_id', 'knowledge_base_name', 'front', 'back', 'due_at', 'is_due', 'sources'],
     AppendNoteBody: ['content_md'],
     ActivityDTO: ['date', 'count'],
-    CapabilitiesDTO: ['rag', 'ocr', 'answer_modes', 'upload_mime_types', 'max_upload_bytes'],
+    CapabilitiesDTO: ['rag', 'ocr', 'vision', 'answer_modes', 'upload_mime_types', 'max_upload_bytes'],
     ChatRequest: ['knowledge_base_id', 'content'],
     EditTurnBody: ['content'],
     RegisterBody: ['email', 'password', 'display_name'],

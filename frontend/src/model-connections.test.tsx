@@ -48,6 +48,25 @@ it('requires a successful live test before choosing a default and explains error
   expect(api.defaultModelConnection).toHaveBeenCalledWith('llm', 'one')
 })
 
+it('tests and selects the visual connection independently of the text model', async () => {
+  const visual: ModelConnection = { ...row, id: 'visual', name: '视觉模型', kind: 'vision' }
+  const ready: ModelConnection = { ...visual, status: 'ready' }
+  vi.mocked(api.modelConnections).mockResolvedValue(data([visual]))
+  await act(async () => root.render(<ModelConnectionsPanel />))
+  expect(node.textContent).toContain('视觉理解模型（VLM）')
+  expect(node.textContent).toContain('视觉理解未启用')
+  expect(button('设为默认').disabled).toBe(true)
+  vi.mocked(api.testModelConnection).mockResolvedValue(ready)
+  vi.mocked(api.modelConnections).mockResolvedValue(data([ready]))
+  await click('测试连接')
+  expect(api.testModelConnection).toHaveBeenCalledWith('visual')
+  vi.mocked(api.modelConnections).mockResolvedValue(data([{ ...ready, is_default: true }]))
+  await click('设为默认')
+  expect(api.defaultModelConnection).toHaveBeenLastCalledWith('vision', 'visual')
+  await click('清除默认连接')
+  expect(api.defaultModelConnection).toHaveBeenLastCalledWith('vision', null)
+})
+
 it('saves credentials once as a draft and clears the form on close', async () => {
   await act(async () => root.render(<ModelConnectionsPanel />))
   await click('添加连接')

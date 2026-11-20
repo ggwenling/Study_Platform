@@ -1,11 +1,11 @@
 """Learning entry: generate quiz, text/image answers, verdict overrides, history & wrong book."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -160,6 +160,7 @@ def answer_image(
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    use_vision: Annotated[bool, Form()] = False,
 ):
     if file.content_type not in _ALLOWED_IMAGE:
         raise ApiError(422, "invalid_type", "请上传 PNG 或 JPEG 图片")
@@ -167,7 +168,8 @@ def answer_image(
     if len(payload) > get_settings().max_upload_bytes:
         raise ApiError(413, "too_large", "图片过大")
     row = learning.submit_image_answer(
-        db, owner_user_id=user.id, response_id=response_id, image_bytes=payload
+        db, owner_user_id=user.id, response_id=response_id, image_bytes=payload,
+        vision_mime=file.content_type if use_vision else None,
     )
     path = Path(get_settings().storage_dir).resolve() / row.answer["storage_key"]
     try:

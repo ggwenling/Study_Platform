@@ -15,6 +15,7 @@ const percent = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFracti
 const purposeLabel: Record<string, string> = {
   chat: '对话', learning_quiz: '学习出题', learning_grade: '学习判题', query_rewrite: '检索改写',
   embedding: '向量嵌入', classification: '资料分类', connection_test: '连接测试',
+  vision_ingest: '资料视觉解析', vision_grade: '视觉判题',
 }
 
 function UsageBreakdown({ title, rows }: { title: string; rows: ModelUsageBucket[] }) {

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { uploadMaterial } from '@/api/client'
+import type { ExtractionMode } from '@/api/types'
+import { canUseVisionForFile } from '@/visionUi'
 
 export type UploadQueueItem = {
   id: string
@@ -7,6 +9,7 @@ export type UploadQueueItem = {
   name: string
   libraryId: string
   libraryName: string
+  extractionMode?: ExtractionMode
   status: 'queued' | 'uploading' | 'done' | 'failed' | 'cancelled'
 }
 
@@ -88,7 +91,10 @@ export function useUploadQueue({
     activeController.current = { id: next.id, controller }
     setItems((current) => current.map((row) => row.id === next.id ? { ...row, status: 'uploading' } : row))
 
-    void uploadMaterial(next.libraryId, next.file, undefined, controller.signal).then(
+    const sent = next.extractionMode === 'vlm'
+      ? uploadMaterial(next.libraryId, next.file, undefined, controller.signal, 'vlm')
+      : uploadMaterial(next.libraryId, next.file, undefined, controller.signal)
+    void sent.then(
       () => {
         if (controller.signal.aborted) return
         activeController.current = null
@@ -105,7 +111,7 @@ export function useUploadQueue({
     )
   }, [items])
 
-  const enqueue = useCallback((files: FileList | File[], target: { id: string; name: string }) => {
+  const enqueue = useCallback((files: FileList | File[], target: { id: string; name: string }, extractionMode: ExtractionMode = 'ocr') => {
     const incoming = Array.from(files)
     if (!incoming.length) return 0
     const accepted: UploadQueueItem[] = []
@@ -128,6 +134,7 @@ export function useUploadQueue({
         name: file.name,
         libraryId: target.id,
         libraryName: target.name,
+        ...(extractionMode === 'vlm' && canUseVisionForFile(file.name) ? { extractionMode } : {}),
         status: 'queued',
       })
     }

@@ -24,6 +24,11 @@ export function errorMessage(error: unknown) {
 }
 
 export function locatorLabel(locator: Record<string, unknown>) {
+  const label = locationLabel(locator)
+  return locator.extraction === 'vlm' ? `${label} · 视觉解析（VLM）` : label
+}
+
+function locationLabel(locator: Record<string, unknown>) {
   if (typeof locator.slide === 'number') return `第 ${locator.slide} 页幻灯片${locator.notes === true ? ' · 备注' : ''}`
   if (typeof locator.heading === 'string' && locator.heading) {
     return typeof locator.start_line === 'number' ? `${locator.heading} · 第 ${locator.start_line} 行` : locator.heading

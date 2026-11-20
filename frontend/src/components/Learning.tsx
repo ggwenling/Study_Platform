@@ -21,6 +21,7 @@ import { ApiError } from '@/api/stream'
 import { allPages, errorMessage } from '@/api/ui'
 import { downloadMarkdownFile } from '@/conversationActions'
 import { formatWrongQuestionExport } from '@/studyExports'
+import { useWorkspace } from '../WorkspaceData'
 import {
   buildFollowUpPrompt,
   extractSubmittedAnswerText,
@@ -88,6 +89,7 @@ function SourceList({ sources, onOpenSource, disabled = false }: {
 }
 
 export function Learning({ knowledgeBases, notify, overview, refreshOverview }: Props) {
+  const { capabilities } = useWorkspace()
   const navigate = useNavigate()
   const location = useLocation()
   const historyState = location.state as {
@@ -114,6 +116,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   const [index, setIndex] = useState(0)
   const [textDrafts, setTextDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  const [useVisionForImage, setUseVisionForImage] = useState(false)
   const [wrongs, setWrongs] = useState<WrongQuestionItem[]>([])
   const dailyOverview = overview
   const [wrongKbFilter, setWrongKbFilter] = useState<string>('all')
@@ -321,9 +324,13 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   async function onImage(file: File) {
     if (!attempt) return
     const item = attempt.items[index]
+    const useVision = capabilities?.vision === true && useVisionForImage
+    setUseVisionForImage(false)
     setBusy(true)
     try {
-      const result = await api.learning.submitAnswerImage(item.response_id, file)
+      const result = useVision
+        ? await api.learning.submitAnswerImage(item.response_id, file, true)
+        : await api.learning.submitAnswerImage(item.response_id, file)
       applyResponseUpdate(item.response_id, result)
       await Promise.all([refreshWrongs(), refreshAttempts(), refreshDailyOverview()])
     } catch (error) {
@@ -719,12 +726,34 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
                       }}
                     />
                   </label>
+                  {capabilities?.vision && (
+                    <label>
+                      <input
+                        type="checkbox"
+                        aria-label="视觉模型辅助识别手写公式/草图（可选，可能产生费用）"
+                        disabled={busy}
+                        checked={useVisionForImage}
+                        onChange={(event) => setUseVisionForImage(event.target.checked)}
+                      />{' '}
+                      视觉模型辅助识别手写公式/草图（可选，可能产生费用）
+                    </label>
+                  )}
                 </div>
               </div>
             )}
 
             {currentSubmittedText && current.answer?.type === 'image' && (
               <p className="learning-ocr-preview">图片识别文字：{currentSubmittedText}</p>
+            )}
+            {current.answer?.extraction === 'vlm' && (
+              <p className="learning-feedback" role="status">
+                视觉模型辅助识别{current.verdict === 'pending' ? '，结果待确认，请手动判题。' : '（可手动改判）'}
+              </p>
+            )}
+            {current.answer?.extraction === 'vlm_failed' && (
+              <p className="learning-feedback" role="status">
+                视觉模型不可用，已转为待确认。
+              </p>
             )}
 
             <div className={`learning-verdict verdict-${current.verdict ?? 'none'}`}>

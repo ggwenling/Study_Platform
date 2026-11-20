@@ -77,6 +77,8 @@ def citation_dto(db, citation) -> dict:
             for part in locator["table_path"]
         )
         label += f"，段落 {locator['cell_paragraph']}"
+    if locator.get("extraction") == "vlm":
+        label += " · 视觉解析（VLM）"
     base = f"/api/v1/material-versions/{version.id}"
     page = locator.get("page", locator.get("image"))
     preview = f"{base}/preview"

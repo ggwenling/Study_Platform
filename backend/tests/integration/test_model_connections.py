@@ -1,10 +1,12 @@
 """User connections against a controlled OpenAI-compatible HTTP server and PostgreSQL."""
 
 import asyncio
+import base64
 import json
 import os
 import threading
 import time
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -31,7 +33,7 @@ from study_platform.services.learning_llm import (
     generate_questions_with_llm,
     grade_with_llm,
 )
-from study_platform.services.model_calls import ainvoke_chat, invoke_chat
+from study_platform.services.model_calls import ainvoke_chat, invoke_chat, invoke_vision
 from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.models import embed_texts
 from study_platform.services.query_rewrite import rewrite_query
@@ -52,10 +54,11 @@ def compatible_api():
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             calls.append((self.path, body, self.headers.get("Authorization")))
             model = modes.get(body["model"], body["model"])
-            if model in {"unauthorized", "rate-limit", "timeout"}:
+            if model in {"unauthorized", "rate-limit", "timeout", "vision-unsupported"}:
                 if model == "timeout":
                     time.sleep(0.2)
-                self.send_response(401 if model == "unauthorized" else 429)
+                status = 401 if model == "unauthorized" else 400 if model == "vision-unsupported" else 429
+                self.send_response(status)
                 self.end_headers()
                 try:
                     self.wfile.write(b'{"error":{"message":"fixture error"}}')
@@ -433,6 +436,81 @@ def test_real_probe_rejects_bad_credentials_and_malformed_vectors(
         == 409
     )
     assert len(state.provider.calls) == 1  # No fallback or redirect, no automatic provider retries.
+
+
+def test_vision_connection_probe_usage_and_reference_leases(connections_env):
+    state = connections_env
+    vision, _ = activate(state, "vision", "vision-a")
+    probe_path, probe_body, _ = state.provider.calls[-1]
+    assert probe_path.endswith("/chat/completions")
+    image = probe_body["messages"][0]["content"][1]
+    assert image["type"] == "image_url"
+    assert image["image_url"]["url"].startswith("data:image/png;base64,")
+    assert state.client.get("/capabilities").json()["vision"] is True
+
+    with state.factory() as db:
+        saved = model_connections.vision_snapshot(db, state.owner.id)
+        db.commit()
+
+    with model_connections.task(
+        state.owner.id,
+        llm={"id": None, "kind": "llm"},
+        vision=saved,
+    ):
+        answer = invoke_vision(
+            "Describe the image.",
+            _test_pixel_png(),
+            "image/png",
+            context=ModelUsageContext(state.owner.id, "vision_grade"),
+            saved=saved,
+        )
+        assert answer == "OK"
+        blocked = state.client.delete(f"/me/model-connections/{vision['id']}")
+        assert blocked.status_code == 409 and blocked.json()["code"] == "model_connection_busy"
+
+    assert state.client.put(
+        "/me/model-connections/defaults/vision", json={"connection_id": None}
+    ).status_code == 204
+    job = AiJob(
+        id=uuid4(),
+        owner_user_id=state.owner.id,
+        job_type="ingest",
+        resource_type="material_version",
+        resource_id=uuid4(),
+        status="queued",
+        progress=0,
+        payload={"vision_connection": saved},
+        attempt_count=0,
+        max_attempts=3,
+        fencing=0,
+        next_run_at=datetime.now(UTC),
+    )
+    with state.factory() as db:
+        db.add(job)
+        db.commit()
+    blocked = state.client.delete(f"/me/model-connections/{vision['id']}")
+    assert blocked.status_code == 409 and blocked.json()["code"] == "model_connection_busy"
+    with state.factory() as db:
+        db.delete(db.get(AiJob, job.id))
+        db.commit()
+    assert state.client.delete(f"/me/model-connections/{vision['id']}").status_code == 204
+    assert state.client.get("/capabilities").json()["vision"] is False
+    purposes = {row["key"] for row in state.client.get("/me/model-usage").json()["by_purpose"]}
+    assert {"connection_test", "vision_grade"} <= purposes
+
+
+def test_vision_probe_rejects_model_without_multimodal_support(connections_env):
+    state = connections_env
+    row, _ = create(state, "vision", "vision-unsupported")
+    result = state.client.post(f"/me/model-connections/{row['id']}/test").json()
+    assert result["status"] == "failed"
+    assert result["error_code"] == "vision_model_unsupported"
+
+
+def _test_pixel_png():
+    return base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jk3sAAAAASUVORK5CYII="
+    )
 
 
 def test_task_default_switch_pins_all_llm_purposes_and_personal_errors(connections_env):

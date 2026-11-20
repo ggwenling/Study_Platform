@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     embedding_dimensions: Literal[1024] = 1024
     max_upload_bytes: int = 20 * 1024 * 1024
     max_pdf_pages: int = 50
+    max_vlm_pages_per_material: int = Field(default=20, ge=1)
     max_image_pixels: int = 20_000_000
     worker_poll_seconds: float = 1
     job_lease_seconds: int = 300

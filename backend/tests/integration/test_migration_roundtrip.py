@@ -166,6 +166,26 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                     assert connection.scalar(sa.text("SELECT project_knowledge_base_id FROM study.conversations WHERE id=:id"), {"id": conversation}) == expected_project
             check(True)
             with engine.begin() as connection:
+                vision_connection = connection.scalar(sa.text(
+                    "INSERT INTO study.model_connections(owner_user_id, kind, name, versions) "
+                    "VALUES (:owner, 'vision', 'Vision', '{}'::jsonb) RETURNING id"
+                ), {"owner": owner})
+                connection.execute(sa.text(
+                    "INSERT INTO study.model_call_records(owner_user_id, purpose, model_name, success) "
+                    "VALUES (:owner, 'vision_ingest', 'vision-test', true)"
+                ), {"owner": owner})
+            with pytest.raises(RuntimeError, match="vision connections or usage"):
+                command.downgrade(config, "0013_material_source_url")
+            check(True)
+            with engine.begin() as connection:
+                connection.execute(sa.text(
+                    "DELETE FROM study.model_call_records WHERE owner_user_id=:owner "
+                    "AND purpose='vision_ingest'"
+                ), {"owner": owner})
+                connection.execute(sa.text(
+                    "DELETE FROM study.model_connections WHERE id=:id"
+                ), {"id": vision_connection})
+            with engine.begin() as connection:
                 connection.execute(sa.delete(models.IndexVersion).where(models.IndexVersion.id.in_(indexes)))
                 connection.execute(sa.delete(models.MaterialVersion).where(models.MaterialVersion.id.in_(versions)))
                 connection.execute(sa.delete(models.Material).where(models.Material.id.in_(materials)))
