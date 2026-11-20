@@ -207,7 +207,15 @@ def test_scanned_pdf_renders_page_and_keeps_original(tmp_path, monkeypatch):
     Image.new("RGB", (200, 100), "white").save(path, format="PDF", resolution=72)
     original = path.read_bytes()
     monkeypatch.setattr(ingestion, "source_path", lambda _: path)
-    monkeypatch.setattr(ingestion, "get_settings", lambda: SimpleNamespace(max_pdf_pages=50))
+    monkeypatch.setattr(
+        ingestion,
+        "get_settings",
+        lambda: SimpleNamespace(
+            max_pdf_pages=50,
+            pdf_ocr_min_effective_chars=40,
+            pdf_ocr_image_page_max_chars=120,
+        ),
+    )
     observed = []
 
     def fake_ocr(image):

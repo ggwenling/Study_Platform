@@ -27,8 +27,9 @@ from study_platform.persistence.models.materials import (
     MaterialVersion,
 )
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
-from study_platform.services import classification, model_connections
+from study_platform.services import chunking, classification, model_connections
 from study_platform.services.lexical import lexical_column_values
+from study_platform.services.material_reader import PDFIUM_LOCK
 from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.models import embed_texts
 from study_platform.services.storage import source_path, version_dir
@@ -66,6 +67,25 @@ def ocr_image(image):
         ]
         if boxes is not None and scores is not None
         else []
+    )
+
+
+def effective_char_count(text):
+    """Count letters and digits, excluding whitespace and punctuation."""
+    return sum(character.isalnum() for character in text)
+
+
+def _has_large_image(page, pdfium):
+    width, height = page.get_size()
+    page_area = width * height
+    if page_area <= 0:
+        return False
+    return any(
+        max(0, right - left) * max(0, top - bottom) / page_area >= 0.25
+        for left, bottom, right, top in (
+            image.get_bounds()
+            for image in page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE])
+        )
     )
 
 
@@ -266,43 +286,62 @@ def extract(version, output_dir, phase):
     elif mime == "application/pdf":
         import pypdfium2 as pdfium
 
-        doc = pdfium.PdfDocument(path)
+        with PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(path)
         try:
-            if len(doc) > settings.max_pdf_pages or len(doc) == 0:
+            with PDFIUM_LOCK:
+                page_count = len(doc)
+            if page_count > settings.max_pdf_pages or page_count == 0:
                 raise ValueError("Invalid PDF page count")
-            version.page_count = len(doc)
-            for number in range(1, len(doc) + 1):
+            version.page_count = page_count
+            for number in range(1, page_count + 1):
                 phase("parsing")
-                page = doc[number - 1]
-                try:
-                    textpage = page.get_textpage()
+                with PDFIUM_LOCK:
+                    page = doc[number - 1]
                     try:
-                        text = textpage.get_text_range().strip()
-                    finally:
-                        textpage.close()
-                    if text:
-                        yield text, {"page": number}
-                    else:
-                        phase("ocr")
-                        width, height = page.get_size()
-                        scale = min(200 / 72, 2500 / max(width, height))
-                        bitmap = page.render(scale=scale)
+                        textpage = page.get_textpage()
                         try:
-                            image = bitmap.to_pil()
-                            image.save(output_dir / f"page-{number}.png")
-                            lines = ocr_image(image)
-                            image.close()
+                            text = textpage.get_text_range().strip()
                         finally:
-                            bitmap.close()
-                        if lines:
-                            yield (
-                                "\n".join(line["text"] for line in lines),
-                                {"page": number, "ocr": lines},
-                            )
-                finally:
-                    page.close()
+                            textpage.close()
+                        effective_len = effective_char_count(text)
+                        should_ocr = effective_len < settings.pdf_ocr_min_effective_chars or (
+                            effective_len < settings.pdf_ocr_image_page_max_chars
+                            and _has_large_image(page, pdfium)
+                        )
+                        image = None
+                        if should_ocr:
+                            width, height = page.get_size()
+                            scale = min(200 / 72, 2500 / max(width, height))
+                            bitmap = page.render(scale=scale)
+                            try:
+                                image = bitmap.to_pil()
+                            finally:
+                                bitmap.close()
+                    finally:
+                        page.close()
+                if should_ocr:
+                    phase("ocr")
+                    try:
+                        lines = ocr_image(image)
+                        ocr_text = "\n".join(line["text"] for line in lines)
+                        ocr_effective_len = effective_char_count(ocr_text)
+                        if lines and ocr_effective_len > 0 and (
+                            effective_len == 0
+                            or ocr_effective_len
+                            >= max(int(effective_len * 1.5), effective_len + 20)
+                        ):
+                            image.save(output_dir / f"page-{number}.png")
+                            yield ocr_text, {"page": number, "ocr": lines}
+                        elif text:
+                            yield text, {"page": number}
+                    finally:
+                        image.close()
+                elif text:
+                    yield text, {"page": number}
         finally:
-            doc.close()
+            with PDFIUM_LOCK:
+                doc.close()
     elif mime in ("image/png", "image/jpeg"):
         from PIL import Image
 
@@ -501,11 +540,12 @@ def run_once():
                 def phase_changed(phase):
                     update_phase(db, job_id, fence, phase)
 
-                pipeline = "document-v1"
+                parser_profile = "document-v1"
+                pipeline = "semantic-v2"
                 if job.payload.get("extraction_mode") == "vlm":
                     if not vision:
                         raise ApiError(409, "vision_not_configured", "当前任务没有就绪的视觉模型连接。")
-                    pipeline = "document-vision-v1"
+                    parser_profile = "document-vision-v1"
                     page_count, extracted = extract_vision(
                         source_path(version.id), version.source_mime, phase_changed, owner=owner, saved=vision,
                     )
@@ -543,7 +583,7 @@ def run_once():
                 chunk_rows = [
                     (part, locator, ordinal)
                     for ordinal, (text, locator) in enumerate(extracted)
-                    for part in chunks(text)
+                    for part in chunking.semantic_chunks(text)
                 ]
                 vectors = []
                 for offset in range(0, len(chunk_rows), 20):
@@ -607,7 +647,7 @@ def run_once():
                 index.chunk_count = len(chunk_rows)
                 version.page_count = page_count
                 version.parse_status = "ready"
-                version.parser_profile = pipeline
+                version.parser_profile = parser_profile
                 version.failure_code = None
                 if job.payload.get("activate_version"):
                     prior = (

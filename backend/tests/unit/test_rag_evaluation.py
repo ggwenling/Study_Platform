@@ -190,6 +190,19 @@ def test_frozen_dataset_groups_and_splits_are_balanced():
         assert sum(case["answerable"] for case in subset) == 16
 
 
+def test_retrieval_mini_covers_semantic_blocks_and_scanned_page():
+    path = Path(__file__).resolve().parents[2] / "evaluation/retrieval_mini.jsonl"
+    cases, materials = read_dataset(path)
+
+    assert {case["id"] for case in cases} >= {"M04", "M05", "M06", "M07"}
+    by_id = {material["id"]: material for material in materials}
+    assert by_id["semantic-structures"]["format"] == "docx"
+    assert by_id["scan-watermark"]["format"] == "pdf"
+    structures = "\n".join(by_id["semantic-structures"]["sections"])
+    assert "```python" in structures and "| --- | --- |" in structures and "$$" in structures
+    assert "水印" in by_id["scan-watermark"]["sections"][0]
+
+
 def test_paraphrases_cannot_leak_across_splits(tmp_path):
     source = Path(__file__).resolve().parents[2] / "evaluation/facts.jsonl"
     cases, materials = read_dataset(source)
