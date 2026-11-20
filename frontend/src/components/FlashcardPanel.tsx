@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BrainCircuit, ChevronRight, MessageCircle, RotateCw, Trash2 } from 'lucide-react'
+import { BrainCircuit, ChevronRight, Download, MessageCircle, RotateCw, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import type { DueFlashcard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, KnowledgeBase, Material } from '@/api/types'
@@ -10,8 +10,10 @@ import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { Accordion } from '@/components/arc/accordion/accordion'
 import { Input } from '@/components/arc/input/input'
 import { Select } from '@/components/arc/select/select'
+import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { FlashcardReviewSummary, type FlashcardRating, type FlashcardRatingCounts } from './FlashcardReviewSummary'
 import { MarkdownContent } from './MarkdownContent'
+import { downloadExportResponse } from '@/studyExports'
 
 type ReviewCard = FlashcardItem & Pick<DueFlashcard, 'deck_title' | 'knowledge_base_id' | 'knowledge_base_name'>
 type QueueMode = 'due' | 'deck-due' | 'deck-all' | 'weak' | null
@@ -66,6 +68,7 @@ export function FlashcardPanel({
   const [dueQueueHasMore, setDueQueueHasMore] = useState(false)
   const [dueQueueSeenIds, setDueQueueSeenIds] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
+  const [exportingDeckId, setExportingDeckId] = useState<string | null>(null)
   const [pendingReview, setPendingReview] = useState<{ cardId: string; rating: 0 | 1 | 2 | 3; key: string } | null>(null)
   const ratingInFlight = useRef(false)
 
@@ -339,6 +342,28 @@ export function FlashcardPanel({
     }
   }
 
+  async function exportDeck(deckId: string, title: string, format: 'anki_tsv' | 'markdown') {
+    if (busy || exportingDeckId) return
+    setExportingDeckId(deckId)
+    try {
+      const response = await api.studio.exportFlashcardDeck(deckId, format)
+      const extension = format === 'anki_tsv' ? 'tsv' : 'md'
+      await downloadExportResponse(response, title + '.' + extension)
+      notify(format === 'anki_tsv' ? 'Anki 闪卡已下载。' : '闪卡 Markdown 已下载。')
+    } catch (error) {
+      notify(error instanceof ApiError ? errorMessage(error) : '导出闪卡失败。')
+    } finally {
+      setExportingDeckId(null)
+    }
+  }
+
+  function exportMenuItems(deck: Pick<FlashcardDeckSummary, 'id' | 'title'>) {
+    return [
+      { label: '导出 Anki (.tsv)', onSelect: () => { void exportDeck(deck.id, deck.title, 'anki_tsv') } },
+      { label: '导出 Markdown', onSelect: () => { void exportDeck(deck.id, deck.title, 'markdown') } },
+    ]
+  }
+
   const card = reviewCards[cardIndex]
   const ratingCounts: FlashcardRatingCounts = { 0: 0, 1: 0, 2: 0, 3: 0 }
   Object.values(ratingsByCardId).forEach((rating) => { ratingCounts[rating] += 1 })
@@ -504,6 +529,15 @@ export function FlashcardPanel({
             <Button type="button" size="sm" variant="ghost" disabled={busy || Boolean(pendingReview)} onClick={backToDeckList}>
               返回卡组列表
             </Button>
+            {activeDeck && (
+              <DropdownMenu
+                label={'导出闪卡组 ' + activeDeck.title}
+                icon={<Download size={14} />}
+                iconOnly
+                disabled={busy || Boolean(pendingReview) || Boolean(exportingDeckId)}
+                items={exportMenuItems(activeDeck)}
+              />
+            )}
           </header>
 
           <div
@@ -619,6 +653,13 @@ export function FlashcardPanel({
                 <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void openDeck(deck.id)}>
                   开始翻转复习
                 </Button>
+                <DropdownMenu
+                  label={'导出闪卡组 ' + deck.title}
+                  icon={<Download size={14} />}
+                  iconOnly
+                  disabled={busy || Boolean(exportingDeckId)}
+                  items={exportMenuItems(deck)}
+                />
                 <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => void removeDeck(deck.id)}>
                   <Trash2 size={14} aria-hidden /> 删除
                 </Button>

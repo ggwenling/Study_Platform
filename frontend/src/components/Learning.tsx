@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, BookOpen, Camera, Check, ChevronRight, FileText, History, MessageCircle, RotateCcw, X } from 'lucide-react'
+import { AlertCircle, BookOpen, Camera, Check, ChevronRight, Download, FileText, History, MessageCircle, RotateCcw, X } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { Accordion } from '@/components/arc/accordion/accordion'
 import { Button } from '@/components/arc/button/button'
@@ -19,6 +19,8 @@ import type {
 } from '@/api/types'
 import { ApiError } from '@/api/stream'
 import { allPages, errorMessage } from '@/api/ui'
+import { downloadMarkdownFile } from '@/conversationActions'
+import { formatWrongQuestionExport } from '@/studyExports'
 import {
   buildFollowUpPrompt,
   extractSubmittedAnswerText,
@@ -907,6 +909,17 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
               onClick={() => void startWrongRetry(undefined, wrongKbFilter, wrongDueOnly)}
             >
               <RotateCcw size={16} aria-hidden /> 错题重练（{visibleWrongs.length}）
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={busy || visibleWrongs.length === 0}
+              onClick={() => {
+                downloadMarkdownFile('错题集.md', formatWrongQuestionExport(visibleWrongs))
+                notify('已导出错题集 Markdown。')
+              }}
+            >
+              <Download size={16} aria-hidden /> 导出错题集 (.md)
             </Button>
           </div>
         )}

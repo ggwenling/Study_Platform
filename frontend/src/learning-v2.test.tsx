@@ -6,6 +6,8 @@ import { api } from './api/client'
 import type { Dashboard, LearningAttempt, MaterialReader, WrongQuestionItem } from './api/types'
 import { Learning } from './components/Learning'
 import { ThemeProvider } from './Theme'
+import { downloadMarkdownFile } from './conversationActions'
+import { formatWrongQuestionExport } from './studyExports'
 import { wrongIdsForAttempt } from './learningUi'
 
 const navigateMock = vi.hoisted(() => vi.fn())
@@ -39,6 +41,7 @@ vi.mock('./components/FlashcardPanel', () => ({
   ),
 }))
 vi.mock('./WorkspaceData', () => ({ useWorkspace: () => workspace }))
+vi.mock('@/conversationActions', () => ({ downloadMarkdownFile: vi.fn() }))
 vi.mock('./api/client', () => ({
   api: {
     materials: vi.fn(),
@@ -244,6 +247,28 @@ describe('Learning 2.0 workflow', () => {
     await act(async () => findButtonContaining('错题重练（1）')!.click())
     expect(api.learning.retryWrong).toHaveBeenCalledWith(expect.objectContaining({ due_only: true }))
     expect(vi.mocked(api.learning.retryWrong).mock.calls[0][0]?.wrong_ids).toBeUndefined()
+  })
+
+  it('exports only the wrong questions visible under the current filters', async () => {
+    const notDueWrong = {
+      ...sampleWrong,
+      id: 'wrong-not-due',
+      stem: '还未到期的错题',
+      status: 'reviewing',
+      is_due: false,
+      next_review_at: '2026-11-23T02:00:00Z',
+    }
+    vi.mocked(api.learning.wrongQuestions).mockResolvedValue({ items: [sampleWrong, notDueWrong] })
+    locationMock.value = { key: 'wrong-export', state: { tab: 'wrong', wrongFilter: 'due' } }
+
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(findButtonContaining('错题重练（1）')).toBeTruthy()
+
+    await act(async () => findButtonContaining('导出错题集 (.md)')!.click())
+
+    expect(downloadMarkdownFile).toHaveBeenCalledWith('错题集.md', formatWrongQuestionExport([sampleWrong]))
+    expect(node.textContent).not.toContain('还未到期的错题')
   })
 
   it('labels a reviewing wrong question with its next scheduled review date', async () => {

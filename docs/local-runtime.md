@@ -26,7 +26,43 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File infra/windows/local-runt
 - 页面显示真实阶段，不使用服务端粗略 progress 充当精确百分比。只有已就绪内容参与检索；失败或取消的资料可显式重试。状态请求失败时保留上次结果、标记尚未确认，点击“重新读取状态”恢复。
 - 聊天已保存的部分输出在重启后保留。重访会话时查询轮次，超过默认 90 秒租约的运行收敛为失败；恢复查询不会重新付费生成。用户显式重试复用原轮次与消息。强制退出可能丢失最后一次保存后的少量输出，不承诺逐 token 续传。
 
-本轮不安装 Windows 常驻服务、不做开机自启或进程自动监护。worker 退出后用状态入口识别，再运行启动入口恢复。手动离线备份与恢复列为独立后续任务；现有数据库和 `.local/storage` 持久化不等于已经具备备份。
+本轮不安装 Windows 常驻服务、不做开机自启或进程自动监护。worker 退出后用状态入口识别，再运行启动入口恢复。
+
+## 离线备份与恢复
+
+根目录的 `Backup-Synapse.cmd` 将 `DATABASE_URL` 指向的 PostgreSQL 数据库中 `study` schema 与 `STORAGE_DIR`（未配置时为 `.local/storage`）打包到 `.local/backups/`。`STORAGE_DIR` 必须是项目 `.local` 下独立目录，不能指向仓库其他位置、运行时目录或备份目录。备份 ZIP 含 `study.dump`、存储文件和 `manifest.json` 校验清单，不含 `.env`；清单只记录 `MODEL_CONNECTIONS_KEY` 的 SHA-256 前 12 位指纹。需要本机 PostgreSQL 命令行工具 `pg_dump`、`pg_restore` 和 `psql` 在 `PATH` 中。
+
+只恢复你自己创建或明确可信来源的备份；SHA-256 校验可发现损坏，但不能证明 PostgreSQL dump 的来源可信或内容真实。
+
+备份和恢复会与启动器共用 `.local/runtime/control.lock`，整个操作期间持有独占锁；恢复会在锁内确认 API 与 worker 已停止，避免启动器在校验后并发启动服务。
+
+若设置了 `MIGRATION_DATABASE_URL`，备份和恢复会用它连接，但要求其主机、端口和数据库与 `DATABASE_URL` 一致。恢复使用该连接执行 `pg_restore --clean`，因此它必须拥有 `study` schema 的删除与创建权限。由于恢复不导入归档中的权限，完成后会只在 `study` schema 内为 `DATABASE_URL` 用户重新授予表与序列访问权限及后续对象默认权限。
+
+建议先运行 `Stop-Synapse.cmd`，再双击备份入口。若 API 或 worker 仍在运行，脚本会提示热备可能造成数据库与文件快照不一致；输入 Y 继续，或取消后停止服务再备份。也可显式运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File infra/windows/backup-restore.ps1 Backup -Online
+```
+
+恢复前先运行 `Restore-Synapse.cmd -BackupPath <备份 ZIP> -DryRun` 检查清单和所有 SHA-256。正式恢复会先创建当前状态的 pre-restore 备份，然后在单事务中恢复 `study` schema，并原子替换存储目录；若数据库恢复失败，会回滚存储目录。恢复前必须停止 API 和 worker。数据库名或密钥指纹不一致时，脚本会说明影响并要求确认；`-Force` 可跳过这项确认。只有在已保存其他恢复点时才使用 `-SkipPreBackup`。
+
+```powershell
+Restore-Synapse.cmd -BackupPath .local/backups/synapse-backup-20261120-120000-000.zip -DryRun
+Restore-Synapse.cmd -BackupPath .local/backups/synapse-backup-20261120-120000-000.zip
+```
+
+恢复完成后运行 `Start-Synapse.cmd` 并核查资料、笔记和学习数据。自动化脚本测试在隔离文件和数据库桩中运行，不连接配置的 PostgreSQL。需要执行真实 PostgreSQL 往返时，可用 `-ProjectRoot` 指向临时项目目录；该目录应有独立 `.env`，仅指向专用 `*_test` 数据库，并将 `STORAGE_DIR` 设为该目录 `.local` 下的临时路径：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:/Synapse/infra/windows/backup-restore.ps1 -ProjectRoot $sandbox -Action Backup
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:/Synapse/infra/windows/backup-restore.ps1 -ProjectRoot $sandbox -Action Restore -BackupPath $backup -Force
+```
+
+`-ProjectRoot` 仅改变脚本读取 `.env`、状态文件和备份文件的位置，不会将数据库限制为测试库；调用者必须先确认该 URI 指向隔离数据库。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File infra/windows/tests/backup-restore.tests.ps1
+```
 
 ## 校正已存储的 DOCX 表格列号
 

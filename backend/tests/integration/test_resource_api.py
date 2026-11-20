@@ -3,7 +3,9 @@
 import os
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from uuid import UUID, uuid4
+from zipfile import ZipFile
 
 import pytest
 import sqlalchemy as sa
@@ -153,6 +155,36 @@ def test_reader_keeps_historical_index_context_and_caches_pdf_pages(resource_cli
         assert http.get(f"{base}/pages/2").status_code == 404
     finally:
         get_settings.cache_clear()
+
+
+def test_study_exports_respect_library_and_deck_ownership(resource_client):
+    http, db = resource_client
+    owner = signup(http)
+    kb = UUID(http.post("/knowledge-bases", json={"name": "科学 / 资料"}).json()["id"])
+    notes = f"/knowledge-bases/{kb}/notes"
+    assert http.get(f"{notes}/export").json()["code"] == "no_notes"
+    assert http.post(notes, json={"title": "试验笔记", "content_md": "保留内容"}).status_code == 201
+    response = http.get(f"{notes}/export")
+    assert response.status_code == 200 and response.headers["content-type"] == "application/zip"
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert "保留内容" in archive.read("001-试验笔记.md").decode()
+        assert "科学 / 资料" in archive.read("INDEX.md").decode()
+
+    deck = FlashcardDeck(owner_user_id=owner, course_id=kb, title="期末", source_scope={})
+    db.add(deck)
+    db.flush()
+    db.add(Flashcard(deck_id=deck.id, front="题\t目", back="答\n案", due_at=datetime.now(UTC)))
+    db.add(Flashcard(deck_id=deck.id, front="暂停的卡", back="保留备份", due_at=datetime.now(UTC), status="suspended"))
+    db.commit()
+    export = f"/flashcard-decks/{deck.id}/export"
+    tsv = http.get(export, params={"format": "anki_tsv"})
+    assert tsv.status_code == 200 and "attachment;" in tsv.headers["content-disposition"]
+    assert "题&#9;目\t答<br>案\t科学_资料 期末" in tsv.text
+    assert "暂停的卡" in tsv.text
+    assert "## Q1" in http.get(export, params={"format": "markdown"}).text
+    signup(http)
+    assert http.get(f"{notes}/export").status_code == 404
+    assert http.get(export, params={"format": "markdown"}).status_code == 404
 
 
 def test_due_flashcards_across_decks_and_dashboard(resource_client):

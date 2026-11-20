@@ -11,6 +11,7 @@ from study_platform.api.v1.auth import get_current_user
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import User
 from study_platform.services import studio
+from study_platform.services.study_exports import attachment, export_filename, format_flashcard_deck
 
 router = APIRouter(tags=["studio"])
 
@@ -105,6 +106,18 @@ def create_kb_note(
     )
     db.commit()
     return dto
+
+
+@router.get("/knowledge-bases/{kb_id}/notes/export", response_class=Response)
+def export_kb_notes(
+    kb_id: UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    name, archive = studio.export_notes(db, user.id, kb_id)
+    return Response(
+        archive, media_type="application/zip", headers=attachment(f"{export_filename(name)}-notes.zip")
+    )
 
 
 @router.post("/knowledge-bases/{kb_id}/notes/generate", status_code=201)
@@ -231,6 +244,21 @@ def get_deck(
     db: Session = Depends(get_db),
 ):
     return studio.get_flashcard_deck(db, user.id, deck_id)
+
+
+@router.get("/flashcard-decks/{deck_id}/export", response_class=Response)
+def export_flashcard_deck(
+    deck_id: UUID,
+    format: Literal["anki_tsv", "markdown"],
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    deck = studio.get_flashcard_deck(db, user.id, deck_id, include_suspended=True)
+    filename = f"{export_filename(deck['title'])}-flashcards"
+    extension, mime = ("tsv", "text/tab-separated-values") if format == "anki_tsv" else ("md", "text/markdown")
+    return Response(
+        format_flashcard_deck(deck, format), media_type=mime, headers=attachment(f"{filename}.{extension}")
+    )
 
 
 @router.delete("/flashcard-decks/{deck_id}", status_code=204)

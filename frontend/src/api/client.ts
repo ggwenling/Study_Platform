@@ -286,10 +286,14 @@ export const api = {
       request<StudyNote>(`/notes/${pathId(noteId)}/append`, json('POST', body)),
     deleteNote: (noteId: string) => request<void>(`/notes/${pathId(noteId)}`, json('DELETE')),
     ingestNote: (noteId: string) => request<UploadResult>(`/notes/${pathId(noteId)}/ingest`, json('POST')),
+    exportNotes: (knowledgeBaseId: string) =>
+      checkedFetch('/knowledge-bases/' + pathId(knowledgeBaseId) + '/notes/export'),
     flashcardDecks: (knowledgeBaseId?: string) =>
       request<{ items: FlashcardDeckSummary[] }>(
         '/flashcard-decks' + query({ knowledge_base_id: knowledgeBaseId }),
       ),
+    exportFlashcardDeck: (deckId: string, format: 'anki_tsv' | 'markdown') =>
+      checkedFetch('/flashcard-decks/' + pathId(deckId) + '/export' + query({ format })),
     generateFlashcards: (
       knowledgeBaseId: string,
       body: { count?: number; material_ids?: string[] | null; title?: string | null } = {},

@@ -3982,6 +3982,47 @@
         }
       }
     },
+    "/api/v1/knowledge-bases/{kb_id}/notes/export": {
+      "get": {
+        "tags": [
+          "studio"
+        ],
+        "summary": "Export Kb Notes",
+        "operationId": "export_kb_notes_api_v1_knowledge_bases__kb_id__notes_export_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/knowledge-bases/{kb_id}/notes/generate": {
       "post": {
         "tags": [
@@ -4458,6 +4499,60 @@
         ],
         "responses": {
           "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/flashcard-decks/{deck_id}/export": {
+      "get": {
+        "tags": [
+          "studio"
+        ],
+        "summary": "Export Flashcard Deck",
+        "operationId": "export_flashcard_deck_api_v1_flashcard_decks__deck_id__export_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deck_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deck Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "anki_tsv",
+                "markdown"
+              ],
+              "type": "string",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
             "description": "Successful Response"
           },
           "422": {
