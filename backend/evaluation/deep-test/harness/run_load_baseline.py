@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import statistics
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path

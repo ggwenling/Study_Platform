@@ -89,7 +89,9 @@ flowchart TD
 | 索引后跨用户 search（归属校验） | pass | `validate_deep_sec01` 2× 清库；非 item_count |
 | 跨用户 notes GET | pass 404 | API |
 | `/health/live` 负载 1/5/10 × 15s | pass，有 p50/p95 | TestClient 基线 |
-| 备份快照（storage tar + 表计数） | pass | 未做全量 restore |
+| 备份→独立库/存储恢复 | pass | `study_platform_restore_test` |
+| HTTP 负载 smoke | pass | uvicorn + urllib |
+| Worker 子进程 SIGTERM | pass | 与 unit 区分 |
 | SSRF（`test_web_clip` 单测集） | pass | 本地 mock |
 | Worker 取消/失败样例 pytest | pass | 集成子集 |
 | 浏览器 E2E | BLOCKED | — |

@@ -49,7 +49,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | MIG-01 | 空 `_test` 库 | `alembic upgrade head` | schema 完整 | P0 | pytest bootstrap | AUTO |
 | MIG-02 | 有数据 | `test_migration_roundtrip` | 降级保护/往返 | P0 | pytest | AUTO |
-| BAK-01 | storage 有原件 | tar+pg_dump 快照 | SHA256+表计数；**restore NOT_RUN** | P0 | run_backup_snapshot | **PARTIAL** Phase2 VM |
+| BAK-01 | storage 有原件 | dump→`study_platform_restore_test` | 指纹+所有者 API smoke | P0 | run_backup_restore_cycle | **PASS** Phase3 VM |
 | BAK-02 | 索引 building | 中断恢复 | 无 twin active index | P0 | DB 行 | DIAG |
 
 ## P1 — 业务功能
@@ -81,7 +81,7 @@
 
 | ID | 前置 | 操作 | 期望 | 严重度 | 证据 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PERF-01 | 本地 API | 1/5/10 客户端 15s `/health/live` | 记录样本数/P50/P95 | P1 | phase2 load step | **PASS** VM baseline |
+| PERF-01 | 本地 API | 1/5/10 × 12s HTTP localhost | 样本/错误/p50/p95 | P1 | run_http_load_smoke | **PASS** smoke（非 SLO） |
 | PERF-02 | 用量 API | 登录后 summary | 仅本用户 | P1 | pytest | AUTO |
 
 ## P2 — 安装 / 契约

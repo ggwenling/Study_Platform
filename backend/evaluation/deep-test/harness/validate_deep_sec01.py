@@ -92,7 +92,9 @@ def _mock_ingest_pair(
 
     canary_u1 = f"HYPERION-RED-4411-{run_tag}"
     canary_u2 = f"NYX-VIOLET-9920-{run_tag}"
-    fake_embed = lambda texts, **_: [[0.1] * 1024 for _ in texts]
+    def fake_embed(texts, **_):
+        return [[0.1] * 1024 for _ in texts]
+
     users: dict = {}
 
     with patch.object(ingestion, "embed_texts", fake_embed), patch(

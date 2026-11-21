@@ -68,7 +68,8 @@ def main() -> int:
         "review_status": "synthetic_not_human_curated",
     }
 
-    fake_embed = lambda texts, **_: [[0.1] * 1024 for _ in texts]
+    def fake_embed(texts, **_):
+        return [[0.1] * 1024 for _ in texts]
 
     with patch.object(ingestion, "embed_texts", fake_embed), patch(
         "study_platform.services.models.embed_texts", fake_embed
@@ -78,10 +79,12 @@ def main() -> int:
                 ("u1", "deep-mock-u1@example.test", "MOCK-INDEX-CANARY-U1-ALPHA"),
                 ("u2", "deep-mock-u2@example.test", "MOCK-INDEX-CANARY-U2-BRAVO"),
             ):
-                client.post(
+                reg = client.post(
                     f"{API}/auth/register",
                     json={"email": email, "password": PASSWORD, "display_name": label},
                 )
+                if reg.status_code not in (201, 409):
+                    raise RuntimeError(f"register {label}: {reg.status_code} {reg.text}")
                 login = client.post(f"{API}/auth/login", json={"email": email, "password": PASSWORD})
                 token = login.json()["access_token"]
                 client.headers["Authorization"] = f"Bearer {token}"
