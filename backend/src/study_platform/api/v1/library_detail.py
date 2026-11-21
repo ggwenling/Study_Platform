@@ -105,9 +105,19 @@ def active_chunks(query):
 
 
 def overview(db, kb):
+    material_versions = (
+        sa.select(MaterialVersion.id)
+        .where(MaterialVersion.material_id == Material.id)
+        .correlate(Material)
+    )
+    in_progress = AiJob.status.in_(("queued", "running"))
     job = (sa.select(AiJob.status, AiJob.result).where(
-        AiJob.job_type == "ingest", AiJob.resource_id == MaterialVersion.id,
-    ).order_by(AiJob.created_at.desc(), AiJob.id.desc()).limit(1).lateral())
+        AiJob.job_type == "ingest",
+        sa.or_(
+            AiJob.resource_id == MaterialVersion.id,
+            sa.and_(in_progress, AiJob.resource_id.in_(material_versions)),
+        ),
+    ).order_by(in_progress.desc(), AiJob.created_at.desc(), AiJob.id.desc()).limit(1).lateral())
     files = db.execute(
         sa.select(Material.id, Material.topic, Material.tags, job.c.status, job.c.result,
                   MaterialVersion.parse_status, IndexVersion.chunk_count)

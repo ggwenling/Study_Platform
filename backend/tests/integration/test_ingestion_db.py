@@ -2,16 +2,24 @@
 
 import hashlib
 import os
+from contextlib import nullcontext
 from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
+from study_platform.api.v1 import library_detail, materials
+from study_platform.api.v1.auth import get_current_user
+from study_platform.core.errors import ApiError, api_error_handler
+from study_platform.persistence.database import get_db
 from study_platform.persistence.models.identity import Material, User
 from study_platform.persistence.models.knowledge import KnowledgeBase
 from study_platform.persistence.models.materials import (
@@ -20,8 +28,9 @@ from study_platform.persistence.models.materials import (
     MaterialVersion,
 )
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
-from study_platform.services import ingestion
+from study_platform.services import ingestion, model_calls, model_connections
 from study_platform.services.storage import source_path
+from study_platform.services.web_clip import WebClip
 
 pytestmark = pytest.mark.integration
 
@@ -121,6 +130,100 @@ def test_worker_publishes_text_and_vector(state):
             )
             == "hello"
         )
+
+
+def test_web_clip_persists_source_and_publishes_markdown(state, monkeypatch):
+    factory, job_id, _, material_id, kb_id = state
+    with factory() as db:
+        owner = db.get(Material, material_id).owner_user_id
+        db.get(AiJob, job_id).status = "cancelled"
+        db.commit()
+        url = "https://example.com/article"
+        markdown = "## A heading\n\nA public page imported for research."
+        monkeypatch.setattr(materials, "fetch_public_webpage", lambda _: WebClip("Article", markdown, url))
+        app = FastAPI()
+        app.include_router(materials.router)
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=owner)
+        app.dependency_overrides[get_db] = lambda: db
+        with TestClient(app) as http:
+            accepted = http.post(f"/knowledge-bases/{kb_id}/materials/web-clip", json={"url": url})
+            assert accepted.status_code == 202, accepted.text
+            result = accepted.json()
+            db.expire_all()
+            assert source_path(result["version_id"]).read_text(encoding="utf-8") == markdown
+            assert ingestion.run_once()
+            db.expire_all()
+            assert http.get(f"/jobs/{result['job_id']}").json()["status"] == "succeeded"
+            item = http.get(f"/materials/{result['material_id']}").json()
+            assert item["source_url"] == url and item["title"] == "Article"
+            assert item["mime_type"] == "text/markdown" and item["status"] == "ready"
+
+
+def test_vision_reparse_switches_version_only_after_publication(state, monkeypatch):
+    factory, _, version_id, material_id, kb_id = state
+    monkeypatch.setattr(ingestion.classification, "enqueue", lambda *_: None)
+    monkeypatch.setattr(ingestion, "ocr_image", lambda _: [{"text": "local OCR"}])
+    vision = {"id": str(uuid4()), "kind": "vision", "revision": 3}
+    monkeypatch.setattr(model_connections, "vision_snapshot", lambda *_: vision)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **_kwargs: nullcontext())
+    seen = []
+
+    def invoke(_prompt, _image, _mime, *, context, saved):
+        assert context.purpose == "vision_ingest" and saved == vision
+        seen.append(saved)
+        if len(seen) == 1:
+            raise ApiError(504, "model_timeout", "fake timeout")
+        return "视觉结果"
+
+    monkeypatch.setattr(model_calls, "invoke_vision", invoke)
+    path = source_path(version_id)
+    with Image.new("RGB", (16, 16), "white") as image:
+        image.save(path, format="PNG")
+    expected = path.read_bytes()
+    with factory() as db:
+        old = db.get(MaterialVersion, version_id)
+        old.source_mime, old.byte_size, old.source_sha256 = "image/png", len(expected), hashlib.sha256(expected).hexdigest()
+        owner = db.get(Material, material_id).owner_user_id
+        db.commit()
+    assert ingestion.run_once() and not seen
+    with factory() as db:
+        app = FastAPI()
+        app.include_router(materials.router)
+        app.include_router(library_detail.router)
+        app.add_exception_handler(ApiError, api_error_handler)
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=owner)
+        app.dependency_overrides[get_db] = lambda: db
+        with TestClient(app) as http:
+            route = f"/materials/{material_id}/reparse"
+            body = {"extraction_mode": "vlm"}
+            response = http.post(route, json=body)
+            assert response.status_code == 202, response.text
+            assert http.post(route, json=body).status_code == 409
+            overview = f"/knowledge-bases/{kb_id}/overview"
+            assert http.get(overview).json()["processing_count"] == 1
+            db.commit()
+            assert ingestion.run_once()
+            db.expire_all()
+            assert db.get(MaterialVersion, version_id).is_current
+            assert http.get(f"/jobs/{response.json()['job_id']}").json()["status"] == "failed"
+            assert http.get(overview).json()["processing_count"] == 0
+            db.commit()
+            response = http.post(route, json=body)
+            assert response.status_code == 202, response.text
+            assert ingestion.run_once()
+            db.expire_all()
+            new_id = response.json()["version_id"]
+            assert not db.get(MaterialVersion, version_id).is_current
+            assert db.get(MaterialVersion, new_id).is_current
+            assert path.read_bytes() == source_path(new_id).read_bytes() == expected
+            assert db.scalar(sa.select(IndexVersion.status).where(
+                IndexVersion.material_version_id == version_id,
+            )) == "retired"
+            sections = db.execute(
+                sa.select(MaterialSection.text, MaterialSection.locator)
+                .where(MaterialSection.material_version_id == new_id)
+            ).all()
+            assert sections == [("视觉结果", {"image": 1, "extraction": "vlm"})]
 
 
 def test_staging_permission_failure_marks_job_failed_without_killing_worker(state, monkeypatch):

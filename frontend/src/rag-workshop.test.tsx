@@ -217,6 +217,7 @@ describe('RAG Workshop: Hybrid Hit-Testing & Fragment Editor', () => {
       estimated_tokens: 18,
     })
 
+    const onOpenSource = vi.fn()
     await render(
       <LibraryFragments
         id="kb-1"
@@ -226,12 +227,13 @@ describe('RAG Workshop: Hybrid Hit-Testing & Fragment Editor', () => {
         scope={{}}
         clearScope={vi.fn()}
         revision={0}
-        onPreview={vi.fn()}
-        onOpenSource={vi.fn()}
+        onOpenSource={onOpenSource}
       />,
     )
 
     expect(node.textContent).toContain('OCR误识别旧文本待修正')
+    await act(async () => node.querySelector<HTMLButtonElement>('.fragment-text')!.click())
+    expect(onOpenSource).toHaveBeenCalledWith(sampleFragment)
 
     const menuTrigger = document.querySelector<HTMLButtonElement>('button[aria-label="片段操作"]')!
     await act(async () => {

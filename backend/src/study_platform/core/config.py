@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     auth_rate_limit_per_minute: int = 30
     max_docx_uncompressed_bytes: int = 80 * 1024 * 1024
+    max_pptx_ocr_images: int = 10
+    max_web_clip_bytes: int = 5 * 1024 * 1024
+    web_clip_timeout_seconds: float = 15
     max_pdf_page_preview: int = 50
     login_detailed_errors: bool = False
     auth_jwt_secret: SecretStr = SecretStr("")
@@ -56,6 +59,7 @@ class Settings(BaseSettings):
     embedding_dimensions: Literal[1024] = 1024
     max_upload_bytes: int = 20 * 1024 * 1024
     max_pdf_pages: int = 50
+    max_vlm_pages_per_material: int = Field(default=20, ge=1)
     max_image_pixels: int = 20_000_000
     worker_poll_seconds: float = 1
     job_lease_seconds: int = 300

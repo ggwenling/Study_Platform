@@ -27,6 +27,8 @@ PURPOSES = frozenset(
         "embedding",
         "classification",
         "connection_test",
+        "vision_ingest",
+        "vision_grade",
     }
 )
 
@@ -50,6 +52,9 @@ def _normalize_usage(usage: dict[str, Any] | None) -> dict[str, Any] | None:
         value = usage.get(key)
         if isinstance(value, (int, float)) and value >= 0:
             out[key] = int(value)
+    error_code = usage.get("error_code")
+    if isinstance(error_code, str):
+        out["error_code"] = error_code[:80]
     return out or None
 
 

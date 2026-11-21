@@ -9,13 +9,15 @@ import { Select } from '@/components/arc/select/select'
 
 export type SaveChatNoteRequest = { title: string } | { noteId: string; sectionHeading: string }
 
-export function SaveChatNoteDialog({ libraryId, libraryName, titleSuggestion, content, onSave, onClose }: {
+export function SaveChatNoteDialog({ libraryId, libraryName, titleSuggestion, content, onSave, onClose, description, contentLabel }: {
   libraryId: string
   libraryName: string
   titleSuggestion: string
   content: string
   onSave: (request: SaveChatNoteRequest) => Promise<void>
   onClose: () => void
+  description?: string
+  contentLabel?: string
 }) {
   const [append, setAppend] = useState(false)
   const [title, setTitle] = useState(titleSuggestion)
@@ -61,7 +63,7 @@ export function SaveChatNoteDialog({ libraryId, libraryName, titleSuggestion, co
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open && !saving) onClose() }}>
-      <DialogContent title="存为笔记" description={`将本轮回答保存到「${libraryName}」。`} closeLabel="关闭存为笔记">
+      <DialogContent title="存为笔记" description={description ?? `将本轮回答保存到「${libraryName}」。`} closeLabel="关闭存为笔记">
         <form className="stack-form" onSubmit={submit}>
           <div className="form-actions" role="group" aria-label="保存方式">
             <Button type="button" variant={append ? 'secondary' : 'primary'} aria-pressed={!append} disabled={saving} onClick={() => chooseMode(false)}>新建研究笔记</Button>
@@ -80,7 +82,7 @@ export function SaveChatNoteDialog({ libraryId, libraryName, titleSuggestion, co
           </> : <>
             <Input label="笔记标题" value={title} onChange={(event) => setTitle(event.target.value)} maxLength={255} required disabled={saving} />
             <div className="save-note-preview">
-              <strong>回答摘要</strong>
+              <strong>{contentLabel ?? '回答摘要'}</strong>
               <p>{content.length > 320 ? `${content.slice(0, 320)}…` : content}</p>
             </div>
           </>}

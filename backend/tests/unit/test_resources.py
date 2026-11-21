@@ -37,7 +37,12 @@ def test_citation_snapshot_and_unavailable_sources(monkeypatch, tmp_path):
     monkeypatch.setattr(citations, "page_path", lambda *_: page)
     chunk_id, version_id, material_id, kb_id, index_id = [uuid4() for _ in range(5)]
     material = SimpleNamespace(
-        id=material_id, knowledge_base_id=kb_id, title="Book", deleted_at=None, status="active"
+        id=material_id,
+        knowledge_base_id=kb_id,
+        title="Book",
+        source_url="https://public.example/book",
+        deleted_at=None,
+        status="active",
     )
     kb = SimpleNamespace(id=kb_id, deleted_at=None)
     db = FakeDB(
@@ -66,6 +71,7 @@ def test_citation_snapshot_and_unavailable_sources(monkeypatch, tmp_path):
     assert dto["locator"] == {"page": 3}
     assert dto["preview_url"].endswith("/preview")
     assert dto["availability"] == "available"
+    assert dto["source_url"] == "https://public.example/book"
     assert dto["quote_status"] == "unverified"
     citation.quote_sha256 = sha256(b"Original quote").hexdigest()
     assert citation_dto(db, citation)["quote_status"] == "verified"
@@ -93,6 +99,10 @@ def test_citation_snapshot_and_unavailable_sources(monkeypatch, tmp_path):
     assert citation_dto(db, citation)["location_label"] == "1.1 子节 · 第 10 行"
     citation.locator = {"start_line": 1, "end_line": 3}
     assert citation_dto(db, citation)["location_label"] == "第 1 行"
+    citation.locator = {"slide": 4, "heading": "Slide heading"}
+    assert citation_dto(db, citation)["location_label"] == "第 4 页幻灯片"
+    citation.locator = {"slide": 4, "notes": True}
+    assert citation_dto(db, citation)["location_label"] == "第 4 页幻灯片 · 备注"
     material.deleted_at = datetime.now(UTC)
     dto = citation_dto(db, citation)
     assert dto["availability"] == "unavailable"

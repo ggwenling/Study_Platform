@@ -223,6 +223,7 @@ class Material(Base):
     knowledge_base_id = sa.Column("knowledge_base_id", postgresql.UUID(as_uuid=True), nullable=False)
     course_id = sa.Column("course_id", postgresql.UUID(as_uuid=True), nullable=True)
     title = sa.Column("title", sa.String(512), nullable=False)
+    source_url = sa.Column("source_url", sa.Text(), nullable=True)
     kind = sa.Column("kind", sa.String(24), nullable=False)
     status = sa.Column("status", sa.String(20), nullable=False, server_default=sa.text("'active'"))
     created_at = sa.Column(

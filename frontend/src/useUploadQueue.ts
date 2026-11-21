@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { uploadMaterial } from '@/api/client'
+import type { ExtractionMode } from '@/api/types'
+import { canUseVisionForFile } from '@/visionUi'
 
 export type UploadQueueItem = {
   id: string
@@ -7,12 +9,13 @@ export type UploadQueueItem = {
   name: string
   libraryId: string
   libraryName: string
+  extractionMode?: ExtractionMode
   status: 'queued' | 'uploading' | 'done' | 'failed' | 'cancelled'
 }
 
 export type UploadTarget = { libraryId: string; at: number }
 
-const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.txt', '.md', '.markdown', '.png', '.jpg', '.jpeg'])
+const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.pptx', '.txt', '.md', '.markdown', '.png', '.jpg', '.jpeg'])
 
 export function isSupportedUploadFile(filename: string): boolean {
   const dot = filename.lastIndexOf('.')
@@ -88,7 +91,10 @@ export function useUploadQueue({
     activeController.current = { id: next.id, controller }
     setItems((current) => current.map((row) => row.id === next.id ? { ...row, status: 'uploading' } : row))
 
-    void uploadMaterial(next.libraryId, next.file, undefined, controller.signal).then(
+    const sent = next.extractionMode === 'vlm'
+      ? uploadMaterial(next.libraryId, next.file, undefined, controller.signal, 'vlm')
+      : uploadMaterial(next.libraryId, next.file, undefined, controller.signal)
+    void sent.then(
       () => {
         if (controller.signal.aborted) return
         activeController.current = null
@@ -105,13 +111,13 @@ export function useUploadQueue({
     )
   }, [items])
 
-  const enqueue = useCallback((files: FileList | File[], target: { id: string; name: string }) => {
+  const enqueue = useCallback((files: FileList | File[], target: { id: string; name: string }, extractionMode: ExtractionMode = 'ocr') => {
     const incoming = Array.from(files)
     if (!incoming.length) return 0
     const accepted: UploadQueueItem[] = []
     for (const file of incoming) {
       if (!isSupportedUploadFile(file.name)) {
-        callbacks.current.notify(`不支持的文件类型：「${file.name}」（支持 PDF、DOCX、TXT、MD、PNG、JPG）。`)
+        callbacks.current.notify(`不支持的文件类型：「${file.name}」（支持 PDF、DOCX、PPTX、TXT、MD、PNG、JPG）。`)
         continue
       }
       if (maxUploadBytes && file.size > maxUploadBytes) {
@@ -128,6 +134,7 @@ export function useUploadQueue({
         name: file.name,
         libraryId: target.id,
         libraryName: target.name,
+        ...(extractionMode === 'vlm' && canUseVisionForFile(file.name) ? { extractionMode } : {}),
         status: 'queued',
       })
     }
@@ -144,6 +151,10 @@ export function useUploadQueue({
         ? { ...row, status: 'queued' }
         : row,
     ))
+  }, [])
+
+  const markSubmitted = useCallback((target: { id: string; name: string }) => {
+    setLastUploaded({ libraryId: target.id, at: Date.now() })
   }, [])
 
   const cancelItem = useCallback((id: string) => {
@@ -178,5 +189,5 @@ export function useUploadQueue({
     return ''
   })()
 
-  return { items, uploading, latestNote, lastUploaded, enqueue, retryItem, cancelItem, dismissFinished }
+  return { items, uploading, latestNote, lastUploaded, enqueue, markSubmitted, retryItem, cancelItem, dismissFinished }
 }

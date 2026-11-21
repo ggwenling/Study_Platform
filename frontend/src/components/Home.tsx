@@ -58,7 +58,7 @@ export function Home() {
   const reduced = useReducedMotion()
   const location = useLocation()
   const navigate = useNavigate()
-  const navState = (location.state ?? null) as { preferredLibrary?: string; initialDraft?: string } | null
+  const navState = (location.state ?? null) as { preferredLibrary?: string; initialDraft?: string; initialMaterialIds?: string[] } | null
   const consumeInitialDraft = useCallback(() => {
     void navigate(location.pathname + location.search + location.hash, { replace: true, state: null })
   }, [location.pathname, location.search, location.hash, navigate])
@@ -89,6 +89,7 @@ export function Home() {
             ref={composer}
             preferredLibrary={navState?.preferredLibrary}
             initialDraft={navState?.initialDraft}
+            initialMaterialIds={navState?.initialMaterialIds}
             onInitialDraftApplied={consumeInitialDraft}
           />
           <div className="shortcuts">

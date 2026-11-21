@@ -1459,6 +1459,64 @@
         }
       }
     },
+    "/api/v1/knowledge-bases/{kb_id}/materials/web-clip": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Web Clip",
+        "operationId": "web_clip_api_v1_knowledge_bases__kb_id__materials_web_clip_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebClipRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/materials/{material_id}": {
       "get": {
         "tags": [
@@ -1570,6 +1628,64 @@
             }
           }
         ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/materials/{material_id}/reparse": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Reparse",
+        "operationId": "reparse_api_v1_materials__material_id__reparse_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReparseRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "description": "Successful Response",
@@ -1768,6 +1884,83 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/material-versions/{version_id}/reader": {
+      "get": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Reader",
+        "operationId": "reader_api_v1_material_versions__version_id__reader_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Version Id"
+            }
+          },
+          {
+            "name": "chunk_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Chunk Id"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10,
+              "minimum": 0,
+              "default": 3,
+              "title": "Window"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialReaderResponse"
+                }
               }
             }
           },
@@ -3653,7 +3846,8 @@
             "schema": {
               "enum": [
                 "llm",
-                "embedding"
+                "embedding",
+                "vision"
               ],
               "type": "string",
               "title": "Kind"
@@ -3833,6 +4027,47 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/knowledge-bases/{kb_id}/notes/export": {
+      "get": {
+        "tags": [
+          "studio"
+        ],
+        "summary": "Export Kb Notes",
+        "operationId": "export_kb_notes_api_v1_knowledge_bases__kb_id__notes_export_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kb_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kb Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -4338,6 +4573,60 @@
         }
       }
     },
+    "/api/v1/flashcard-decks/{deck_id}/export": {
+      "get": {
+        "tags": [
+          "studio"
+        ],
+        "summary": "Export Flashcard Deck",
+        "operationId": "export_flashcard_deck_api_v1_flashcard_decks__deck_id__export_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deck_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Deck Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "anki_tsv",
+                "markdown"
+              ],
+              "type": "string",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/flashcards/{card_id}/review": {
       "post": {
         "tags": [
@@ -4616,6 +4905,11 @@
             "type": "string",
             "contentMediaType": "application/octet-stream",
             "title": "File"
+          },
+          "use_vision": {
+            "type": "boolean",
+            "title": "Use Vision",
+            "default": false
           }
         },
         "type": "object",
@@ -4630,6 +4924,15 @@
             "type": "string",
             "contentMediaType": "application/octet-stream",
             "title": "File"
+          },
+          "extraction_mode": {
+            "type": "string",
+            "enum": [
+              "ocr",
+              "vlm"
+            ],
+            "title": "Extraction Mode",
+            "default": "ocr"
           }
         },
         "type": "object",
@@ -4655,6 +4958,10 @@
             "type": "boolean",
             "title": "Ocr"
           },
+          "vision": {
+            "type": "boolean",
+            "title": "Vision"
+          },
           "answer_modes": {
             "items": {
               "type": "string"
@@ -4678,6 +4985,7 @@
         "required": [
           "rag",
           "ocr",
+          "vision",
           "answer_modes",
           "upload_mime_types",
           "max_upload_bytes"
@@ -4762,6 +5070,11 @@
             "format": "uuid",
             "title": "Id"
           },
+          "chunk_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Chunk Id"
+          },
           "material_id": {
             "type": "string",
             "format": "uuid",
@@ -4780,6 +5093,17 @@
           "title": {
             "type": "string",
             "title": "Title"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
           },
           "quote": {
             "type": "string",
@@ -4860,6 +5184,7 @@
         "required": [
           "source_label",
           "id",
+          "chunk_id",
           "material_id",
           "material_version_id",
           "knowledge_base_id",
@@ -5014,7 +5339,8 @@
             "type": "string",
             "enum": [
               "llm",
-              "embedding"
+              "embedding",
+              "vision"
             ],
             "title": "Kind"
           },
@@ -5120,7 +5446,8 @@
             "type": "string",
             "enum": [
               "llm",
-              "embedding"
+              "embedding",
+              "vision"
             ],
             "title": "Kind"
           },
@@ -6482,6 +6809,148 @@
         ],
         "title": "MaterialPreviewResponse"
       },
+      "MaterialReaderResponse": {
+        "properties": {
+          "material_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Material Id"
+          },
+          "version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Version Id"
+          },
+          "knowledge_base_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Knowledge Base Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Count"
+          },
+          "preview_page_count": {
+            "type": "integer",
+            "title": "Preview Page Count"
+          },
+          "can_render_pages": {
+            "type": "boolean",
+            "title": "Can Render Pages"
+          },
+          "content_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Url"
+          },
+          "target_chunk_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Chunk Id"
+          },
+          "target_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Page"
+          },
+          "target_quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Quote"
+          },
+          "chunks": {
+            "items": {
+              "$ref": "#/components/schemas/ReaderChunk"
+            },
+            "type": "array",
+            "title": "Chunks"
+          },
+          "total_chunks": {
+            "type": "integer",
+            "title": "Total Chunks"
+          },
+          "has_prev": {
+            "type": "boolean",
+            "title": "Has Prev"
+          },
+          "has_next": {
+            "type": "boolean",
+            "title": "Has Next"
+          }
+        },
+        "type": "object",
+        "required": [
+          "material_id",
+          "version_id",
+          "knowledge_base_id",
+          "title",
+          "mime_type",
+          "source_url",
+          "page_count",
+          "preview_page_count",
+          "can_render_pages",
+          "content_url",
+          "target_chunk_id",
+          "target_page",
+          "target_quote",
+          "chunks",
+          "total_chunks",
+          "has_prev",
+          "has_next"
+        ],
+        "title": "MaterialReaderResponse"
+      },
       "MaterialResponse": {
         "properties": {
           "id": {
@@ -6497,6 +6966,28 @@
           "title": {
             "type": "string",
             "title": "Title"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Count"
           },
           "mime_type": {
             "anyOf": [
@@ -6814,6 +7305,46 @@
         ],
         "title": "PreviewSection"
       },
+      "ReaderChunk": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "ordinal": {
+            "type": "integer",
+            "title": "Ordinal"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "locator": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Locator"
+          },
+          "location_label": {
+            "type": "string",
+            "title": "Location Label"
+          },
+          "is_target": {
+            "type": "boolean",
+            "title": "Is Target"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "ordinal",
+          "text",
+          "locator",
+          "location_label",
+          "is_target"
+        ],
+        "title": "ReaderChunk"
+      },
       "RegisterBody": {
         "properties": {
           "email": {
@@ -6842,6 +7373,23 @@
           "display_name"
         ],
         "title": "RegisterBody"
+      },
+      "ReparseRequest": {
+        "properties": {
+          "extraction_mode": {
+            "type": "string",
+            "enum": [
+              "ocr",
+              "vlm"
+            ],
+            "title": "Extraction Mode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "extraction_mode"
+        ],
+        "title": "ReparseRequest"
       },
       "ResetPassword": {
         "properties": {
@@ -7438,6 +7986,33 @@
           "verdict"
         ],
         "title": "VerdictBody"
+      },
+      "WebClipRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 8,
+            "title": "Url"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "WebClipRequest"
       }
     },
     "securitySchemes": {

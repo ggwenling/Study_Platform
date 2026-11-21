@@ -15,9 +15,11 @@ import { Button } from '@/components/arc/button/button'
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { Select } from '@/components/arc/select/select'
 import { Tooltip } from '@/components/arc/tooltip/tooltip'
+import { Switch } from '@/components/arc/switch/switch'
 import { FadingTextarea } from './FadingTextarea'
 import { CurrentMaterials } from './CurrentMaterials'
 import { PasteTextDialog } from './PasteTextDialog'
+import { WebClipDialog } from './WebClipDialog'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { Input } from '@/components/arc/input/input'
 
@@ -35,11 +37,12 @@ export type ComposerHandle = {
   editAsNew: (content: string, scope: Scope | null) => void
 }
 
-export function Composer({ demo = false, conversationId, preferredLibrary, initialDraft, onInitialDraftApplied, ref }: {
+export function Composer({ demo = false, conversationId, preferredLibrary, initialDraft, initialMaterialIds, onInitialDraftApplied, ref }: {
   demo?: boolean
   conversationId?: string
   preferredLibrary?: string
   initialDraft?: string
+  initialMaterialIds?: string[]
   onInitialDraftApplied?: () => void
   ref?: Ref<ComposerHandle>
 }) {
@@ -54,6 +57,8 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
   }, [])
   const [panelReveal, setPanelReveal] = useState<{ id: string; at: number } | null>(null)
   const [pasteOpen, setPasteOpen] = useState(false)
+  const [webClipOpen, setWebClipOpen] = useState(false)
+  const [visionForNextUpload, setVisionForNextUpload] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createBusy, setCreateBusy] = useState(false)
@@ -78,19 +83,23 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
     setDraftState(() => ({
       text: initialDraft,
       libraryId: preferredLibrary,
-      materialIds: [],
-      scoped: false,
+      materialIds: initialMaterialIds ?? [],
+      scoped: Boolean(initialMaterialIds?.length),
       supplement: false,
       summaryMode: false,
       scopeRequired: false,
     }))
     setScopeStatus(undefined)
     onInitialDraftApplied?.()
-  }, [initialDraft, preferredLibrary, setDraftState, onInitialDraftApplied, user])
+  }, [initialDraft, initialMaterialIds, preferredLibrary, setDraftState, onInitialDraftApplied, user])
 
   useEffect(() => {
     if (!reducedMotion) void import('./ComposerMetalSend')
   }, [reducedMotion])
+
+  useEffect(() => {
+    setVisionForNextUpload(false)
+  }, [libraryId, capabilities?.vision])
 
   function applySummaryMode(enabled: boolean) {
     setDraftState((current) => ({ ...current, summaryMode: enabled }))
@@ -161,7 +170,8 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
 
   function addFiles(files: FileList | File[]) {
     if (!ensureImportReady() || !currentLibrary) return
-    uploadQueue.enqueue(files, { id: currentLibrary.id, name: currentLibrary.name })
+    uploadQueue.enqueue(files, { id: currentLibrary.id, name: currentLibrary.name }, visionForNextUpload && capabilities?.vision ? 'vlm' : 'ocr')
+    setVisionForNextUpload(false)
   }
 
   useImperativeHandle(ref, () => ({
@@ -243,10 +253,11 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
           items={[
             { label: '添加附件', icon: <Paperclip size={16} />, onSelect: () => chooseFile(false) },
             { label: '添加图片', icon: <Image size={16} />, onSelect: () => chooseFile(true) },
+            { label: '导入网页链接', icon: <Globe size={16} />, onSelect: () => { if (ensureImportReady()) setWebClipOpen(true) } },
             { label: '随手贴文本', icon: <FileText size={16} />, onSelect: () => { if (ensureImportReady()) setPasteOpen(true) } },
           ]}
         />
-        {[{ ref: fileInput, accept: '.pdf,.docx,.txt,.md,.markdown,.png,.jpg,.jpeg' }, { ref: imageInput, accept: 'image/png,image/jpeg' }].map(({ ref, accept }) => (
+        {[{ ref: fileInput, accept: '.pdf,.docx,.pptx,.txt,.md,.markdown,.png,.jpg,.jpeg' }, { ref: imageInput, accept: 'image/png,image/jpeg' }].map(({ ref, accept }) => (
           <input key={accept} type="file" ref={ref} accept={accept} multiple hidden onChange={(event) => {
             const files = event.target.files ? Array.from(event.target.files) : []
             event.target.value = ''
@@ -301,6 +312,10 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
           </div>
         )}
       </div>
+      {!demo && capabilities?.vision && <p className="composer-hint">
+        <Switch aria-label="本次上传中的图片或 PDF 使用视觉解析（可能产生费用）" label="本次上传中的图片或 PDF 使用视觉解析（可能产生费用）"
+          checked={visionForNextUpload} onCheckedChange={setVisionForNextUpload} />
+      </p>}
       {uploadQueue.latestNote && <span className="composer-hint" role="status">{uploadQueue.latestNote}</span>}
       {failedUploads.length > 0 && (
         <div className="upload-queue-failures">
@@ -342,6 +357,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
       libraryName={currentLibrary?.name}
       onSubmitFile={(file) => addFiles([file])}
     />
+    <WebClipDialog open={webClipOpen} onOpenChange={setWebClipOpen} libraryId={currentLibrary?.id} libraryName={currentLibrary?.name} />
     <Dialog open={creating} onOpenChange={setCreating}>
       <DialogContent title="创建知识库" description="创建后可直接添加资料并提问。" closeLabel="关闭创建知识库">
         <form className="stack-form" onSubmit={async (event) => {

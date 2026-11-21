@@ -42,9 +42,9 @@ function dateKey(value?: Date) {
 
 type Scope = { material_id?: string; section_id?: string; label?: string }
 
-export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, revision, initialPage, onPreview, onOpenSource }: {
+export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, revision, initialPage, onOpenSource }: {
   id: string; tags: string[]; day?: string; setDay: (day?: string) => void; scope: Scope;
-  clearScope: () => void; revision: number; onPreview: (fragment: Fragment) => void;
+  clearScope: () => void; revision: number;
   initialPage?: FragmentPage;
   onOpenSource: (fragment: Fragment) => void;
 }) {
@@ -117,7 +117,7 @@ export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, rev
 
   const columns: DataColumn<Fragment>[] = [
     { key: 'text', label: '片段内容', width: '35%', sortable: false,
-      render: (_, row) => <button type="button" className="fragment-text" onClick={() => onPreview(row)}>{row.text}</button> },
+      render: (_, row) => <button type="button" className="fragment-text" onClick={() => onOpenSource(row)}>{row.text}</button> },
     { key: 'title', label: '来源文档', width: '22%', sortable: false,
       render: (_, row) => <button type="button" className="fragment-source" title={row.title} onClick={() => onOpenSource(row)}><FileText size={15} /><span>{row.title}</span></button> },
     { key: 'locator', label: '原文定位', width: '10%', sortable: false,
@@ -133,7 +133,7 @@ export function LibraryFragments({ id, tags, day, setDay, scope, clearScope, rev
       } },
     { key: 'actions', label: '操作', width: '48px', sortable: false,
       render: (_, row) => <DropdownMenu label="片段操作" icon={<Ellipsis size={16} />} iconOnly items={[
-        { label: '查看全文', onSelect: () => onPreview(row) },
+        { label: '查看原文', onSelect: () => onOpenSource(row) },
         { label: '编辑片段', onSelect: () => setEditingFragment(row) },
         { label: '打开原文', onSelect: () => onOpenSource(row) },
       ]} /> },

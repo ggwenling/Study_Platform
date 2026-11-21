@@ -139,6 +139,7 @@ def test_grade_llm_respects_threshold(monkeypatch):
         learning_confidence_threshold=0.85,
     )
     monkeypatch.setattr("study_platform.services.learning_grade.get_settings", lambda: settings)
+    monkeypatch.setattr("study_platform.services.learning_grade.llm_available", lambda _: True)
     monkeypatch.setattr(
         "study_platform.services.learning_grade.grade_with_llm",
         lambda stem, ref, ans, **_: GradeResult("correct", 0.5, "部分一致"),

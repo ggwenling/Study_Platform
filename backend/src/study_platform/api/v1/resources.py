@@ -103,10 +103,12 @@ class ScopeDTO(BaseModel):
 class CitationDTO(BaseModel):
     source_label: str
     id: UUID
+    chunk_id: UUID
     material_id: UUID
     material_version_id: UUID
     knowledge_base_id: UUID
     title: str
+    source_url: str | None = None
     quote: str
     quote_status: Literal["verified", "unverified", "unavailable"] | None = None
     locator: dict
@@ -543,6 +545,7 @@ class CapabilitiesDTO(BaseModel):
     rag: bool
     library_rag: dict[str, bool] = Field(default_factory=dict)
     ocr: bool
+    vision: bool
     answer_modes: list[str]
     upload_mime_types: list[str]
     max_upload_bytes: int
@@ -564,12 +567,17 @@ def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
     libraries = db.execute(sa.select(KnowledgeBase.id, KnowledgeBase.embedding_connection_id, ModelConnection.status)
         .outerjoin(ModelConnection, ModelConnection.id == KnowledgeBase.embedding_connection_id)
         .where(KnowledgeBase.owner_user_id == user.id, KnowledgeBase.deleted_at.is_(None))).all()
+    try:
+        vision = bool(default_snapshot(db, user.id, "vision").get("id"))
+    except ApiError:
+        vision = False
     library_rag = {str(kb): available["llm"] and (status == "ready" if connection else bool(settings.embedding_api_key.get_secret_value()))
                    for kb, connection, status in libraries}
     return {
         "rag": available["llm"] and (available["embedding"] or any(library_rag.values())),
         "library_rag": library_rag,
         "ocr": True,
+        "vision": vision,
         "answer_modes": ["knowledge_only", "with_general"],
         "upload_mime_types": sorted(set(MIMES.values())),
         "max_upload_bytes": settings.max_upload_bytes,

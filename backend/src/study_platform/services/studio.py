@@ -43,6 +43,7 @@ from study_platform.services.model_connections import llm_available
 from study_platform.services.model_task import learning_task
 from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.storage import source_path
+from study_platform.services.study_exports import notes_archive
 
 ArtifactKind = Literal["study_guide", "mindmap", "formula_sheet"]
 
@@ -322,6 +323,23 @@ def list_notes(
 def get_note(db: Session, owner_user_id: UUID, note_id: UUID) -> dict[str, Any]:
     note = _owned_note(db, owner_user_id, note_id)
     return note_dto(db, note)
+
+
+def export_notes(db: Session, owner_user_id: UUID, knowledge_base_id: UUID) -> tuple[str, bytes]:
+    library = _owned_kb(db, owner_user_id, knowledge_base_id)
+    stmt = (
+        sa.select(Note)
+        .where(
+            Note.owner_user_id == owner_user_id,
+            Note.course_id == knowledge_base_id,
+            Note.deleted_at.is_(None),
+        )
+        .order_by(Note.updated_at.desc(), Note.id)
+        .execution_options(yield_per=20)
+    )
+    return library.name, notes_archive(
+        library.name, (note_dto(db, note, library.name) for note in db.scalars(stmt))
+    )
 
 
 def create_note(
@@ -969,7 +987,9 @@ def _load_flashcard_sources(
     return sources_map
 
 
-def get_flashcard_deck(db: Session, owner_user_id: UUID, deck_id: UUID) -> dict[str, Any]:
+def get_flashcard_deck(
+    db: Session, owner_user_id: UUID, deck_id: UUID, *, include_suspended: bool = False
+) -> dict[str, Any]:
     deck = db.scalar(
         sa.select(FlashcardDeck).where(
             FlashcardDeck.id == deck_id,
@@ -985,13 +1005,10 @@ def get_flashcard_deck(db: Session, owner_user_id: UUID, deck_id: UUID) -> dict[
             KnowledgeBase.owner_user_id == owner_user_id,
         )
     )
-    cards = list(
-        db.scalars(
-            sa.select(Flashcard)
-            .where(Flashcard.deck_id == deck.id, Flashcard.status == "active")
-            .order_by(Flashcard.due_at.asc(), Flashcard.created_at.asc())
-        ).all()
-    )
+    card_query = sa.select(Flashcard).where(Flashcard.deck_id == deck.id)
+    if not include_suspended:
+        card_query = card_query.where(Flashcard.status == "active")
+    cards = list(db.scalars(card_query.order_by(Flashcard.due_at, Flashcard.created_at, Flashcard.id)))
     sources_map = _load_flashcard_sources(db, [c.id for c in cards])
     now = _now()
     return {
@@ -1000,7 +1017,7 @@ def get_flashcard_deck(db: Session, owner_user_id: UUID, deck_id: UUID) -> dict[
         "knowledge_base_name": kb.name if kb and kb.deleted_at is None else None,
         "title": deck.title,
         "card_count": len(cards),
-        "due_count": sum(1 for c in cards if c.due_at <= now),
+        "due_count": sum(1 for c in cards if c.status == "active" and c.due_at <= now),
         "created_at": deck.created_at.isoformat(),
         "cards": [_card_dto(c, sources_map.get(c.id, []), now) for c in cards],
     }

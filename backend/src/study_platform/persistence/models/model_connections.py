@@ -9,7 +9,7 @@ from study_platform.persistence.base import Base
 class ModelConnection(Base):
     __tablename__ = "model_connections"
     __table_args__ = (
-        sa.CheckConstraint("kind IN ('llm', 'embedding')", name="ck_model_connections_kind"),
+        sa.CheckConstraint("kind IN ('llm', 'embedding', 'vision')", name="ck_model_connections_kind"),
         sa.Index(
             "uq_model_connections_default",
             "owner_user_id",

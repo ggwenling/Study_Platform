@@ -1,6 +1,6 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
-import type { DueFlashcard } from './types'
-import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
+import type { DueFlashcard, ExtractionMode, ModelConnectionKind } from './types'
+import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, MaterialReader, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
@@ -133,7 +133,7 @@ export const api = {
   updateModelConnection: (id: string, body: ModelConnectionInput) => request<ModelConnection>(`/me/model-connections/${pathId(id)}`, json('PATCH', body)),
   deleteModelConnection: (id: string) => request<void>(`/me/model-connections/${pathId(id)}`, json('DELETE')),
   testModelConnection: (id: string) => request<ModelConnection>(`/me/model-connections/${pathId(id)}/test`, json('POST')),
-  defaultModelConnection: (kind: 'llm' | 'embedding', id: string | null) => request<void>(`/me/model-connections/defaults/${kind}`, json('PUT', { connection_id: id })),
+  defaultModelConnection: (kind: ModelConnectionKind, id: string | null) => request<void>(`/me/model-connections/defaults/${kind}`, json('PUT', { connection_id: id })),
   modelUsage: (days = 30) => request<ModelUsageSummary>('/me/model-usage' + query({ days: String(days) })),
   refresh,
   clearSession,
@@ -186,12 +186,17 @@ export const api = {
   confirmClassification: (id: string, material: string, body: ClassificationDecision) =>
     request<ClassificationState>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/classification`, json('PATCH', body)),
   materials: (id: string, cursor?: string, signal?: AbortSignal) => request<Page<Material>>(`/knowledge-bases/${pathId(id)}/materials` + query({ cursor }), { signal }),
+  webClip: (id: string, body: { url: string; title?: string }) => request<UploadResult>(`/knowledge-bases/${pathId(id)}/materials/web-clip`, json('POST', body)),
   material: (id: string) => request<Material>(`/materials/${pathId(id)}`),
   deleteMaterial: (id: string) => request<void>(`/materials/${pathId(id)}`, json('DELETE')),
   retryMaterial: (id: string) => request<UploadResult>(`/materials/${pathId(id)}/retry`, json('POST')),
+  reparseMaterial: (id: string, extractionMode: ExtractionMode) =>
+    request<UploadResult>(`/materials/${pathId(id)}/reparse`, json('POST', { extraction_mode: extractionMode })),
   job: (id: string) => request<Job>(`/jobs/${pathId(id)}`),
   cancelJob: (id: string) => request<Pick<Job, 'id' | 'status'>>(`/jobs/${pathId(id)}/cancel`, json('POST')),
   preview: (id: string) => request<MaterialPreview>(`/material-versions/${pathId(id)}/preview`),
+  materialReader: (id: string, chunkId?: string | null, window = 3, signal?: AbortSignal) =>
+    request<MaterialReader>(`/material-versions/${pathId(id)}/reader` + query({ chunk_id: chunkId ?? undefined, window: String(window) }), { signal }),
   content: (id: string) => checkedFetch(`/material-versions/${pathId(id)}/content`),
   pageImage: (id: string, page: number) => checkedFetch(`/material-versions/${pathId(id)}/pages/${page}`),
   source: (id: string) => request<Citation>(`/sources/${pathId(id)}`),
@@ -232,9 +237,10 @@ export const api = {
         `/learning/responses/${pathId(responseId)}/answer-text`,
         json('POST', { answer_text: answerText }),
       ),
-    submitAnswerImage: async (responseId: string, file: File) => {
+    submitAnswerImage: async (responseId: string, file: File, useVision = false) => {
       const form = new FormData()
       form.append('file', file)
+      if (useVision) form.append('use_vision', 'true')
       return authorized(async (token) => {
         const headers = new Headers()
         if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -283,10 +289,14 @@ export const api = {
       request<StudyNote>(`/notes/${pathId(noteId)}/append`, json('POST', body)),
     deleteNote: (noteId: string) => request<void>(`/notes/${pathId(noteId)}`, json('DELETE')),
     ingestNote: (noteId: string) => request<UploadResult>(`/notes/${pathId(noteId)}/ingest`, json('POST')),
+    exportNotes: (knowledgeBaseId: string) =>
+      checkedFetch('/knowledge-bases/' + pathId(knowledgeBaseId) + '/notes/export'),
     flashcardDecks: (knowledgeBaseId?: string) =>
       request<{ items: FlashcardDeckSummary[] }>(
         '/flashcard-decks' + query({ knowledge_base_id: knowledgeBaseId }),
       ),
+    exportFlashcardDeck: (deckId: string, format: 'anki_tsv' | 'markdown') =>
+      checkedFetch('/flashcard-decks/' + pathId(deckId) + '/export' + query({ format })),
     generateFlashcards: (
       knowledgeBaseId: string,
       body: { count?: number; material_ids?: string[] | null; title?: string | null } = {},
@@ -348,7 +358,7 @@ export function streamChat(body: ChatRequest, idempotencyKey: string, signal?: A
 export function retryTurn(conversationId: string, turnId: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/retry', {}, undefined, signal) }
 export function editTurn(conversationId: string, turnId: string, content: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/edit', { content }, undefined, signal) }
 
-export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal): Promise<UploadResult> {
+export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal, extractionMode: ExtractionMode = 'ocr'): Promise<UploadResult> {
   return authorized((token) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     const abort = () => xhr.abort()
@@ -370,6 +380,7 @@ export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?:
     xhr.onabort = () => { signal?.removeEventListener('abort', abort); reject(new DOMException('Aborted', 'AbortError')) }
     const form = new FormData()
     form.append('file', file)
+    if (extractionMode === 'vlm') form.append('extraction_mode', 'vlm')
     xhr.send(form)
   }))
 }

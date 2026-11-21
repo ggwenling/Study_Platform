@@ -2,7 +2,7 @@ export interface ApiErrorBody { code: string; message: string; request_id?: stri
 export interface Page<T> { items: T[]; next_cursor: string | null }
 export interface User { id: string; email: string; display_name: string; avatar_url: string | null }
 export interface Scope { knowledge_base_id: string; knowledge_base_name: string; answer_mode: 'knowledge_only' | 'with_general'; intent?: 'qa' | 'summary'; selected_material_ids?: string[] | null; index_version_ids: string[] }
-export interface Citation { id: string; source_label: string; material_id: string; material_version_id: string; knowledge_base_id: string; title: string; quote: string; quote_status?: 'verified' | 'unverified' | 'unavailable' | null; locator: Record<string, unknown>; location_label: string; version_no: number; availability: 'available' | 'unavailable'; unavailable_reason?: string | null; content_url?: string | null; preview_url?: string | null }
+export interface Citation { id: string; source_label: string; material_id: string; material_version_id: string; knowledge_base_id: string; title: string; quote: string; quote_status?: 'verified' | 'unverified' | 'unavailable' | null; locator: Record<string, unknown>; location_label: string; version_no: number; availability: 'available' | 'unavailable'; unavailable_reason?: string | null; content_url?: string | null; preview_url?: string | null; source_url?: string | null; chunk_id?: string | null }
 export interface Message { id: string; conversation_id: string; sequence_no: number; role: 'user' | 'assistant' | 'system_summary'; content: string; status: 'pending' | 'streaming' | 'completed' | 'failed' | 'stopped'; created_at: string; scope: Scope | null; citations: Citation[]; turn_id: string | null }
 export interface ChatRequest { conversation_id?: string | null; knowledge_base_id: string; answer_mode?: 'knowledge_only' | 'with_general'; intent?: 'qa' | 'summary'; content: string; material_ids?: string[] | null }
 export type ChatPhase = 'working' | 'searching' | 'solving' | 'composing'
@@ -36,18 +36,21 @@ export interface Dashboard {
   due_wrong_question_count: number
   activity: { date: string; count: number }[]
 }
-export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
+export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; vision?: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
 export interface ModelUsageBucket { key: string; label?: string | null; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }
 export interface ModelUsageTotals { calls: number; successes: number; failures: number; fallback_calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }
 export interface ModelUsageSummary { days: number; since: string; totals: ModelUsageTotals; by_day: ModelUsageBucket[]; by_purpose: ModelUsageBucket[]; by_model: ModelUsageBucket[]; by_connection: ModelUsageBucket[] }
 export interface Turn { turn_id: string; conversation_id: string; status: string; scope: Scope; messages: Message[]; error_code: string | null }
 
 export interface LearningSource {
-  chunk_id: string
+  chunk_id?: string | null
   material_id: string
   material_version_id: string
+  knowledge_base_id?: string | null
   title: string
   location_label: string
+  locator?: Record<string, unknown>
+  source_url?: string | null
   availability: 'available' | 'unavailable'
   quote?: string | null
   quote_status?: 'verified' | 'unverified' | 'unavailable' | null
@@ -127,9 +130,29 @@ export interface WrongQuestionItem {
   is_due: boolean
 }
 
-export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null }
+export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null; source_url?: string | null; page_count?: number | null }
 export interface Job { id: string; status: string; phase: string | null; progress: number; error_code: string | null; attempt_count: number }
 export interface MaterialPreview { version_id: string; mime_type: string; page_count: number | null; sections: { text: string; locator: Record<string, unknown> }[] }
+export interface MaterialReaderChunk { id: string; ordinal: number; text: string; locator: Record<string, unknown>; location_label: string; is_target: boolean }
+export interface MaterialReader {
+  material_id: string
+  version_id: string
+  knowledge_base_id: string
+  title: string
+  mime_type: string | null
+  source_url: string | null
+  page_count: number | null
+  preview_page_count: number
+  can_render_pages: boolean
+  content_url: string | null
+  target_chunk_id: string | null
+  target_page: number | null
+  target_quote: string | null
+  chunks: MaterialReaderChunk[]
+  total_chunks: number
+  has_prev: boolean
+  has_next: boolean
+}
 export interface LibraryOverview {
   file_count: number
   ready_count: number
@@ -159,8 +182,11 @@ export interface ClassificationState extends Classification {
   ready: boolean; suggestion_id: string | null; status: string; suggestion: Classification | null
 }
 export interface ClassificationDecision extends Classification { suggestion_id: string; ignore?: boolean }
+export type ModelConnectionKind = 'llm' | 'embedding' | 'vision'
+export type ExtractionMode = 'ocr' | 'vlm'
+
 export interface ModelConnection {
-  id: string; name: string; kind: 'llm' | 'embedding'; base_url: string; model: string;
+  id: string; name: string; kind: ModelConnectionKind; base_url: string; model: string;
   dimensions: number | null; key_configured: boolean; key_suffix: string; revision: number;
   status: 'draft' | 'testing' | 'ready' | 'failed'; is_default: boolean;
   tested_at: string | null; error_code: string | null; libraries: { id: string; name: string }[]
@@ -170,7 +196,7 @@ export interface ModelConnections {
   platform_llm: string | null; platform_embedding: string | null
 }
 export interface ModelConnectionInput {
-  name: string; kind: 'llm' | 'embedding'; base_url: string; model: string; api_key?: string
+  name: string; kind: ModelConnectionKind; base_url: string; model: string; api_key?: string
 }
 
 export type StudioArtifactKind = 'study_guide' | 'mindmap' | 'formula_sheet'

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useDisclosurePreference } from '../useDisclosurePreference'
-import { BookmarkPlus, ChevronLeft, Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
+import { BookmarkPlus, Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import type { Citation, Conversation, Message, Scope } from '@/api/types'
-import { allPages, errorMessage } from '@/api/ui'
+import { allPages, errorMessage, safeExternalUrl } from '@/api/ui'
 import { downloadMarkdownFile, formatConversationMarkdown, sanitizeMarkdownFilename, scopeSummaryText } from '@/conversationActions'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
@@ -15,16 +15,16 @@ import { useWorkspace } from '../WorkspaceData'
 import { Composer, type ComposerHandle } from './Composer'
 import { ConversationDialogs, type ConversationDialogTarget } from './ConversationDialogs'
 import { MarkdownContent } from './MarkdownContent'
-import { DownloadMaterial, MaterialPage } from './ProtectedMaterial'
 import { AssistantActivity, activityLabels } from './AssistantActivity'
 import { SaveChatNoteDialog } from './SaveChatNoteDialog'
+import { SourceReaderDrawer, type ReaderActionContext, type SourceReaderTarget } from './SourceReaderDrawer'
 
 const time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const statusText = { pending: '等待生成…', streaming: '正在生成…', stopped: '已停止', failed: '回答失败', completed: '' }
 const mobileSourcesQuery = '(max-width: 760px)'
 
 export default function LiveChat({ id, searchButton }: { id: string; searchButton?: ReactNode }) {
-  const { user, chat, revision, refresh, notify, report, requireLogin } = useWorkspace()
+  const { user, libraries = [], chat, revision, refresh, notify, report, requireLogin } = useWorkspace()
   const navigate = useNavigate()
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [saved, setSaved] = useState<Message[]>([])
@@ -34,9 +34,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
   const [panel, setPanel] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:chat-sources`, true)
   const [drawer, setDrawer] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [sourceId, setSourceId] = useState<string | null>(null)
-  const [source, setSource] = useState<Citation | null>(null)
-  const [sourceError, setSourceError] = useState('')
+  const [readerTarget, setReaderTarget] = useState<SourceReaderTarget | null>(null)
   const [noteTarget, setNoteTarget] = useState<{ message: Message; scope: Scope; title: string } | null>(null)
   const [editing, setEditing] = useState<{ id: string; content: string } | null>(null)
   const composer = useRef<ComposerHandle>(null)
@@ -115,20 +113,23 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
     return () => media.removeEventListener?.('change', change)
   }, [])
 
-  useEffect(() => {
-    if (!sourceId) return
-    let mounted = true
-    void api.source(sourceId).then(
-      (citation) => { if (mounted) setSource(citation) },
-      (error) => { if (mounted) { setSourceError(errorMessage(error)); report(error) } },
-    )
-    return () => { mounted = false }
-  }, [sourceId])
-
   function openSource(citation: Citation) {
-    setSource(null)
-    setSourceError('')
-    setSourceId(citation.id)
+    if (citation.availability !== 'available') {
+      notify('此来源已不可访问。')
+      return
+    }
+    setReaderTarget({
+      materialVersionId: citation.material_version_id,
+      materialId: citation.material_id,
+      knowledgeBaseId: citation.knowledge_base_id,
+      knowledgeBaseName: libraries.find((library) => library.id === citation.knowledge_base_id)?.name,
+      chunkId: citation.chunk_id,
+      title: citation.title,
+      quote: citation.quote,
+      locator: citation.locator,
+      locationLabel: citation.location_label,
+      sourceUrl: citation.source_url,
+    })
   }
 
   function openCitations(messageId: string, citation: Citation) {
@@ -166,26 +167,24 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
     <section className="source-section">
       <h3>已使用的资料</h3>
       {focused?.citations.length ? <div className="source-cards">
-        {focused.citations.map((citation) => <Button key={citation.id} variant="secondary" className="source-card" onClick={() => openSource(citation)}>
-          <span className="source-card-content">
-            <span className="source-card-title"><span className="source-badge">{citation.source_label}</span><FileText size={16} /><span>{citation.title}</span></span>
-            {citation.availability === 'available' && citation.quote && <span className="source-excerpt">{citation.quote}</span>}
-            <small>{citation.availability === 'available' ? citation.location_label : '来源已不可用'}
-              {citation.availability === 'available' && citation.quote_status === 'unavailable' && ' · 历史引文不可用'}
-            </small>
-          </span>
-        </Button>)}
+        {focused.citations.map((citation) => {
+          const sourceUrl = safeExternalUrl(citation.source_url)
+          return <div key={citation.id} className="source-card-item">
+            <Button variant="secondary" className="source-card" onClick={() => openSource(citation)}>
+              <span className="source-card-content">
+                <span className="source-card-title"><span className="source-badge">{citation.source_label}</span><FileText size={16} /><span>{citation.title}</span></span>
+                {citation.availability === 'available' && citation.quote && <span className="source-excerpt">{citation.quote}</span>}
+                <small>{citation.availability === 'available' ? citation.location_label : '来源已不可用'}
+                  {citation.availability === 'available' && citation.quote_status === 'unavailable' && ' · 历史引文不可用'}
+                </small>
+              </span>
+            </Button>
+            {sourceUrl && <a className="source-card-original" href={sourceUrl} target="_blank" rel="noopener noreferrer">打开原网页</a>}
+          </div>
+        })}
       </div> : <p>这轮还没有可查看的资料引用。</p>}
     </section>
   </>
-
-  const sourceDetail = sourceError ? <p className="error-text" role="alert">{sourceError}</p> : source?.availability === 'unavailable'
-    ? <p>此来源已不可访问。</p>
-    : source ? <div className="source-detail">
-      {source.quote_status === 'unavailable' ? <p>历史引文不可用。</p> : <p>{source.quote}</p>}
-      {source.preview_url?.includes('/pages/') && <MaterialPage key={source.preview_url} version={source.material_version_id} page={Number(source.preview_url.split('/').at(-1))} title={`${source.title} · ${source.location_label}`} />}
-      {source.content_url && <DownloadMaterial version={source.material_version_id} title={source.title} />}
-    </div> : <p role="status">正在核实来源…</p>
 
   return (
     <div className="chat live-chat" data-sources={!mobile && panel}>
@@ -212,7 +211,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
             ]}
           />
           <Button variant="ghost" className="icon-button" aria-label={mobile ? '引用与来源' : panel ? '收起引用与来源' : '展开引用与来源'}
-            aria-expanded={mobile ? drawer || Boolean(sourceId) : panel} aria-controls={mobile ? 'live-sources-drawer' : 'live-sources'}
+            aria-expanded={mobile ? drawer : panel} aria-controls={mobile ? 'live-sources-drawer' : 'live-sources'}
             onClick={(event) => {
               if (mobile) { sourceTrigger.current = event.currentTarget; setDrawer(true) }
               else setPanel(!panel)
@@ -320,23 +319,16 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
         <div className="chat-footer"><Composer ref={composer} conversationId={id} preferredLibrary={latest?.scope?.knowledge_base_id ?? conversation?.project_knowledge_base_id ?? undefined} /></div>
       </section>
       {mobile ? (
-        <Dialog open={drawer || Boolean(sourceId)} onOpenChange={(open) => { if (!open) { setDrawer(false); setSourceId(null) } }}>
+        <Dialog open={drawer} onOpenChange={(open) => { if (!open) setDrawer(false) }}>
           <DialogContent id="live-sources-drawer" className="chat-source-drawer" closeLabel="关闭引用抽屉"
-            title={sourceId ? source?.title || '资料来源' : '引用与来源'}
-            description={sourceId ? source?.location_label || '查看当前引用。' : '本轮回答的范围与引用资料。'}
+            title="引用与来源"
+            description="本轮回答的范围与引用资料。"
             onCloseAutoFocus={(event) => {
               if (!sourceTrigger.current?.isConnected) return
               event.preventDefault()
               sourceTrigger.current.focus()
             }}>
-            {sourceId ? (
-              <div className="chat-source-drawer-detail">
-                <Button type="button" size="sm" variant="ghost" onClick={() => { setDrawer(true); setSourceId(null) }}>
-                  <ChevronLeft size={16} /> 返回引用列表
-                </Button>
-                {sourceDetail}
-              </div>
-            ) : sources}
+            {sources}
           </DialogContent>
         </Dialog>
       ) : (
@@ -344,13 +336,13 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
           <aside className="source-panel" id="live-sources" aria-label="引用与来源" inert={!panel} aria-hidden={!panel}>
             <div className="source-panel-inner"><h2>引用与来源</h2>{sources}</div>
           </aside>
-          <Dialog open={Boolean(sourceId)} onOpenChange={(open) => { if (!open) setSourceId(null) }}>
-            <DialogContent title={source?.title || '资料来源'} description={source?.location_label || '查看当前引用。'} closeLabel="关闭资料来源">
-              {sourceDetail}
-            </DialogContent>
-          </Dialog>
         </>
       )}
+      <SourceReaderDrawer open={Boolean(readerTarget)} target={readerTarget} onOpenChange={(open) => { if (!open) setReaderTarget(null) }}
+        onAskFollowUp={(context: ReaderActionContext) => {
+          const prompt = `请根据以下资料摘录回答我的问题。\n\n来源：${context.title} · ${context.locationLabel}\n\n${context.excerpt}\n\n我的问题：`
+          void navigate('/', { state: { preferredLibrary: context.knowledgeBaseId, initialDraft: prompt, initialMaterialIds: [context.materialId] } })
+        }} />
       {noteTarget && <SaveChatNoteDialog
         key={noteTarget.message.id}
         libraryId={noteTarget.scope.knowledge_base_id}

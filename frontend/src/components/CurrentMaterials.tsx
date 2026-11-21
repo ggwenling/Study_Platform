@@ -8,7 +8,7 @@ import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { useWorkspace } from '../WorkspaceData'
 
 const phases: Record<string, string> = {
-  queued: '等待处理', parsing: '解析中', ocr: '识别文字中', indexing: '建立索引中',
+  queued: '等待处理', parsing: '解析中', ocr: '识别文字中', vision: '视觉解析中', indexing: '建立索引中',
   ready: '可问答', failed: '处理失败', cancelled: '已取消',
 }
 const terminal = (row: Material) => ['ready', 'failed', 'cancelled'].includes(row.status)

@@ -23,12 +23,12 @@ from study_platform.persistence.models import (
 )
 from study_platform.services import model_connections
 from study_platform.services.chat import chunk_query, visible_indices
-from study_platform.services.learning import _locator_label
 from study_platform.services.lexical import (
     lexical_column_values,
     lexical_query_terms,
     plain_tsquery,
 )
+from study_platform.services.material_reader import locator_label
 from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.models import embed_texts
 from study_platform.services.retrieval import LEXICAL_IDF_POOL
@@ -210,7 +210,7 @@ def run_hit_test(
                     "version_id": str(chunk.material_version_id),
                     "title": meta["title"],
                     "locator": pub_loc,
-                    "location_label": _locator_label(pub_loc),
+                    "location_label": locator_label(pub_loc),
                     "text": chunk.text,
                     "retrieval_enabled": bool(chunk.retrieval_enabled),
                     "vector_rank": v_entry[0] if v_entry else None,

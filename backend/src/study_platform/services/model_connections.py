@@ -74,6 +74,18 @@ def default_snapshot(db, owner, kind):
     return snapshot(row) if row else {"id": None, "kind": kind}
 
 
+def vision_snapshot(db, owner):
+    try:
+        saved = default_snapshot(db, owner, "vision")
+    except ApiError as error:
+        if error.code == "model_test_required":
+            raise ApiError(409, "vision_not_configured", "请先配置并测试视觉理解模型。") from None
+        raise
+    if not saved.get("id"):
+        raise ApiError(409, "vision_not_configured", "请先配置并测试视觉理解模型。")
+    return saved
+
+
 def lock_owner(db, owner):
     db.execute(
         sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:owner, 0))"),
@@ -133,6 +145,8 @@ def resolved(owner, kind, saved=None):
         return {**saved, "source": "platform"}
     with session_factory()() as db:
         row = owned(db, owner, UUID(saved["id"]))
+        if row.kind != kind:
+            raise ApiError(409, "model_connection_kind_mismatch", "模型连接类型与任务不匹配。")
         version = row.versions.get(str(saved["revision"]))
         if not version:
             raise ApiError(409, "model_connection_changed", "模型连接版本不可用。")
@@ -156,7 +170,7 @@ def llm_available(owner):
 
 
 @contextmanager
-def task(owner, *, llm=None, embedding=None, kb_id=None):
+def task(owner, *, llm=None, embedding=None, vision=None, kb_id=None):
     existing = selection.get()
     if existing and existing["owner"] == owner:
         yield existing
@@ -171,7 +185,7 @@ def task(owner, *, llm=None, embedding=None, kb_id=None):
             if kb_id
             else None
         )
-        for config in (llm, embedding):
+        for config in (llm, embedding, vision):
             if config and config.get("id"):
                 row = owned(db, owner, UUID(config["id"]), lock=True)
                 lease = ModelConnectionLease(
@@ -182,7 +196,7 @@ def task(owner, *, llm=None, embedding=None, kb_id=None):
                 db.add(lease)
                 lease_ids.append(lease.id)
         db.commit()
-    token = selection.set({"owner": owner, "llm": llm, "embedding": embedding})
+    token = selection.set({"owner": owner, "llm": llm, "embedding": embedding, "vision": vision})
     try:
         yield selection.get()
     finally:

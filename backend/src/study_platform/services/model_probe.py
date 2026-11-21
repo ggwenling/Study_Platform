@@ -1,12 +1,29 @@
 """Fixed-content probes for saved model connections."""
 
 import time
+from base64 import b64decode
 
 from langchain_core.messages import HumanMessage
 
 from study_platform.core.errors import ApiError
 from study_platform.services.model_connections import selection
 from study_platform.services.model_usage import ModelUsageContext, record_model_call
+
+_ONE_PIXEL_PNG = b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jk3sAAAAASUVORK5CYII="
+)
+
+
+def probe_vision(owner, saved):
+    from study_platform.services.model_calls import invoke_vision
+
+    return invoke_vision(
+        "Reply with one short word describing this 1x1 image.",
+        _ONE_PIXEL_PNG,
+        "image/png",
+        context=ModelUsageContext(owner, "connection_test"),
+        saved=saved,
+    )
 
 
 def probe_connection(owner, saved):
@@ -19,6 +36,8 @@ def probe_connection(owner, saved):
             embed_texts(
                 ["连接测试", "connection test"], context=ModelUsageContext(owner, "connection_test")
             )
+        elif saved["kind"] == "vision":
+            probe_vision(owner, saved)
         else:
             connection = resolved(owner, "llm", saved)
             client = build_chat_model(connection=connection, max_tokens=16, timeout=20)

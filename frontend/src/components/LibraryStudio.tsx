@@ -7,6 +7,7 @@ import { ApiError } from '@/api/stream'
 import type { Citation, Material, StudioArtifactKind, StudyNote } from '@/api/types'
 import { errorMessage } from '@/api/ui'
 import { downloadMarkdownFile, sanitizeMarkdownFilename } from '@/conversationActions'
+import { downloadExportResponse } from '@/studyExports'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { Input } from '@/components/arc/input/input'
@@ -280,6 +281,20 @@ export function LibraryStudio({
     }
   }
 
+  async function exportNotesZip() {
+    if (busy || !notes?.length) return
+    setBusy('notes-export')
+    try {
+      const response = await api.studio.exportNotes(kbId)
+      await downloadExportResponse(response, kbName + '.zip')
+      notify('已导出知识库笔记 ZIP。')
+    } catch (error) {
+      report(error)
+    } finally {
+      setBusy(null)
+    }
+  }
+
   return (
     <section className="library-panel library-studio-panel" aria-label="研究笔记与知识工坊">
       <header className="library-section-heading">
@@ -337,6 +352,16 @@ export function LibraryStudio({
           onClick={() => { setEditorDraft(emptyDraft); setCreating(true) }}
         >
           <FilePlus2 size={15} /> 新建笔记
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          loading={busy === 'notes-export'}
+          disabled={Boolean(busy) || !notes?.length}
+          onClick={() => void exportNotesZip()}
+        >
+          <Download size={15} /> 批量导出笔记 (.zip)
         </Button>
       </div>
 

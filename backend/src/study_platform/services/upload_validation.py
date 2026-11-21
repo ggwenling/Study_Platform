@@ -1,5 +1,6 @@
 """Upload content sniffing aligned with allowed file extensions."""
 
+import zipfile
 from codecs import getincrementaldecoder
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from study_platform.core.errors import ApiError
 EXTENSION_MIMES = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".txt": "text/plain",
     ".md": "text/markdown",
     ".markdown": "text/markdown",
@@ -38,7 +40,9 @@ class Utf8TextValidator:
             raise ApiError(400, "invalid_file_content", "文本文件必须为 UTF-8 编码") from error
 
 
-def validate_upload_content(header: bytes, mime: str, filename: str) -> None:
+def validate_upload_content(
+    header: bytes, mime: str, filename: str, *, path: Path | None = None
+) -> None:
     if mime == "application/pdf":
         if not header.startswith(b"%PDF"):
             raise ApiError(400, "invalid_file_content", "文件内容与 PDF 类型不符")
@@ -54,6 +58,16 @@ def validate_upload_content(header: bytes, mime: str, filename: str) -> None:
     if mime.endswith("wordprocessingml.document"):
         if not header.startswith(b"PK\x03\x04"):
             raise ApiError(400, "invalid_file_content", "文件内容与 DOCX 类型不符")
+        return
+    if mime.endswith("presentationml.presentation"):
+        if not header.startswith(b"PK\x03\x04") or path is None:
+            raise ApiError(400, "invalid_file_content", "文件内容与 PPTX 类型不符")
+        try:
+            with zipfile.ZipFile(path) as archive:
+                if "ppt/presentation.xml" not in archive.namelist():
+                    raise ApiError(400, "invalid_file_content", "PPTX 文件缺少演示文稿结构")
+        except (OSError, zipfile.BadZipFile):
+            raise ApiError(400, "invalid_file_content", "PPTX 文件结构无效") from None
         return
     if mime in ("text/plain", "text/markdown"):
         sample = header[:4096]

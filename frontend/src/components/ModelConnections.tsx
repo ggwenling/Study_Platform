@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { CircleDot, Database, Ellipsis, MessageCircle, Plus, Server, ShieldCheck, TriangleAlert } from 'lucide-react'
+import { CircleDot, Database, Ellipsis, Eye, MessageCircle, Plus, Server, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { api } from '@/api/client'
 import { errorMessage } from '@/api/ui'
 import type { ModelConnection, ModelConnections } from '@/api/types'
@@ -14,14 +14,31 @@ import { useWorkspace } from '../WorkspaceData'
 import './ModelConnections.css'
 
 const statusLabel = { draft: '待测试', testing: '测试中', ready: '已测试', failed: '测试失败' }
+const modelGroups = {
+  llm: { label: 'LLM 文本模型', icon: MessageCircle,
+    description: '用于对话、摘要和学习。默认变更对下一次新提问生效。',
+    scope: '正在生成的回答和原轮次重试仍沿用原连接。',
+    updated: '默认文本模型已更新，将用于下一次新提问。' },
+  embedding: { label: '向量模型 · 1024 维', icon: Database,
+    description: '用于知识库检索。默认变更仅影响之后新建的知识库。',
+    scope: '已有知识库保持原绑定；更换默认不会迁移已有资料。',
+    updated: '默认向量模型已更新，仅影响之后新建的知识库。' },
+  vision: { label: '视觉理解模型（VLM）', icon: Eye,
+    description: '按需识别图片或 PDF 中的图表、手写文字和公式。',
+    scope: '启用连接后，仍须在上传、重新解析或拍照判题时主动选用。',
+    updated: '默认视觉模型已更新。' },
+} satisfies Record<ModelConnection['kind'], { label: string; icon: typeof Eye; description: string; scope: string; updated: string }>
+const connectionTypes = ['llm', 'embedding', 'vision'] as const
 const fixes: Record<string, string> = {
   model_auth_failed: '认证失败。请检查 API Key 和模型访问权限。',
   model_quota_unavailable: '余额不足或请求受限。请检查供应商额度，稍后重试。',
   model_timeout: '连接超时。请检查服务状态与服务器网络。',
   model_service_error: '服务返回错误。请确认 Base URL 指向兼容的 API 入口。',
-  model_response_invalid: '协议不兼容或返回内容无效。LLM 需要支持流式文本。',
+  model_response_invalid: '协议不兼容或返回内容无效。请确认模型支持所选连接类型。',
   embedding_invalid: '向量返回不符合要求。请确认支持 1024 维及批量请求。',
   embedding_dimension_invalid: '向量维度不匹配。请使用支持 1024 维输出的模型。',
+  vision_model_unsupported: '图像输入未被接受。请检查模型名称，确认该模型支持多模态输入。',
+  vision_response_invalid: '视觉模型没有返回可用文字。请检查多模态协议与模型配置。',
   model_address_blocked: '网络地址未获允许。内网或 HTTP 地址需要管理员配置放行。',
   model_dns_failed: '地址无法解析。请检查 Base URL。',
   model_decryption_failed: '凭据无法解密。请联系管理员或重新填写 API Key。',
@@ -34,7 +51,7 @@ export function ModelConnectionsPanel() {
   const [reload, setReload] = useState(0)
   const [editing, setEditing] = useState<ModelConnection | 'new'>()
   const [deleting, setDeleting] = useState<ModelConnection>()
-  const [kind, setKind] = useState<'llm' | 'embedding'>('llm')
+  const [kind, setKind] = useState<ModelConnection['kind']>('llm')
   const [busy, setBusy] = useState('')
   const formRef = useRef<HTMLFormElement>(null)
   const addRef = useRef<HTMLButtonElement>(null)
@@ -71,9 +88,9 @@ export function ModelConnectionsPanel() {
   }, [reload])
   const load = () => { setReload((value) => value + 1); refresh() }
 
-  async function choose(kind: 'llm' | 'embedding', id: string | null) {
+  async function choose(kind: ModelConnection['kind'], id: string | null) {
     setBusy(id ?? kind)
-    try { await api.defaultModelConnection(kind, id); notify(kind === 'llm' ? '默认文本模型已更新，将用于下一次新提问。' : '默认向量模型已更新，仅影响之后新建的知识库。'); load() }
+    try { await api.defaultModelConnection(kind, id); notify(modelGroups[kind].updated); load() }
     catch (failure) { report(failure) } finally { setBusy('') }
   }
   async function test(row: ModelConnection) {
@@ -131,7 +148,7 @@ export function ModelConnectionsPanel() {
         <Button size="sm" variant="secondary" aria-label={`${testLabel}：${row.name}`} loading={busy === row.id} disabled={Boolean(busy) || row.status === 'testing' || !credentialsReady} onClick={() => void test(row)}>{testLabel}</Button>
         <Button size="sm" variant="ghost" aria-label={`编辑连接：${row.name}`} disabled={Boolean(busy) || !credentialsReady} onClick={() => open(row)}>编辑</Button>
         {row.is_default
-          ? <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void choose(row.kind, null)}>恢复平台默认</Button>
+          ? <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void choose(row.kind, null)}>{row.kind === 'vision' ? '清除默认连接' : '恢复平台默认'}</Button>
           : <Button size="sm" variant="ghost" aria-label={`设为默认：${row.name}`} disabled={Boolean(busy) || row.status !== 'ready' || !credentialsReady} onClick={() => void choose(row.kind, row.id)}>设为默认</Button>}
       </div>
     </article>
@@ -146,22 +163,24 @@ export function ModelConnectionsPanel() {
     {!data && !error && <p role="status">正在读取模型连接…</p>}
     {data && !credentialsReady && <div role="alert" className="model-encryption-warning"><TriangleAlert size={18} aria-hidden="true" /><p>管理员尚未配置有效的模型凭据加密密钥，暂时无法新增、编辑、测试或启用个人连接。你仍可查看连接、恢复平台默认或删除未使用的连接。</p></div>}
     {data && <div className="model-connection-groups">
-      {(['llm', 'embedding'] as const).map((type) => {
+      {connectionTypes.map((type) => {
         const rows = data.items.filter((row) => row.kind === type)
         const selected = rows.find((row) => row.is_default)
         const others = rows.filter((row) => !row.is_default)
-        const platform = type === 'llm' ? data.platform_llm : data.platform_embedding
+        const platform = type === 'llm' ? data.platform_llm : type === 'embedding' ? data.platform_embedding : null
+        const group = modelGroups[type]
+        const Icon = group.icon
         return <section key={type} className="model-group">
-          <header><h3>{type === 'llm' ? <MessageCircle size={19} aria-hidden="true" /> : <Database size={19} aria-hidden="true" />}{type === 'llm' ? 'LLM 文本模型' : '向量模型 · 1024 维'}</h3>
-            <p>{type === 'llm' ? '用于对话、摘要和学习。默认变更对下一次新提问生效。' : '用于知识库检索。默认变更仅影响之后新建的知识库。'}</p>
+          <header><h3><Icon size={19} aria-hidden="true" />{group.label}</h3>
+            <p>{group.description}</p>
           </header>
           {selected ? connection(selected) : <div className="model-platform" data-default="true">
-            <p className="model-current"><CircleDot size={14} aria-hidden="true" />当前默认 · 平台连接</p>
-            <strong className="model-name">{platform ?? '尚未配置'}</strong>
+            <p className="model-current"><CircleDot size={14} aria-hidden="true" />{type === 'vision' ? '视觉理解未启用' : '当前默认 · 平台连接'}</p>
+            {type !== 'vision' && <strong className="model-name">{platform ?? '尚未配置'}</strong>}
           </div>}
           <div className="model-scope">
-            <p>{type === 'llm' ? '正在生成的回答和原轮次重试仍沿用原连接。' : '已有知识库保持原绑定；更换默认不会迁移已有资料。'}</p>
-            {selected && <p>平台默认：<span className="model-name">{platform ?? '尚未配置'}</span></p>}
+            <p>{group.scope}</p>
+            {selected && type !== 'vision' && <p>平台默认：<span className="model-name">{platform ?? '尚未配置'}</span></p>}
           </div>
           <div className="model-other-connections">
             <h4>其他连接 <span>{others.length}</span></h4>
@@ -175,8 +194,8 @@ export function ModelConnectionsPanel() {
       <DialogContent title={editing === 'new' ? '添加模型连接' : '编辑模型连接'} closeLabel="关闭" onCloseAutoFocus={restoreFocus}>
         {editing && <form ref={formRef} className="model-form" onSubmit={save} key={editSession}>
           {editing !== 'new' && editing.tested_at && <p className="muted">最近测试 {new Date(editing.tested_at).toLocaleString('zh-CN')}</p>}
-          <Select label="连接类型" value={kind} disabled={editing !== 'new'} onValueChange={(value) => setKind(value as 'llm' | 'embedding')}
-            options={[{ value: 'llm', label: 'LLM 文本模型' }, { value: 'embedding', label: '向量模型 · 1024 维' }]} />
+          <Select label="连接类型" value={kind} disabled={editing !== 'new'} onValueChange={(value) => setKind(value as ModelConnection['kind'])}
+            options={connectionTypes.map((value) => ({ value, label: modelGroups[value].label }))} />
           <Input label="连接名称" name="name" maxLength={80} required defaultValue={editing === 'new' ? '' : editing.name} placeholder="例如：个人模型服务" />
           <Input label="Base URL" name="base_url" required maxLength={500} defaultValue={editing === 'new' ? '' : editing.base_url} placeholder="https://api.example.com/v1"
             readOnly={editing !== 'new' && editing.libraries.length > 0} />
@@ -191,7 +210,7 @@ export function ModelConnectionsPanel() {
     <Dialog open={Boolean(deleting)} onOpenChange={(open) => { if (!open) setDeleting(undefined) }}>
       <DialogContent title="删除模型连接" closeLabel="关闭" onCloseAutoFocus={restoreFocus}>
         {deleting && <>
-          <p>删除「{deleting.name}」？{deleting.libraries.length ? '它正被以下知识库使用，当前无法删除。' : deleting.is_default ? '请先切换默认连接或恢复平台默认。' : ''}</p>
+          <p>删除「{deleting.name}」？{deleting.libraries.length ? '它正被以下知识库使用，当前无法删除。' : deleting.is_default ? deleting.kind === 'vision' ? '请先清除或切换默认视觉连接。' : '请先切换默认连接或恢复平台默认。' : ''}</p>
           {deleting.libraries.map((library) => <p key={library.id}>{library.name}</p>)}
           <Button variant="danger" disabled={Boolean(busy) || deleting.is_default || deleting.libraries.length > 0} onClick={async () => {
             setBusy('delete')

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, BookOpen, Camera, Check, ChevronRight, FileText, History, MessageCircle, RotateCcw, X } from 'lucide-react'
+import { AlertCircle, BookOpen, Camera, Check, ChevronRight, Download, FileText, History, MessageCircle, RotateCcw, X } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { Accordion } from '@/components/arc/accordion/accordion'
 import { Button } from '@/components/arc/button/button'
@@ -19,6 +19,9 @@ import type {
 } from '@/api/types'
 import { ApiError } from '@/api/stream'
 import { allPages, errorMessage } from '@/api/ui'
+import { downloadMarkdownFile } from '@/conversationActions'
+import { formatWrongQuestionExport } from '@/studyExports'
+import { useWorkspace } from '../WorkspaceData'
 import {
   buildFollowUpPrompt,
   extractSubmittedAnswerText,
@@ -30,6 +33,7 @@ import {
 } from '@/learningUi'
 import { MarkdownContent } from './MarkdownContent'
 import { FlashcardPanel } from './FlashcardPanel'
+import { SourceReaderDrawer, type ReaderActionContext, type SourceReaderTarget } from './SourceReaderDrawer'
 
 type Props = {
   knowledgeBases: KnowledgeBase[]
@@ -57,7 +61,11 @@ const countOptions = [
   { value: '15', label: '15 题' },
 ]
 
-function SourceList({ sources }: { sources?: LearningSource[] }) {
+function SourceList({ sources, onOpenSource, disabled = false }: {
+  sources?: LearningSource[]
+  onOpenSource: (source: LearningSource) => void
+  disabled?: boolean
+}) {
   if (!sources?.length) return null
   return (
     <div className="learning-sources" aria-label="题目资料依据">
@@ -69,6 +77,7 @@ function SourceList({ sources }: { sources?: LearningSource[] }) {
               <FileText size={14} aria-hidden />
               <strong>{src.title}</strong>
               <small>{src.availability === 'available' ? src.location_label : '来源已不可用'}</small>
+              {src.availability === 'available' && <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => onOpenSource(src)}>查看原文</Button>}
             </div>
             {src.quote_status === 'unverified' && <small>原文未验证</small>}
             {src.quote && <p className="learning-source-quote">{src.quote}</p>}
@@ -80,6 +89,7 @@ function SourceList({ sources }: { sources?: LearningSource[] }) {
 }
 
 export function Learning({ knowledgeBases, notify, overview, refreshOverview }: Props) {
+  const { capabilities } = useWorkspace()
   const navigate = useNavigate()
   const location = useLocation()
   const historyState = location.state as {
@@ -106,13 +116,31 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   const [index, setIndex] = useState(0)
   const [textDrafts, setTextDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  const [useVisionForImage, setUseVisionForImage] = useState(false)
   const [wrongs, setWrongs] = useState<WrongQuestionItem[]>([])
   const dailyOverview = overview
   const [wrongKbFilter, setWrongKbFilter] = useState<string>('all')
   const [wrongDueOnly, setWrongDueOnly] = useState(historyState?.wrongFilter === 'due')
   const [startDueQueue, setStartDueQueue] = useState(Boolean(historyState?.startDueQueue))
   const [expandedWrongIds, setExpandedWrongIds] = useState<string[]>([])
+  const [readerTarget, setReaderTarget] = useState<SourceReaderTarget | null>(null)
   const [tab, setTab] = useState<'practice' | 'flashcards' | 'history' | 'wrong'>(historyState?.tab ?? 'practice')
+
+  function openSource(source: LearningSource) {
+    if (source.availability !== 'available') return
+    setReaderTarget({
+      materialVersionId: source.material_version_id,
+      materialId: source.material_id,
+      knowledgeBaseId: source.knowledge_base_id ?? undefined,
+      knowledgeBaseName: knowledgeBases.find((library) => library.id === source.knowledge_base_id)?.name,
+      chunkId: source.chunk_id,
+      title: source.title,
+      quote: source.quote,
+      locator: source.locator,
+      locationLabel: source.location_label,
+      sourceUrl: source.source_url,
+    })
+  }
 
   const refreshWrongs = useCallback(async () => {
     try {
@@ -296,9 +324,13 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   async function onImage(file: File) {
     if (!attempt) return
     const item = attempt.items[index]
+    const useVision = capabilities?.vision === true && useVisionForImage
+    setUseVisionForImage(false)
     setBusy(true)
     try {
-      const result = await api.learning.submitAnswerImage(item.response_id, file)
+      const result = useVision
+        ? await api.learning.submitAnswerImage(item.response_id, file, true)
+        : await api.learning.submitAnswerImage(item.response_id, file)
       applyResponseUpdate(item.response_id, result)
       await Promise.all([refreshWrongs(), refreshAttempts(), refreshDailyOverview()])
     } catch (error) {
@@ -694,12 +726,34 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
                       }}
                     />
                   </label>
+                  {capabilities?.vision && (
+                    <label>
+                      <input
+                        type="checkbox"
+                        aria-label="视觉模型辅助识别手写公式/草图（可选，可能产生费用）"
+                        disabled={busy}
+                        checked={useVisionForImage}
+                        onChange={(event) => setUseVisionForImage(event.target.checked)}
+                      />{' '}
+                      视觉模型辅助识别手写公式/草图（可选，可能产生费用）
+                    </label>
+                  )}
                 </div>
               </div>
             )}
 
             {currentSubmittedText && current.answer?.type === 'image' && (
               <p className="learning-ocr-preview">图片识别文字：{currentSubmittedText}</p>
+            )}
+            {current.answer?.extraction === 'vlm' && (
+              <p className="learning-feedback" role="status">
+                视觉模型辅助识别{current.verdict === 'pending' ? '，结果待确认，请手动判题。' : '（可手动改判）'}
+              </p>
+            )}
+            {current.answer?.extraction === 'vlm_failed' && (
+              <p className="learning-feedback" role="status">
+                视觉模型不可用，已转为待确认。
+              </p>
             )}
 
             <div className={`learning-verdict verdict-${current.verdict ?? 'none'}`}>
@@ -718,7 +772,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
               <p className="learning-ref">解析：{current.explanation}</p>
             ) : null}
 
-            <SourceList sources={current.sources} />
+            <SourceList sources={current.sources} onOpenSource={openSource} disabled={!isReferenceRevealed(current)} />
 
             <div className="learning-actions">
               <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => void setVerdict('correct')}>
@@ -885,6 +939,17 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
             >
               <RotateCcw size={16} aria-hidden /> 错题重练（{visibleWrongs.length}）
             </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={busy || visibleWrongs.length === 0}
+              onClick={() => {
+                downloadMarkdownFile('错题集.md', formatWrongQuestionExport(visibleWrongs))
+                notify('已导出错题集 Markdown。')
+              }}
+            >
+              <Download size={16} aria-hidden /> 导出错题集 (.md)
+            </Button>
           </div>
         )}
 
@@ -919,7 +984,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
                       {row.explanation && row.explanation !== row.last_feedback && (
                         <p className="learning-ref">解析：{row.explanation}</p>
                       )}
-                      <SourceList sources={row.sources} />
+                      <SourceList sources={row.sources} onOpenSource={openSource} />
                     </div>
                   )}
 
@@ -977,6 +1042,11 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
           </ul>
         )}
       </section>
+      <SourceReaderDrawer open={Boolean(readerTarget)} target={readerTarget} onOpenChange={(open) => { if (!open) setReaderTarget(null) }}
+        onAskFollowUp={(context: ReaderActionContext) => {
+          const prompt = `请根据以下资料摘录回答我的问题。\n\n来源：${context.title} · ${context.locationLabel}\n\n${context.excerpt}\n\n我的问题：`
+          void navigate('/', { state: { preferredLibrary: context.knowledgeBaseId, initialDraft: prompt, initialMaterialIds: [context.materialId] } })
+        }} />
     </div>
   )
 }

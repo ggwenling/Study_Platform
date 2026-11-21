@@ -11,6 +11,7 @@ def test_material_openapi_exposes_response_contracts():
     paths = schema["paths"]
     for path, method, status, model in [
         ("/api/v1/knowledge-bases/{kb_id}/materials", "post", "202", "UploadResponse"),
+        ("/api/v1/knowledge-bases/{kb_id}/materials/web-clip", "post", "202", "UploadResponse"),
         ("/api/v1/knowledge-bases/{kb_id}/materials", "get", "200", "MaterialPage"),
         ("/api/v1/materials/{material_id}", "get", "200", "MaterialResponse"),
         ("/api/v1/materials/{material_id}/retry", "post", "202", "UploadResponse"),
@@ -21,6 +22,7 @@ def test_material_openapi_exposes_response_contracts():
         response_schema = paths[path][method]["responses"][status]["content"]["application/json"]["schema"]
         assert response_schema["$ref"] == f"#/components/schemas/{model}"
     material = schema["components"]["schemas"]["MaterialResponse"]
+    assert "source_url" in material["properties"]
     assert set(material["required"]) == {
         "id", "knowledge_base_id", "title", "mime_type", "byte_size", "status", "version_id",
         "job_id", "created_at", "error_code", "error_message",
@@ -48,7 +50,7 @@ def test_material_response_serializes_uuid_dates_and_nullable_errors(monkeypatch
         "mime_type": "text/plain", "byte_size": 3, "status": "ready",
         "version_id": version_id, "job_id": job_id,
         "created_at": datetime(2026, 1, 1, tzinfo=UTC),
-        "error_code": None, "error_message": None,
+        "error_code": None, "error_message": None, "source_url": None,
     })
     response = TestClient(app).get(f"/materials/{material_id}")
     assert response.status_code == 200
@@ -57,6 +59,7 @@ def test_material_response_serializes_uuid_dates_and_nullable_errors(monkeypatch
         "mime_type": "text/plain", "byte_size": 3, "status": "ready",
         "version_id": str(version_id), "job_id": str(job_id),
         "created_at": "2026-01-01T00:00:00Z", "error_code": None, "error_message": None,
+        "source_url": None, "page_count": None,
     }
 
 
@@ -72,11 +75,14 @@ def test_failure_reason_distinguishes_user_recovery_actions(monkeypatch, code, s
 
     from study_platform.api.v1 import materials
 
-    material = SimpleNamespace(id="m", knowledge_base_id="k", title="t", created_at=None)
-    version = SimpleNamespace(id="v", source_mime="text/plain", byte_size=1)
+    material = SimpleNamespace(
+        id="m", knowledge_base_id="k", title="t", source_url=None, created_at=None
+    )
+    version = SimpleNamespace(id="v", source_mime="text/plain", byte_size=1, page_count=None)
     job = SimpleNamespace(id="j", status=state, result={}, failure_code=code)
     monkeypatch.setattr(materials, "latest_version", lambda *_: version)
     monkeypatch.setattr(materials, "latest_job", lambda *_: job)
+    monkeypatch.setattr(materials, "pending_reparse_job", lambda *_: None)
     result = materials.dto(None, material)
     assert expected in result["error_message"]
     assert result["status"] == state

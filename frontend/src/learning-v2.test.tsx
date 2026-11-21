@@ -3,14 +3,17 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api/client'
-import type { Dashboard, LearningAttempt, WrongQuestionItem } from './api/types'
+import type { Dashboard, LearningAttempt, MaterialReader, WrongQuestionItem } from './api/types'
 import { Learning } from './components/Learning'
 import { ThemeProvider } from './Theme'
+import { downloadMarkdownFile } from './conversationActions'
+import { formatWrongQuestionExport } from './studyExports'
 import { wrongIdsForAttempt } from './learningUi'
 
 const navigateMock = vi.hoisted(() => vi.fn())
 const locationMock = vi.hoisted(() => ({ value: { key: 'initial', state: null as unknown } }))
 const refreshOverview = vi.fn()
+const workspace = vi.hoisted(() => ({ libraries: [{ id: 'kb-1', name: '高数资料库' }], notify: vi.fn(), report: vi.fn(), capabilities: null as { vision?: boolean } | null }))
 
 vi.mock('react-router', () => ({
   useNavigate: () => navigateMock,
@@ -37,9 +40,15 @@ vi.mock('./components/FlashcardPanel', () => ({
     </div>
   ),
 }))
+vi.mock('./WorkspaceData', () => ({ useWorkspace: () => workspace }))
+vi.mock('@/conversationActions', () => ({ downloadMarkdownFile: vi.fn() }))
 vi.mock('./api/client', () => ({
   api: {
     materials: vi.fn(),
+    materialReader: vi.fn(),
+    pageImage: vi.fn(),
+    content: vi.fn(),
+    studio: { notes: vi.fn(), createNote: vi.fn(), appendNote: vi.fn() },
     learning: {
       generateQuiz: vi.fn(),
       attempts: vi.fn(),
@@ -126,6 +135,14 @@ const sampleWrong: WrongQuestionItem = {
   is_due: true,
 }
 
+const sampleReader: MaterialReader = {
+  material_id: 'm1', version_id: 'v1', knowledge_base_id: 'kb-1', title: '线代讲义.md', mime_type: 'text/plain',
+  source_url: null, page_count: null, preview_page_count: 0, can_render_pages: false, content_url: null,
+  target_chunk_id: 'c1', target_page: null, target_quote: '特征向量定义为非零列向量。',
+  chunks: [{ id: 'c1', ordinal: 1, text: '特征向量定义为非零列向量。', locator: {}, location_label: '第 2 页', is_target: true }],
+  total_chunks: 1, has_prev: false, has_next: false,
+}
+
 async function render(view: ReactNode) {
   await act(async () => root.render(<ThemeProvider>{view}</ThemeProvider>))
 }
@@ -144,6 +161,7 @@ async function changeSelect(label: string, value: string) {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  workspace.capabilities = null
   locationMock.value = { key: 'initial', state: null }
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
@@ -171,6 +189,7 @@ beforeEach(() => {
   })
   vi.mocked(api.learning.wrongQuestions).mockResolvedValue({ items: [sampleWrong] })
   vi.mocked(api.learning.attempt).mockResolvedValue(sampleAttempt)
+  vi.mocked(api.materialReader).mockResolvedValue(sampleReader)
 })
 
 afterEach(async () => {
@@ -180,6 +199,81 @@ afterEach(async () => {
 })
 
 describe('Learning 2.0 workflow', () => {
+  it('requires explicit vision consent for photo grading and labels pending or failed vision results', async () => {
+    workspace.capabilities = { vision: true }
+    vi.mocked(api.learning.submitAnswerImage)
+      .mockResolvedValueOnce({
+        response_id: 'resp-2', verdict: 'pending', verdict_source: 'auto', confidence: 0.2,
+        feedback: '结果待确认。', answer: { type: 'image', extraction: 'ocr', ocr_text: 'x' },
+        reference_answer: 'ref',
+      })
+      .mockResolvedValueOnce({
+        response_id: 'resp-2', verdict: 'pending', verdict_source: 'auto', confidence: 0.4,
+        feedback: '置信度不足，请手动判题。', answer: { type: 'image', extraction: 'vlm', transcribed_text: 'x²' },
+        reference_answer: 'ref',
+      })
+      .mockResolvedValueOnce({
+        response_id: 'resp-2', verdict: 'pending', verdict_source: 'auto', confidence: 0,
+        feedback: '视觉模型暂不可用，请手动判题或改用本地识别重试。', answer: { extraction: 'vlm_failed' },
+        reference_answer: 'ref',
+      })
+
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => findButtonContaining('继续上次练习')!.click())
+    await act(async () => findButtonContaining('下一题')!.click())
+
+    const consent = node.querySelector<HTMLInputElement>('input[aria-label="视觉模型辅助识别手写公式/草图（可选，可能产生费用）"]')!
+    expect(consent).toBeTruthy()
+    expect(consent.checked).toBe(false)
+
+    async function upload(fileName: string) {
+      const file = new File(['image'], fileName, { type: 'image/png' })
+      const input = node.querySelector<HTMLInputElement>('.learning-upload input')!
+      Object.defineProperty(input, 'files', { configurable: true, value: [file] })
+      await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+      return file
+    }
+
+    const localPhoto = await upload('local.png')
+    expect(api.learning.submitAnswerImage).toHaveBeenNthCalledWith(1, 'resp-2', localPhoto)
+    expect(node.textContent).not.toContain('视觉模型辅助识别，结果待确认')
+
+    await act(async () => consent.click())
+    const visionPhoto = await upload('vision.png')
+    expect(api.learning.submitAnswerImage).toHaveBeenNthCalledWith(2, 'resp-2', visionPhoto, true)
+    expect(node.textContent).toContain('视觉模型辅助识别，结果待确认，请手动判题。')
+    expect(consent.checked).toBe(false)
+
+    await act(async () => consent.click())
+    await upload('fallback.png')
+    expect(api.learning.submitAnswerImage).toHaveBeenNthCalledWith(3, 'resp-2', expect.any(File), true)
+    expect(node.textContent).toContain('视觉模型不可用，已转为待确认。')
+  })
+
+  it('hides the vision photo opt-in when vision capability is unavailable', async () => {
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => findButtonContaining('继续上次练习')!.click())
+    await act(async () => findButtonContaining('下一题')!.click())
+    expect(node.querySelector('input[aria-label="视觉模型辅助识别手写公式/草图（可选，可能产生费用）"]')).toBeNull()
+  })
+
+  it('keeps practice sources closed until revealed and opens wrong-book sources immediately', async () => {
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => findButtonContaining('继续上次练习')!.click())
+    const practiceSource = findButtonContaining('查看原文')!
+    expect(practiceSource.disabled).toBe(true)
+    await act(async () => practiceSource.click())
+    expect(api.materialReader).not.toHaveBeenCalled()
+
+    await act(async () => node.querySelector<HTMLButtonElement>('#learning-tab-wrong')!.click())
+    await act(async () => findButtonContaining('查看解析与依据')!.click())
+    const wrongSource = findButtonContaining('查看原文')!
+    expect(wrongSource.disabled).toBe(false)
+    await act(async () => wrongSource.click())
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(api.materialReader).toHaveBeenCalledWith('v1', 'c1', 3, expect.any(AbortSignal))
+  })
+
   it('starts the daily flashcard queue from route state and the Learning overview', async () => {
     locationMock.value = { key: 'due-cards', state: { tab: 'flashcards', startDueQueue: true } }
     const overview = { ...testOverview, due_flashcard_count: 3 }
@@ -212,6 +306,28 @@ describe('Learning 2.0 workflow', () => {
     await act(async () => findButtonContaining('错题重练（1）')!.click())
     expect(api.learning.retryWrong).toHaveBeenCalledWith(expect.objectContaining({ due_only: true }))
     expect(vi.mocked(api.learning.retryWrong).mock.calls[0][0]?.wrong_ids).toBeUndefined()
+  })
+
+  it('exports only the wrong questions visible under the current filters', async () => {
+    const notDueWrong = {
+      ...sampleWrong,
+      id: 'wrong-not-due',
+      stem: '还未到期的错题',
+      status: 'reviewing',
+      is_due: false,
+      next_review_at: '2026-11-23T02:00:00Z',
+    }
+    vi.mocked(api.learning.wrongQuestions).mockResolvedValue({ items: [sampleWrong, notDueWrong] })
+    locationMock.value = { key: 'wrong-export', state: { tab: 'wrong', wrongFilter: 'due' } }
+
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(findButtonContaining('错题重练（1）')).toBeTruthy()
+
+    await act(async () => findButtonContaining('导出错题集 (.md)')!.click())
+
+    expect(downloadMarkdownFile).toHaveBeenCalledWith('错题集.md', formatWrongQuestionExport([sampleWrong]))
+    expect(node.textContent).not.toContain('还未到期的错题')
   })
 
   it('labels a reviewing wrong question with its next scheduled review date', async () => {

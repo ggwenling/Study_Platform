@@ -35,7 +35,9 @@ vi.mock('./api/client', () => ({
       updateNote: vi.fn(),
       deleteNote: vi.fn(),
       ingestNote: vi.fn(),
+      exportNotes: vi.fn(),
       flashcardDecks: vi.fn(),
+      exportFlashcardDeck: vi.fn(),
       generateFlashcards: vi.fn(),
       flashcardDeck: vi.fn(),
       dueFlashcards: vi.fn(),
@@ -190,6 +192,30 @@ describe('Studio notes & Flashcard SM-2 review', () => {
     expect(document.querySelector('[data-map-node-id]')?.parentElement?.textContent).not.toContain('特征值')
     await act(async () => findBtn('Markdown 原文')!.click())
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('特征值解释谱结构')
+  })
+
+  it('exports all notes in the selected knowledge base as a ZIP', async () => {
+    const response = new Response('zip payload', {
+      headers: { 'Content-Disposition': 'attachment; filename="knowledge-notes.zip"' },
+    })
+    vi.mocked(api.studio.exportNotes).mockResolvedValue(response)
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:notes'), revokeObjectURL: vi.fn() })
+    let downloadedFilename = ''
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedFilename = this.download
+    })
+    const notify = workspace.value.notify
+
+    await render(
+      <LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} readyMaterials={readyMaterials} revision={0}
+        initialNotes={[sampleGuide]} onIngested={vi.fn()} />,
+    )
+    await act(async () => findBtn('批量导出笔记 (.zip)')!.click())
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(api.studio.exportNotes).toHaveBeenCalledWith('kb-1')
+    expect(downloadedFilename).toBe('knowledge-notes.zip')
+    expect(notify).toHaveBeenCalledWith('已导出知识库笔记 ZIP。')
   })
 
   it('keeps unsaved note text until the user confirms discarding it', async () => {
@@ -349,6 +375,79 @@ describe('Studio notes & Flashcard SM-2 review', () => {
     await act(async () => findBtn('熟练掌握')!.click())
     expect(api.studio.reviewFlashcard).toHaveBeenCalledWith('card-1', 3, expect.any(String))
     expect(node.textContent).toContain('正交矩阵的行列式取值？')
+  })
+
+  it('exports a deck as Anki TSV from the deck list', async () => {
+    const response = new Response('Front\tBack\tTags', {
+      headers: { 'Content-Disposition': 'attachment; filename="anki-cards.tsv"' },
+    })
+    vi.mocked(api.studio.flashcardDecks).mockResolvedValue({ items: [sampleDeck] })
+    vi.mocked(api.studio.exportFlashcardDeck).mockResolvedValue(response)
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:anki'), revokeObjectURL: vi.fn() })
+    let downloadedFilename = ''
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedFilename = this.download
+    })
+    const notify = vi.fn()
+
+    await render(
+      <FlashcardPanel
+        knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]}
+        defaultKbId="kb-1"
+        notify={notify}
+      />,
+    )
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="导出闪卡组 ' + sampleDeck.title + '"]')!
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, ctrlKey: false }))
+      await Promise.resolve()
+    })
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((row) => row.textContent?.includes('导出 Anki (.tsv)'))!
+    await act(async () => item.click())
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(api.studio.exportFlashcardDeck).toHaveBeenCalledWith(sampleDeck.id, 'anki_tsv')
+    expect(downloadedFilename).toBe('anki-cards.tsv')
+    expect(notify).toHaveBeenCalledWith('Anki 闪卡已下载。')
+  })
+
+  it('exports the active deck as Markdown from the review header', async () => {
+    const response = new Response('# flashcards', {
+      headers: { 'Content-Disposition': 'attachment; filename*=UTF-8\'\'%E6%9C%AC%E7%BB%84%E9%97%AA%E5%8D%A1.md' },
+    })
+    vi.mocked(api.studio.flashcardDecks).mockResolvedValue({ items: [sampleDeck] })
+    vi.mocked(api.studio.flashcardDeck).mockResolvedValue(sampleDeck)
+    vi.mocked(api.studio.exportFlashcardDeck).mockResolvedValue(response)
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:markdown'), revokeObjectURL: vi.fn() })
+    let downloadedFilename = ''
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedFilename = this.download
+    })
+    const notify = vi.fn()
+
+    await render(
+      <FlashcardPanel
+        knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]}
+        defaultKbId="kb-1"
+        notify={notify}
+      />,
+    )
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => findBtn('开始翻转复习')!.click())
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="导出闪卡组 ' + sampleDeck.title + '"]')!
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, ctrlKey: false }))
+      await Promise.resolve()
+    })
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((row) => row.textContent?.includes('导出 Markdown'))!
+    await act(async () => item.click())
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(api.studio.exportFlashcardDeck).toHaveBeenCalledWith(sampleDeck.id, 'markdown')
+    expect(downloadedFilename).toBe('本组闪卡.md')
+    expect(notify).toHaveBeenCalledWith('闪卡 Markdown 已下载。')
   })
   it('retries an uncertain review with the same idempotency key and rating', async () => {
     vi.mocked(api.studio.flashcardDecks).mockResolvedValue({ items: [] })
