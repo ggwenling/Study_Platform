@@ -18,8 +18,16 @@ vi.mock('./components/arc/select/select', () => ({
     </select>
   ),
 }))
+vi.mock('./components/arc/switch/switch', () => ({
+  Switch: ({ label, checked, onCheckedChange, ...props }: any) => (
+    <input type="checkbox" aria-label={props['aria-label'] ?? label} checked={checked} onChange={(event) => onCheckedChange(event.target.checked)} />
+  ),
+}))
 vi.mock('./api/client', () => ({
   api: {
+    knowledgeBase: vi.fn(),
+    modelConnections: vi.fn(),
+    updateRetrievalSettings: vi.fn(),
     fragments: vi.fn(),
     setFragmentRetrieval: vi.fn(),
     workshop: {
@@ -51,6 +59,8 @@ const sampleHitResponse: HitTestResponse = {
   query_terms: ['拉格朗日', '乘子'],
   lexical_weight: 1,
   min_similarity_threshold: 0.35,
+  rerank_enabled: false,
+  rerank_error: null,
   items: [
     {
       chunk_id: 'chunk-1',
@@ -110,12 +120,16 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('IntersectionObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('matchMedia', () => ({ matches: true, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }))
+  vi.mocked(api.knowledgeBase).mockResolvedValue({ id: 'kb-1', name: '资料库', description: null, created_at: '', updated_at: '', retrieval_settings: null })
+  vi.mocked(api.modelConnections).mockResolvedValue({ items: [], encryption_available: true, platform_llm: null, platform_embedding: null })
+  vi.mocked(api.updateRetrievalSettings).mockResolvedValue({ retrieval_settings: { top_k: 6 } })
   node = document.body.appendChild(document.createElement('div'))
   root = createRoot(node)
   workspace.value = {
     notify: vi.fn(),
     report: vi.fn(),
     refresh: vi.fn(),
+    capabilities: { retrieval_defaults: { top_k: 6, lexical_weight: 0.4, min_similarity: 0.35, rerank_enabled: false, rerank_candidate_k: 20 } },
   }
 })
 
@@ -163,7 +177,10 @@ describe('RAG Workshop: Hybrid Hit-Testing & Fragment Editor', () => {
     })
 
     const weightSelect = node.querySelector<HTMLSelectElement>('select[aria-label="混合词法权重"]')!
+    const topKSelect = node.querySelector<HTMLSelectElement>('select[aria-label="召回数量"]')!
     await act(async () => {
+      topKSelect.value = '6'
+      topKSelect.dispatchEvent(new Event('change', { bubbles: true }))
       weightSelect.value = '1'
       weightSelect.dispatchEvent(new Event('change', { bubbles: true }))
     })
@@ -176,6 +193,10 @@ describe('RAG Workshop: Hybrid Hit-Testing & Fragment Editor', () => {
       query: '拉格朗日乘子',
       top_k: 6,
       lexical_weight: 1,
+      min_similarity: 0.35,
+      rerank_enabled: false,
+      rerank_connection_id: null,
+      rerank_candidate_k: 20,
     })
     expect(node.textContent).toContain('RRF 0.0325')
     expect(node.textContent).toContain('向量 0.452 (#2)')
@@ -203,6 +224,55 @@ describe('RAG Workshop: Hybrid Hit-Testing & Fragment Editor', () => {
     expect(node.textContent).toContain('拉格朗日乘子法与KKT条件核心推导。')
     expect(node.textContent).toContain('RRF 0.0412')
     expect(node.textContent).toContain('向量 0.918 (#1)')
+  })
+
+  it('saves the current retrieval controls for the knowledge base', async () => {
+    await render(
+      <LibraryHitTest kbId="kb-1" readyCount={2} onOpenSource={vi.fn()} />,
+    )
+    await act(async () => { findBtn('保存为本库默认检索配置')!.click() })
+    expect(api.updateRetrievalSettings).toHaveBeenCalledWith('kb-1', {
+      top_k: 6,
+      lexical_weight: 0.4,
+      min_similarity: 0.35,
+      rerank_enabled: false,
+      rerank_connection_id: null,
+      rerank_candidate_k: 20,
+    })
+    expect(workspace.value.notify).toHaveBeenCalledWith('已保存为本知识库默认检索配置。')
+  })
+
+  it('shows rerank order and an explicit fallback warning in hit-test results', async () => {
+    vi.mocked(api.knowledgeBase).mockResolvedValue({
+      id: 'kb-1', name: '资料库', description: null, created_at: '', updated_at: '',
+      retrieval_settings: { top_k: 6, lexical_weight: 0.4, min_similarity: 0.35, rerank_enabled: true, rerank_candidate_k: 20, rerank_connection_id: 'rerank-1' },
+    })
+    vi.mocked(api.modelConnections).mockResolvedValue({
+      items: [{ id: 'rerank-1', name: '重排连接', kind: 'rerank', base_url: 'https://api.example/v1', model: 'jina-reranker', dimensions: null, key_configured: true, key_suffix: 'abcd', revision: 1, status: 'ready', is_default: false, tested_at: null, error_code: null, libraries: [] }],
+      encryption_available: true, platform_llm: null, platform_embedding: null,
+    })
+    vi.mocked(api.workshop.hitTest).mockResolvedValueOnce({
+      ...sampleHitResponse,
+      rerank_enabled: true,
+      rerank_error: null,
+      items: [{ ...sampleHitResponse.items[0], rrf_rank: 5, rerank_rank: 1, rerank_score: 0.91 }],
+    }).mockResolvedValueOnce({
+      ...sampleHitResponse,
+      rerank_enabled: true,
+      rerank_error: 'model_timeout',
+      items: [{ ...sampleHitResponse.items[0], rrf_rank: 1, rerank_rank: null, rerank_score: null }],
+    })
+    await render(<LibraryHitTest kbId="kb-1" readyCount={2} onOpenSource={vi.fn()} />)
+    const input = node.querySelector<HTMLInputElement>('input[placeholder*="输入测试问题"]')!
+    await act(async () => { setInputValue(input, '拉格朗日乘子') })
+    await act(async () => { findBtn('开始命中测试')!.click() })
+    expect(api.workshop.hitTest).toHaveBeenCalledWith('kb-1', expect.objectContaining({
+      rerank_enabled: true,
+      rerank_connection_id: 'rerank-1',
+    }))
+    expect(node.textContent).toContain('RRF #5 → 重排 #1 (0.910)')
+    await act(async () => { findBtn('开始命中测试')!.click() })
+    expect(node.textContent).toContain('当前展示 RRF 排序：model_timeout')
   })
 
   it('edits fragment text directly from LibraryFragments row menu and updates table in-place', async () => {

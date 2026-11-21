@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -154,6 +155,8 @@ def generate_learning_quiz(
     count: int = 5,
     mode: str = "short_answer",
     material_ids: list[UUID] | None = None,
+    index_ids: list[str] | None = None,
+    before_publish: Callable[[], object] | None = None,
 ) -> Quiz:
     if mode not in ("short_answer", "mcq", "mixed"):
         raise ApiError(422, "invalid_mode", "不支持的题型模式")
@@ -170,8 +173,7 @@ def generate_learning_quiz(
     )
     if kb is None:
         raise ApiError(404, "knowledge_base_not_found", "知识库不存在或无权访问")
-    ensure_course_anchor(db, kb)
-    scope_ids = visible_indices(db, owner_user_id, knowledge_base_id, material_ids)
+    scope_ids = index_ids if index_ids is not None else visible_indices(db, owner_user_id, knowledge_base_id, material_ids)
     if not scope_ids:
         raise ApiError(409, "library_not_ready", "当前知识库尚无可用索引，请先上传并完成处理。")
     scope = {"index_version_ids": scope_ids}
@@ -186,11 +188,26 @@ def generate_learning_quiz(
         hits = retrieve(scope, "重要概念、定义、公式与例题", owner_user_id)
     if not hits:
         raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
+    if before_publish:
+        db.commit()
     use_llm = not settings.learning_stub_grader and llm_available(owner_user_id)
+    if use_llm:
+        fragments = map_fragment_hits(hits)
+        if not fragments:
+            raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
+        generated, insufficient = generate_questions_with_llm(
+            fragments, count, mode=mode, owner_user_id=owner_user_id
+        )
+        if insufficient:
+            raise ApiError(409, "insufficient_material", insufficient)
+        by_index = index_to_fragment(fragments)
     mode_label = {"mcq": "单选练习", "mixed": "混合练习"}.get(mode, "简答练习")
     scope_meta: dict = {"knowledge_base_id": str(knowledge_base_id), "mode": mode}
     if material_ids:
         scope_meta["material_ids"] = [str(mid) for mid in material_ids]
+    if before_publish:
+        before_publish()
+    ensure_course_anchor(db, kb)
     quiz = Quiz(
         owner_user_id=owner_user_id,
         course_id=knowledge_base_id,
@@ -204,15 +221,6 @@ def generate_learning_quiz(
     db.flush()
     ordinal = 0
     if use_llm:
-        fragments = map_fragment_hits(hits)
-        if not fragments:
-            raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
-        generated, insufficient = generate_questions_with_llm(
-            fragments, count, mode=mode, owner_user_id=owner_user_id
-        )
-        if insufficient:
-            raise ApiError(409, "insufficient_material", insufficient)
-        by_index = index_to_fragment(fragments)
         for question in generated:
             if ordinal >= count:
                 break
@@ -350,20 +358,19 @@ def _guess_answer(body: str) -> str:
     return body[:60]
 
 
-def start_attempt(db: Session, *, owner_user_id: UUID, quiz_id: UUID) -> QuizAttempt:
-    quiz = (
-        db.execute(
-            sa.select(Quiz).where(
-                Quiz.id == quiz_id,
-                Quiz.owner_user_id == owner_user_id,
-                Quiz.deleted_at.is_(None),
-            )
-        )
-        .scalars()
-        .first()
+def start_attempt(db: Session, *, owner_user_id: UUID, quiz_id: UUID, resume_existing: bool = False) -> QuizAttempt:
+    query = sa.select(Quiz).where(
+        Quiz.id == quiz_id, Quiz.owner_user_id == owner_user_id, Quiz.deleted_at.is_(None),
     )
+    quiz = db.scalar(query.with_for_update() if resume_existing else query)
     if quiz is None:
         raise ApiError(404, "quiz_not_found", "练习不存在")
+    if resume_existing:
+        existing = db.scalar(sa.select(QuizAttempt).where(
+            QuizAttempt.quiz_id == quiz.id, QuizAttempt.owner_user_id == owner_user_id,
+        ).order_by(QuizAttempt.created_at.desc(), QuizAttempt.id.desc()).limit(1))
+        if existing is not None:
+            return existing
     items = list(
         db.execute(sa.select(QuizItem).where(QuizItem.quiz_id == quiz.id).order_by(QuizItem.ordinal))
         .scalars()

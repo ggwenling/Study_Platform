@@ -4,13 +4,16 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from study_platform.api.v1.ai_jobs import SubmittedJob
 from study_platform.api.v1.auth import get_current_user
 from study_platform.persistence.database import get_db
 from study_platform.persistence.models import User
-from study_platform.services import studio
+from study_platform.services import ai_jobs, studio
 from study_platform.services.study_exports import attachment, export_filename, format_flashcard_deck
 
 router = APIRouter(tags=["studio"])
@@ -120,13 +123,17 @@ def export_kb_notes(
     )
 
 
-@router.post("/knowledge-bases/{kb_id}/notes/generate", status_code=201)
+@router.post("/knowledge-bases/{kb_id}/notes/generate", status_code=202, response_model=SubmittedJob,
+             responses={201: {"description": "Generated note (wait=true)"}})
 def generate_kb_note_artifact(
     kb_id: UUID,
     body: GenerateArtifactBody,
+    wait: bool = False,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not wait:
+        return ai_jobs.enqueue(db, user.id, kb_id, "notes", body.model_dump(mode="json"))
     dto = studio.generate_studio_artifact(
         db,
         owner_user_id=user.id,
@@ -136,7 +143,7 @@ def generate_kb_note_artifact(
         title=body.title,
     )
     db.commit()
-    return dto
+    return JSONResponse(jsonable_encoder(dto), status_code=201)
 
 
 @router.get("/notes/{note_id}")
@@ -218,13 +225,17 @@ def list_all_decks(
     return {"items": studio.list_flashcard_decks(db, user.id, knowledge_base_id=knowledge_base_id)}
 
 
-@router.post("/knowledge-bases/{kb_id}/flashcard-decks/generate", status_code=201)
+@router.post("/knowledge-bases/{kb_id}/flashcard-decks/generate", status_code=202, response_model=SubmittedJob,
+             responses={201: {"description": "Generated flashcard deck (wait=true)"}})
 def generate_deck(
     kb_id: UUID,
     body: GenerateFlashcardsBody,
+    wait: bool = False,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not wait:
+        return ai_jobs.enqueue(db, user.id, kb_id, "flashcards", body.model_dump(mode="json"))
     dto = studio.generate_flashcard_deck(
         db,
         owner_user_id=user.id,
@@ -234,7 +245,7 @@ def generate_deck(
         title=body.title,
     )
     db.commit()
-    return dto
+    return JSONResponse(jsonable_encoder(dto), status_code=201)
 
 
 @router.get("/flashcard-decks/{deck_id}")

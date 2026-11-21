@@ -240,6 +240,7 @@ class Note(Base):
             sa.text("created_at DESC"),
             unique=False,
         ),
+        sa.Index("ix_notes_lexical", "lexical", unique=False, postgresql_using="gin"),
         {"schema": "study"},
     )
 
@@ -255,6 +256,7 @@ class Note(Base):
     title = sa.Column("title", sa.String(255), nullable=False)
     note_type = sa.Column("note_type", sa.String(24), nullable=False)
     content_md = sa.Column("content_md", sa.Text(), nullable=False)
+    lexical = sa.Column("lexical", postgresql.TSVECTOR(), nullable=True)
     generated_content_md = sa.Column("generated_content_md", sa.Text(), nullable=False)
     edit_revision = sa.Column(
         "edit_revision", sa.Integer(), nullable=False, server_default=sa.text("0")

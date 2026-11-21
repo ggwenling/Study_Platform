@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
@@ -38,6 +39,7 @@ from study_platform.services.chat import chunk_dto, chunk_query, visible_indices
 from study_platform.services.citations import citation_dto, citation_quote
 from study_platform.services.learning_anchor import ensure_course_anchor
 from study_platform.services.learning_llm import strip_json_fence
+from study_platform.services.lexical import lexical_column_values
 from study_platform.services.model_calls import invoke_chat
 from study_platform.services.model_connections import llm_available
 from study_platform.services.model_task import learning_task
@@ -388,6 +390,7 @@ def create_note(
         title=cleaned_title,
         note_type=note_type,
         content_md=cleaned_body,
+        lexical=lexical_column_values(f"{cleaned_title}\n{cleaned_body}")["lexical"],
         generated_content_md=cleaned_body,
         edit_revision=0,
         status="ready",
@@ -449,6 +452,7 @@ def append_note(
         raise ApiError(422, "note_too_long", "笔记合并后内容超过 200000 字符")
 
     note.content_md = merged
+    note.lexical = lexical_column_values(f"{note.title}\n{merged}")["lexical"]
     now = _now()
     note.edit_revision = (note.edit_revision or 0) + 1
     note.edited_at = now
@@ -483,6 +487,7 @@ def update_note(
         if not cleaned_body:
             raise ApiError(422, "validation_error", "笔记正文不能为空")
         note.content_md = cleaned_body
+    note.lexical = lexical_column_values(f"{note.title}\n{note.content_md}")["lexical"]
     note.edit_revision = (note.edit_revision or 0) + 1
     note.edited_at = _now()
     note.updated_at = _now()
@@ -629,12 +634,15 @@ def generate_studio_artifact(
     kind: ArtifactKind,
     material_ids: list[UUID] | None = None,
     title: str | None = None,
+    before_publish: Callable[[], object] | None = None,
 ) -> dict[str, Any]:
     if kind not in _STUDIO_PROMPTS:
         raise ApiError(422, "invalid_artifact_kind", "不支持的知识产物类型")
     kb = _owned_kb(db, owner_user_id, knowledge_base_id)
-    ensure_course_anchor(db, kb)
     evidence = _collect_evidence_chunks(db, owner_user_id, knowledge_base_id, material_ids)
+    if before_publish:
+        # The queued path owns its transaction. Release the read connection during model work.
+        db.commit()
     note_type, suffix, instruction = _STUDIO_PROMPTS[kind]
     final_title = (title or "").strip()[:255] or f"{kb.name} · {suffix}"
 
@@ -677,6 +685,9 @@ def generate_studio_artifact(
     if material_ids:
         scope["material_ids"] = [str(m) for m in material_ids]
 
+    if before_publish:
+        before_publish()
+    ensure_course_anchor(db, kb)
     note = Note(
         id=uuid4(),
         owner_user_id=owner_user_id,
@@ -684,6 +695,7 @@ def generate_studio_artifact(
         title=final_title,
         note_type=note_type,
         content_md=content_md,
+        lexical=lexical_column_values(f"{final_title}\n{content_md}")["lexical"],
         generated_content_md=content_md,
         edit_revision=0,
         status="ready",
@@ -750,12 +762,14 @@ def generate_flashcard_deck(
     count: int = 8,
     material_ids: list[UUID] | None = None,
     title: str | None = None,
+    before_publish: Callable[[], object] | None = None,
 ) -> dict[str, Any]:
     kb = _owned_kb(db, owner_user_id, knowledge_base_id)
-    ensure_course_anchor(db, kb)
     evidence = _collect_evidence_chunks(
         db, owner_user_id, knowledge_base_id, material_ids, max_chunks=max(count * 3, 15)
     )
+    if before_publish:
+        db.commit()
     settings = get_settings()
     use_llm = not settings.learning_stub_grader and llm_available(owner_user_id)
     cards_data: list[tuple[str, str, list[int]]] = []
@@ -794,6 +808,9 @@ def generate_flashcard_deck(
     if material_ids:
         scope["material_ids"] = [str(m) for m in material_ids]
 
+    if before_publish:
+        before_publish()
+    ensure_course_anchor(db, kb)
     deck = FlashcardDeck(
         id=uuid4(),
         owner_user_id=owner_user_id,

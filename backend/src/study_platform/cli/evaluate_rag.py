@@ -28,7 +28,7 @@ from study_platform.persistence.models import (
     MaterialVersion,
     User,
 )
-from study_platform.services import ingestion
+from study_platform.services import chunking, ingestion
 from study_platform.services.lexical import lexical_column_values
 from study_platform.services.models import embed_texts
 from study_platform.services.rag_evaluation import (
@@ -208,7 +208,9 @@ def seed_corpus(factory, materials):
             db.flush()
             extracted = list(ingestion.extract(version, version_dir(version.id), lambda _: None))
             parts = [
-                (part, locator) for text, locator in extracted for part in ingestion.chunks(text)
+                (part, locator)
+                for text, locator in extracted
+                for part in chunking.semantic_chunks(text)
             ]
             if not parts:
                 raise ValueError("Evaluation source produced no text")
@@ -225,7 +227,7 @@ def seed_corpus(factory, materials):
                 id=uuid4(),
                 material_version_id=version.id,
                 generation=1,
-                pipeline_profile="document-v1",
+                pipeline_profile=chunking.SEMANTIC_PROFILE,
                 embedding_profile=f"{settings.embedding_model}:1024",
                 embedding_dim=1024,
                 status="ready",

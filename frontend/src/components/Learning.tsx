@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, BookOpen, Camera, Check, ChevronRight, Download, FileText, History, MessageCircle, RotateCcw, X } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { Accordion } from '@/components/arc/accordion/accordion'
@@ -15,6 +15,7 @@ import type {
   LearningResponseResult,
   LearningSource,
   Material,
+  PendingQuiz,
   WrongQuestionItem,
 } from '@/api/types'
 import { ApiError } from '@/api/stream'
@@ -34,6 +35,7 @@ import {
 import { MarkdownContent } from './MarkdownContent'
 import { FlashcardPanel } from './FlashcardPanel'
 import { SourceReaderDrawer, type ReaderActionContext, type SourceReaderTarget } from './SourceReaderDrawer'
+import { AiJobProgress } from './AiJobProgress'
 
 type Props = {
   knowledgeBases: KnowledgeBase[]
@@ -89,13 +91,14 @@ function SourceList({ sources, onOpenSource, disabled = false }: {
 }
 
 export function Learning({ knowledgeBases, notify, overview, refreshOverview }: Props) {
-  const { capabilities } = useWorkspace()
+  const { capabilities, aiJobs, revision } = useWorkspace()
   const navigate = useNavigate()
   const location = useLocation()
   const historyState = location.state as {
     tab?: 'practice' | 'history' | 'wrong' | 'flashcards'
     deckId?: string
     kbId?: string
+    attemptId?: string
     startDueQueue?: boolean
     wrongFilter?: 'all' | 'due'
   } | null
@@ -109,6 +112,10 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   const [materialsError, setMaterialsError] = useState('')
   const [materialsRetry, setMaterialsRetry] = useState(0)
   const [attempt, setAttempt] = useState<LearningAttempt | null>(null)
+  const [pendingQuizzes, setPendingQuizzes] = useState<PendingQuiz[]>([])
+  const [pendingError, setPendingError] = useState('')
+  const [pendingRetry, setPendingRetry] = useState(0)
+  const pendingRequest = useRef<AbortController | null>(null)
   const [attempts, setAttempts] = useState<LearningAttemptSummary[]>([])
   const [attemptsCursor, setAttemptsCursor] = useState<string | null>(null)
   const [loadingMoreAttempts, setLoadingMoreAttempts] = useState(false)
@@ -202,11 +209,26 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   }, [refreshWrongs, refreshAttempts])
 
   useEffect(() => {
+    const controller = new AbortController()
+    pendingRequest.current = controller
+    void allPages((cursor) => api.learning.pendingQuizzes(cursor, controller.signal)).then((rows) => {
+      if (!controller.signal.aborted) {
+        setPendingQuizzes(rows)
+        setPendingError('')
+      }
+    }, (error: unknown) => {
+      if (!controller.signal.aborted) setPendingError(errorMessage(error))
+    })
+    return () => controller.abort()
+  }, [revision, pendingRetry])
+
+  useEffect(() => {
     const state = location.state as typeof historyState
     setTab(state?.tab ?? 'practice')
     setStartDueQueue(Boolean(state?.startDueQueue))
     setWrongDueOnly(state?.wrongFilter === 'due')
     if (state?.kbId) setKbId(state.kbId)
+    if (state?.attemptId) void openAttemptById(state.attemptId)
   }, [location.key])
 
   useEffect(() => {
@@ -258,16 +280,36 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
     })
   }
 
+  function showAttempt(loaded: LearningAttempt) {
+    setAttempt(loaded)
+    const firstUnanswered = loaded.items.findIndex((item) => !item.verdict)
+    setIndex(firstUnanswered >= 0 ? firstUnanswered : 0)
+    setTab('practice')
+  }
+
   async function openAttemptById(attemptId: string) {
     setBusy(true)
     try {
-      const loaded = await api.learning.attempt(attemptId)
-      setAttempt(loaded)
-      const firstUnanswered = loaded.items.findIndex((item) => !item.verdict)
-      setIndex(firstUnanswered >= 0 ? firstUnanswered : 0)
-      setTab('practice')
+      showAttempt(await api.learning.attempt(attemptId))
     } catch (error) {
       notify(error instanceof ApiError ? errorMessage(error) : '无法加载练习记录')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function startPendingQuiz(quiz: PendingQuiz) {
+    setBusy(true)
+    try {
+      const loaded = await api.learning.startAttempt(quiz.id, true)
+      pendingRequest.current?.abort()
+      setPendingQuizzes((rows) => rows.filter((row) => row.id !== quiz.id))
+      setKbId(quiz.knowledge_base_id)
+      showAttempt(loaded)
+      void refreshAttempts()
+      refreshDailyOverview()
+    } catch (error) {
+      notify(errorMessage(error))
     } finally {
       setBusy(false)
     }
@@ -284,16 +326,12 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
     }
     setBusy(true)
     try {
-      const gen = await api.learning.generateQuiz(kbId, Number(quizCount) || 5, {
+      const job = await api.learning.generateQuiz(kbId, Number(quizCount) || 5, {
         mode: quizMode,
         material_ids: scoped ? selectedMaterialIds : null,
       })
-      const next = await api.learning.startAttempt(gen.quiz_id)
-      setAttempt(next)
-      setIndex(0)
-      setTab('practice')
-      await refreshAttempts()
-      notify('已生成练习题')
+      aiJobs.track(job)
+      notify(`已提交「${job.title}」出题任务。`)
     } catch (error) {
       notify(error instanceof ApiError ? errorMessage(error) : '出题失败')
     } finally {
@@ -485,6 +523,11 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
         </div>
       </section>
 
+      <AiJobProgress
+        jobs={aiJobs.jobs.filter((job) => job.job_type === 'quiz')}
+        cancel={aiJobs.cancel}
+      />
+
       <div className="learning-tabs" role="tablist" aria-label="学习视图">
         <button
           type="button"
@@ -539,6 +582,16 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
         aria-labelledby="learning-tab-practice"
         hidden={tab !== 'practice'}
       >
+        {pendingError && <div role="alert">读取待开始试卷失败。{pendingError} <Button type="button" size="sm" variant="ghost" onClick={() => setPendingRetry((value) => value + 1)}>重新读取试卷</Button></div>}
+        {pendingQuizzes.length > 0 && <section aria-label="待开始试卷">
+          <h2>待开始试卷</h2>
+          <ul className="learning-history-list">
+            {pendingQuizzes.map((quiz) => <li key={quiz.id}>
+              <strong>{quiz.title}</strong>
+              <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void startPendingQuiz(quiz)}>开始练习</Button>
+            </li>)}
+          </ul>
+        </section>}
         <div className="learning-config">
           <div className="learning-config-grid">
             <Select

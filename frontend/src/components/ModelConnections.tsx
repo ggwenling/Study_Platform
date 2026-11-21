@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { CircleDot, Database, Ellipsis, Eye, MessageCircle, Plus, Server, ShieldCheck, TriangleAlert } from 'lucide-react'
+import { ArrowDownWideNarrow, CircleDot, Database, Ellipsis, Eye, MessageCircle, Plus, Server, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { api } from '@/api/client'
 import { errorMessage } from '@/api/ui'
 import type { ModelConnection, ModelConnections } from '@/api/types'
@@ -27,8 +27,12 @@ const modelGroups = {
     description: '按需识别图片或 PDF 中的图表、手写文字和公式。',
     scope: '启用连接后，仍须在上传、重新解析或拍照判题时主动选用。',
     updated: '默认视觉模型已更新。' },
+  rerank: { label: '重排模型（Rerank）', icon: ArrowDownWideNarrow,
+    description: '对知识库粗排候选片段进行精排，提升问答证据相关性。',
+    scope: '仅在启用了 Rerank 的知识库检索中使用；服务异常时问答会回退到 RRF。',
+    updated: '默认 Rerank 连接已更新。' },
 } satisfies Record<ModelConnection['kind'], { label: string; icon: typeof Eye; description: string; scope: string; updated: string }>
-const connectionTypes = ['llm', 'embedding', 'vision'] as const
+const connectionTypes = ['llm', 'embedding', 'vision', 'rerank'] as const
 const fixes: Record<string, string> = {
   model_auth_failed: '认证失败。请检查 API Key 和模型访问权限。',
   model_quota_unavailable: '余额不足或请求受限。请检查供应商额度，稍后重试。',
@@ -39,6 +43,9 @@ const fixes: Record<string, string> = {
   embedding_dimension_invalid: '向量维度不匹配。请使用支持 1024 维输出的模型。',
   vision_model_unsupported: '图像输入未被接受。请检查模型名称，确认该模型支持多模态输入。',
   vision_response_invalid: '视觉模型没有返回可用文字。请检查多模态协议与模型配置。',
+  rerank_not_configured: '尚未配置可用的 Rerank 连接。',
+  rerank_response_invalid: 'Rerank 返回格式无效。请确认接口支持标准 /rerank 协议。',
+  rerank_service_error: 'Rerank 服务请求失败。请检查接口地址和模型配置。',
   model_address_blocked: '网络地址未获允许。内网或 HTTP 地址需要管理员配置放行。',
   model_dns_failed: '地址无法解析。请检查 Base URL。',
   model_decryption_failed: '凭据无法解密。请联系管理员或重新填写 API Key。',
@@ -148,7 +155,7 @@ export function ModelConnectionsPanel() {
         <Button size="sm" variant="secondary" aria-label={`${testLabel}：${row.name}`} loading={busy === row.id} disabled={Boolean(busy) || row.status === 'testing' || !credentialsReady} onClick={() => void test(row)}>{testLabel}</Button>
         <Button size="sm" variant="ghost" aria-label={`编辑连接：${row.name}`} disabled={Boolean(busy) || !credentialsReady} onClick={() => open(row)}>编辑</Button>
         {row.is_default
-          ? <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void choose(row.kind, null)}>{row.kind === 'vision' ? '清除默认连接' : '恢复平台默认'}</Button>
+          ? <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => void choose(row.kind, null)}>{row.kind === 'vision' || row.kind === 'rerank' ? '清除默认连接' : '恢复平台默认'}</Button>
           : <Button size="sm" variant="ghost" aria-label={`设为默认：${row.name}`} disabled={Boolean(busy) || row.status !== 'ready' || !credentialsReady} onClick={() => void choose(row.kind, row.id)}>设为默认</Button>}
       </div>
     </article>
@@ -175,12 +182,12 @@ export function ModelConnectionsPanel() {
             <p>{group.description}</p>
           </header>
           {selected ? connection(selected) : <div className="model-platform" data-default="true">
-            <p className="model-current"><CircleDot size={14} aria-hidden="true" />{type === 'vision' ? '视觉理解未启用' : '当前默认 · 平台连接'}</p>
-            {type !== 'vision' && <strong className="model-name">{platform ?? '尚未配置'}</strong>}
+            <p className="model-current"><CircleDot size={14} aria-hidden="true" />{type === 'vision' ? '视觉理解未启用' : type === 'rerank' ? '尚未设置默认连接' : '当前默认 · 平台连接'}</p>
+            {type !== 'vision' && type !== 'rerank' && <strong className="model-name">{platform ?? '尚未配置'}</strong>}
           </div>}
           <div className="model-scope">
             <p>{group.scope}</p>
-            {selected && type !== 'vision' && <p>平台默认：<span className="model-name">{platform ?? '尚未配置'}</span></p>}
+            {selected && type !== 'vision' && type !== 'rerank' && <p>平台默认：<span className="model-name">{platform ?? '尚未配置'}</span></p>}
           </div>
           <div className="model-other-connections">
             <h4>其他连接 <span>{others.length}</span></h4>

@@ -1,6 +1,9 @@
 import { ApiError, errorFromResponse, parseChatStream } from './stream'
 import type { DueFlashcard, ExtractionMode, ModelConnectionKind } from './types'
-import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, MaterialReader, Message, ModelUsageSummary, Page, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
+import type { ReindexStatus, ReindexSubmitted } from './types'
+import type { AiGenerationJobType, AiJob, SubmittedAiJob } from './types'
+import type { PendingQuiz } from './types'
+import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, MaterialReader, Message, ModelUsageSummary, Page, RetrievalSettings, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
@@ -169,9 +172,15 @@ export const api = {
   knowledgeBase: (id: string) => request<KnowledgeBase>(`/knowledge-bases/${pathId(id)}`),
   createKnowledgeBase: (body: KnowledgeBaseInput) => request<KnowledgeBase>('/knowledge-bases', json('POST', body)),
   updateKnowledgeBase: (id: string, body: KnowledgeBaseInput) => request<KnowledgeBase>(`/knowledge-bases/${pathId(id)}`, json('PATCH', body)),
+  updateRetrievalSettings: (id: string, body: Partial<RetrievalSettings>) =>
+    request<{ retrieval_settings: Partial<RetrievalSettings> | null }>(`/knowledge-bases/${pathId(id)}/retrieval-settings`, json('PATCH', body)),
   deleteKnowledgeBase: (id: string) => request<void>(`/knowledge-bases/${pathId(id)}`, json('DELETE')),
   libraryOverview: (id: string, signal?: AbortSignal) => request<LibraryOverview>(`/knowledge-bases/${pathId(id)}/overview`, { signal }),
   syncLibrary: (id: string) => request<LibraryOverview>(`/knowledge-bases/${pathId(id)}/sync`, json('POST')),
+  startReindex: (id: string, connectionId: string | null) => request<ReindexSubmitted>(`/knowledge-bases/${pathId(id)}/reindex`, json('POST', { embedding_connection_id: connectionId })),
+  reindexStatus: (id: string, signal?: AbortSignal) => request<ReindexStatus | null>(`/knowledge-bases/${pathId(id)}/reindex-status`, { signal }),
+  retryReindex: (id: string) => request<ReindexStatus>(`/knowledge-bases/${pathId(id)}/reindex/retry-failed`, json('POST')),
+  cancelReindex: (id: string) => request<ReindexStatus>(`/knowledge-bases/${pathId(id)}/reindex/cancel`, json('POST')),
   documentLocations: (id: string, material: string) => request<DocumentLocation[]>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/locations`),
   fragments: (id: string, filters: Record<string, string | undefined>, signal?: AbortSignal) =>
     request<FragmentPage>(`/knowledge-bases/${pathId(id)}/fragments` + query(filters), { signal }),
@@ -194,6 +203,21 @@ export const api = {
     request<UploadResult>(`/materials/${pathId(id)}/reparse`, json('POST', { extraction_mode: extractionMode })),
   job: (id: string) => request<Job>(`/jobs/${pathId(id)}`),
   cancelJob: (id: string) => request<Pick<Job, 'id' | 'status'>>(`/jobs/${pathId(id)}/cancel`, json('POST')),
+  aiJobs: {
+    list: (options: {
+      knowledgeBaseId?: string
+      jobTypes?: AiGenerationJobType[]
+      status?: 'active' | 'all'
+      limit?: number
+    } = {}) => {
+      const params = new URLSearchParams({ status: options.status ?? 'active', limit: String(options.limit ?? 20) })
+      if (options.knowledgeBaseId) params.set('knowledge_base_id', options.knowledgeBaseId)
+      for (const jobType of options.jobTypes ?? []) params.append('job_types', jobType)
+      return request<AiJob[]>(`/ai-jobs?${params}`)
+    },
+    get: (id: string) => request<AiJob>(`/ai-jobs/${pathId(id)}`),
+    cancel: (id: string) => request<AiJob>(`/ai-jobs/${pathId(id)}/cancel`, json('POST')),
+  },
   preview: (id: string) => request<MaterialPreview>(`/material-versions/${pathId(id)}/preview`),
   materialReader: (id: string, chunkId?: string | null, window = 3, signal?: AbortSignal) =>
     request<MaterialReader>(`/material-versions/${pathId(id)}/reader` + query({ chunk_id: chunkId ?? undefined, window: String(window) }), { signal }),
@@ -221,7 +245,7 @@ export const api = {
       count: number,
       options?: { mode?: 'short_answer' | 'mcq' | 'mixed'; material_ids?: string[] | null },
     ) =>
-      request<{ quiz_id: string; title: string; item_count: number }>(
+      request<SubmittedAiJob>(
         `/learning/knowledge-bases/${pathId(knowledgeBaseId)}/quizzes/generate`,
         json('POST', { count, mode: options?.mode ?? 'short_answer', material_ids: options?.material_ids ?? null }),
       ),
@@ -229,8 +253,10 @@ export const api = {
       request<Page<LearningAttemptSummary>>(
         '/learning/attempts' + query({ knowledge_base_id: knowledgeBaseId, limit: String(limit), cursor }),
       ),
-    startAttempt: (quizId: string) =>
-      request<LearningAttempt>('/learning/attempts', json('POST', { quiz_id: quizId })),
+    pendingQuizzes: (cursor?: string, signal?: AbortSignal) =>
+      request<Page<PendingQuiz>>('/learning/quizzes/pending' + query({ cursor }), { signal }),
+    startAttempt: (quizId: string, resumeExisting?: boolean) =>
+      request<LearningAttempt>('/learning/attempts', json('POST', { quiz_id: quizId, resume_existing: resumeExisting })),
     attempt: (id: string) => request<LearningAttempt>(`/learning/attempts/${pathId(id)}`),
     submitAnswerText: (responseId: string, answerText: string) =>
       request<LearningResponseResult>(
@@ -281,7 +307,7 @@ export const api = {
       knowledgeBaseId: string,
       body: { kind: StudioArtifactKind; material_ids?: string[] | null; title?: string | null },
     ) =>
-      request<StudyNote>(`/knowledge-bases/${pathId(knowledgeBaseId)}/notes/generate`, json('POST', body)),
+      request<SubmittedAiJob>(`/knowledge-bases/${pathId(knowledgeBaseId)}/notes/generate`, json('POST', body)),
     note: (noteId: string) => request<StudyNote>(`/notes/${pathId(noteId)}`),
     updateNote: (noteId: string, body: { title?: string; content_md?: string }) =>
       request<StudyNote>(`/notes/${pathId(noteId)}`, json('PATCH', body)),
@@ -301,7 +327,7 @@ export const api = {
       knowledgeBaseId: string,
       body: { count?: number; material_ids?: string[] | null; title?: string | null } = {},
     ) =>
-      request<FlashcardDeckDetail>(
+      request<SubmittedAiJob>(
         `/knowledge-bases/${pathId(knowledgeBaseId)}/flashcard-decks/generate`,
         json('POST', body),
       ),
@@ -317,7 +343,7 @@ export const api = {
   workshop: {
     hitTest: (
       knowledgeBaseId: string,
-      body: { query: string; top_k?: number; lexical_weight?: number; material_ids?: string[] | null },
+      body: { query: string; top_k?: number; lexical_weight?: number; min_similarity?: number; rerank_enabled?: boolean; rerank_connection_id?: string | null; rerank_candidate_k?: number; material_ids?: string[] | null },
     ) =>
       request<HitTestResponse>(
         `/knowledge-bases/${pathId(knowledgeBaseId)}/hit-test`,

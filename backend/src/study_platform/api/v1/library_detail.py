@@ -23,10 +23,64 @@ from study_platform.persistence.models.materials import (
 )
 from study_platform.persistence.models.operations import AiJob
 from study_platform.services import classification, rag_workshop
+from study_platform.services import reindex as reindex_service
+from study_platform.services.retrieval_settings import validate_rerank_connection
 
 router = APIRouter(prefix="/knowledge-bases/{kb_id}")
 LOCAL_ZONE = "Asia/Shanghai"
 PAGE_SIZE = 20
+
+
+class ReindexKnowledgeBaseBody(BaseModel):
+    embedding_connection_id: UUID | None = None
+    rechunk: bool = True
+
+
+class ReindexSubmitted(BaseModel):
+    job_id: UUID
+    status: str
+    total_materials: int
+
+
+class ReindexFailure(BaseModel):
+    material_version_id: UUID
+    title: str
+    error_code: str
+
+
+class ReindexStatus(BaseModel):
+    job_id: UUID
+    status: str
+    total: int
+    succeeded: int
+    failed: int
+    running: int
+    target_model: str
+    target_connection_id: UUID | None
+    failures: list[ReindexFailure]
+    error_code: str | None
+
+
+@router.post("/reindex", response_model=ReindexSubmitted, status_code=202)
+def start_reindex(kb_id: UUID, body: ReindexKnowledgeBaseBody, db: Session = Depends(get_db),
+                  user=Depends(get_current_user)):
+    kb = owned_kb(db, user, kb_id, lock=True)
+    return reindex_service.enqueue(db, kb, body.embedding_connection_id, body.rechunk)
+
+
+@router.get("/reindex-status", response_model=ReindexStatus | None)
+def reindex_status(kb_id: UUID, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    return reindex_service.latest(db, owned_kb(db, user, kb_id))
+
+
+@router.post("/reindex/retry-failed", response_model=ReindexStatus, status_code=202)
+def retry_reindex(kb_id: UUID, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    return reindex_service.retry(db, owned_kb(db, user, kb_id, lock=True))
+
+
+@router.post("/reindex/cancel", response_model=ReindexStatus)
+def cancel_reindex(kb_id: UUID, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    return reindex_service.cancel(db, owned_kb(db, user, kb_id, lock=True))
 
 
 class ActivityDay(BaseModel):
@@ -372,9 +426,26 @@ class FragmentEditBody(BaseModel):
 
 class HitTestBody(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
-    top_k: int = Field(default=6, ge=1, le=20)
-    lexical_weight: float = Field(default=0.4, ge=0.0, le=2.0)
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    lexical_weight: float | None = Field(default=None, ge=0.0, le=2.0)
+    min_similarity: float | None = Field(default=None, ge=0.0, le=0.95)
+    rerank_enabled: bool | None = None
+    rerank_connection_id: UUID | None = None
+    rerank_candidate_k: int | None = Field(default=None, ge=5, le=50)
     material_ids: list[UUID] | None = Field(default=None, max_length=50)
+
+
+class RetrievalSettingsPatch(BaseModel):
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    lexical_weight: float | None = Field(default=None, ge=0.0, le=1.0)
+    min_similarity: float | None = Field(default=None, ge=0.0, le=0.95)
+    rerank_enabled: bool | None = None
+    rerank_connection_id: UUID | None = None
+    rerank_candidate_k: int | None = Field(default=None, ge=5, le=50)
+
+
+class RetrievalSettingsResponse(BaseModel):
+    retrieval_settings: dict | None
 
 
 class HitTestItem(BaseModel):
@@ -393,6 +464,9 @@ class HitTestItem(BaseModel):
     lexical_score: float | None
     matched_terms: list[str]
     rrf_score: float
+    rrf_rank: int | None = None
+    rerank_rank: int | None = None
+    rerank_score: float | None = None
 
 
 class HitTestResponse(BaseModel):
@@ -400,7 +474,32 @@ class HitTestResponse(BaseModel):
     query_terms: list[str]
     lexical_weight: float
     min_similarity_threshold: float
+    rerank_enabled: bool = False
+    rerank_error: str | None = None
     items: list[HitTestItem]
+
+
+@router.patch("/retrieval-settings", response_model=RetrievalSettingsResponse)
+def patch_retrieval_settings(
+    kb_id: UUID,
+    body: RetrievalSettingsPatch,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    kb = owned_kb(db, user, kb_id, lock=True)
+    settings = dict(kb.retrieval_settings or {})
+    for key in body.model_fields_set:
+        value = getattr(body, key)
+        if key == "rerank_connection_id":
+            validate_rerank_connection(db, user.id, value)
+            value = str(value) if value else None
+        if value is None:
+            settings.pop(key, None)
+        else:
+            settings[key] = value
+    kb.retrieval_settings = settings or None
+    db.commit()
+    return {"retrieval_settings": kb.retrieval_settings}
 
 
 @router.patch("/fragments/{chunk_id}", response_model=Fragment)
@@ -441,5 +540,10 @@ def hit_test(
         query=body.query,
         top_k=body.top_k,
         lexical_weight=body.lexical_weight,
+        min_similarity=body.min_similarity,
+        rerank_enabled=body.rerank_enabled,
+        rerank_connection_id=body.rerank_connection_id,
+        rerank_connection_override="rerank_connection_id" in body.model_fields_set,
+        rerank_candidate_k=body.rerank_candidate_k,
         material_ids=body.material_ids,
     )

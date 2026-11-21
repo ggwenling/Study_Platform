@@ -71,3 +71,27 @@ it('keeps only the current query and loads additional results with the same curs
     '/knowledge?id=kb&fragment=chunk', '/knowledge?id=kb&note=note',
   ])
 })
+
+it('highlights matched terms as text nodes, including special characters', async () => {
+  vi.mocked(api.search).mockResolvedValueOnce({
+    items: [{
+      id: 'material',
+      type: 'material',
+      title: '<script>alert(1)</script> 向量模型',
+      knowledge_base_id: 'kb',
+      excerpt: '正文说明模型与向量检索。',
+      matched_terms: ['<script>', '模型', '向量'],
+    }],
+    next_cursor: null,
+  })
+
+  await changeInput('模型 向量')
+  await act(async () => vi.advanceTimersByTimeAsync(180))
+
+  const result = node.querySelector('[role=option]')!
+  expect(result.querySelector('script')).toBeNull()
+  expect([...result.querySelectorAll('mark.search-highlight')].map((mark) => mark.textContent)).toEqual([
+    '<script>', '向量', '模型', '模型', '向量',
+  ])
+  expect(result.textContent).toContain('<script>alert(1)</script>')
+})

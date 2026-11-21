@@ -3,7 +3,7 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './api/client'
-import type { DueFlashcard, FlashcardDeckDetail, Material, StudyNote } from './api/types'
+import type { DueFlashcard, FlashcardDeckDetail, Material, StudyNote, SubmittedAiJob } from './api/types'
 import { FlashcardPanel } from './components/FlashcardPanel'
 import { LibraryStudio } from './components/LibraryStudio'
 import { ThemeProvider } from './Theme'
@@ -66,6 +66,13 @@ const sampleGuide: StudyNote = {
   created_at: '2026-11-18T02:00:00Z',
   updated_at: '2026-11-18T02:00:00Z',
 }
+
+const submittedNote = (title = '高数资料库 · 学习指南'): SubmittedAiJob => ({
+  job_id: 'note-job', job_type: 'notes', status: 'queued', knowledge_base_id: 'kb-1', title,
+})
+const submittedFlashcards = (title = '高数资料库 · 记忆闪卡'): SubmittedAiJob => ({
+  job_id: 'flashcard-job', job_type: 'flashcards', status: 'queued', knowledge_base_id: 'kb-1', title,
+})
 
 const readyMaterials: Material[] = [
   { id: 'material-1', knowledge_base_id: 'kb-1', title: '线性代数讲义', mime_type: 'text/markdown', byte_size: 100, status: 'ready', version_id: 'v1', job_id: null, created_at: '', error_code: null, error_message: null },
@@ -159,6 +166,8 @@ beforeEach(() => {
     notify: vi.fn(),
     report: vi.fn(),
     refresh: vi.fn(),
+    revision: 0,
+    aiJobs: { jobs: [], track: vi.fn(), cancel: vi.fn() },
   }
   vi.mocked(api.materials).mockResolvedValue({ items: readyMaterials, next_cursor: null })
 })
@@ -218,6 +227,39 @@ describe('Studio notes & Flashcard SM-2 review', () => {
     expect(notify).toHaveBeenCalledWith('已导出知识库笔记 ZIP。')
   })
 
+  it('reloads notes after workspace refresh while the studio stays mounted', async () => {
+    const generatedNote = { ...sampleGuide, id: 'note-2', title: '生成完成后出现的笔记' }
+    vi.mocked(api.studio.notes).mockResolvedValue({ items: [generatedNote] })
+    const renderStudio = () => <LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} readyMaterials={readyMaterials} revision={0}
+      initialNotes={[sampleGuide]} onIngested={vi.fn()} />
+    await render(renderStudio())
+    expect(api.studio.notes).not.toHaveBeenCalled()
+
+    workspace.value.revision += 1
+    await render(renderStudio())
+
+    expect(api.studio.notes).toHaveBeenCalledWith('kb-1', expect.any(AbortSignal))
+    expect(node.textContent).toContain('生成完成后出现的笔记')
+  })
+
+  it('reloads flashcard decks after workspace refresh while the panel stays mounted', async () => {
+    vi.mocked(api.studio.flashcardDecks)
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [sampleDeck] })
+    const renderPanel = () => <FlashcardPanel knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]}
+      defaultKbId="kb-1" notify={vi.fn()} />
+    await render(renderPanel())
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(api.studio.flashcardDecks).toHaveBeenCalledOnce()
+
+    workspace.value.revision += 1
+    await render(renderPanel())
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(api.studio.flashcardDecks).toHaveBeenCalledTimes(2)
+    expect(node.textContent).toContain(sampleDeck.title)
+  })
+
   it('keeps unsaved note text until the user confirms discarding it', async () => {
     await render(<LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} readyMaterials={readyMaterials}
       revision={0} initialNotes={[]} onIngested={vi.fn()} />)
@@ -234,37 +276,21 @@ describe('Studio notes & Flashcard SM-2 review', () => {
     expect(api.studio.createNote).not.toHaveBeenCalled()
   })
 
-  it('keeps a saved guide when a notes list requested before generation arrives late', async () => {
-    let finishStaleRead!: (result: { items: StudyNote[] }) => void
-    let finishFreshRead!: (result: { items: StudyNote[] }) => void
-    vi.mocked(api.studio.notes)
-      .mockImplementationOnce(() => new Promise((resolve) => { finishStaleRead = resolve }))
-      .mockImplementationOnce(() => new Promise((resolve) => { finishFreshRead = resolve }))
-    vi.mocked(api.studio.generateNote).mockResolvedValue(sampleGuide)
+  it('submits study guides without waiting for model completion', async () => {
+    vi.mocked(api.studio.notes).mockResolvedValue({ items: [] })
+    vi.mocked(api.studio.generateNote).mockResolvedValue(submittedNote())
     await render(<LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} readyMaterials={readyMaterials} revision={0} onIngested={vi.fn()} />)
 
     await act(async () => findBtn('生成学习指南')!.click())
     await act(async () => findBtn('确认生成')!.click())
-    expect(vi.mocked(api.studio.notes).mock.calls[0][1]?.aborted).toBe(true)
-    expect(node.querySelector('.studio-note-card')?.textContent).toContain(sampleGuide.title)
-    await act(async () => finishStaleRead({ items: [] }))
-    expect(node.querySelector('.studio-note-card')?.textContent).toContain(sampleGuide.title)
-    expect(api.studio.notes).toHaveBeenCalledTimes(2)
-
-    const otherNote = { ...sampleGuide, id: 'note-2', title: '已有笔记' }
-    await act(async () => finishFreshRead({ items: [sampleGuide, otherNote] }))
-    expect([...node.querySelectorAll('.studio-note-card strong')].map((card) => card.textContent))
-      .toEqual([sampleGuide.title, otherNote.title])
+    expect(workspace.value.aiJobs.track).toHaveBeenCalledWith(submittedNote())
+    expect(node.querySelector('.studio-note-card')).toBeNull()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
 
   it('generates scoped studio notes with custom titles for each artifact kind', async () => {
     vi.mocked(api.studio.notes).mockResolvedValue({ items: [] })
-    vi.mocked(api.studio.generateNote).mockImplementation(async (_kbId, body) => ({
-      ...sampleGuide,
-      id: body.kind,
-      title: body.title ?? sampleGuide.title,
-      artifact_kind: body.kind,
-    }))
+    vi.mocked(api.studio.generateNote).mockImplementation(async (_kbId, body) => submittedNote(body.title ?? `${body.kind} job`))
     await render(
       <LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} readyMaterials={readyMaterials} revision={0} onIngested={vi.fn()} />,
     )
@@ -287,15 +313,14 @@ describe('Studio notes & Flashcard SM-2 review', () => {
         material_ids: ['material-1', 'material-2'],
         title,
       })
-      expect(document.querySelector('[role="dialog"]')?.textContent).toContain(title)
-      const closeButton = document.querySelector<HTMLButtonElement>('[aria-label="关闭笔记详情"]')
-      if (closeButton) await act(async () => closeButton.click())
+      expect(workspace.value.aiJobs.track).toHaveBeenLastCalledWith(submittedNote(title))
+      expect(document.querySelector('[role="dialog"]')).toBeNull()
     }
   })
 
   it('generates studio flashcards with selected materials, title, and chosen count', async () => {
     vi.mocked(api.studio.notes).mockResolvedValue({ items: [] })
-    vi.mocked(api.studio.generateFlashcards).mockResolvedValue(sampleDeck)
+    vi.mocked(api.studio.generateFlashcards).mockResolvedValue(submittedFlashcards('高数闪卡'))
     await render(
       <LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} readyMaterials={readyMaterials} revision={0} onIngested={vi.fn()} />,
     )
@@ -311,12 +336,12 @@ describe('Studio notes & Flashcard SM-2 review', () => {
       material_ids: ['material-1', 'material-2'],
       title: '高数闪卡',
     })
-    expect(navigateMock).toHaveBeenCalledWith('/learning', { state: { tab: 'flashcards', deckId: sampleDeck.id, kbId: 'kb-1' } })
+    expect(workspace.value.aiJobs.track).toHaveBeenCalledWith(submittedFlashcards('高数闪卡'))
+    expect(navigateMock).not.toHaveBeenCalled()
   })
 
-  it('edits and ingests a generated studio note', async () => {
-    vi.mocked(api.studio.notes).mockResolvedValue({ items: [] })
-    vi.mocked(api.studio.generateNote).mockResolvedValue(sampleGuide)
+  it('edits and ingests an existing studio note', async () => {
+    vi.mocked(api.studio.notes).mockResolvedValue({ items: [sampleGuide] })
     vi.mocked(api.studio.updateNote).mockResolvedValue({ ...sampleGuide, title: '修订版提纲', edit_revision: 1 })
     vi.mocked(api.studio.ingestNote).mockResolvedValue({
       material_id: 'mat-from-note',
@@ -327,11 +352,9 @@ describe('Studio notes & Flashcard SM-2 review', () => {
     const onIngested = vi.fn()
 
     await render(
-      <LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} readyMaterials={readyMaterials} revision={0} onIngested={onIngested} />,
+      <LibraryStudio kbId="kb-1" kbName="高数资料库" readyCount={2} readyMaterials={readyMaterials} revision={0} initialNotes={[sampleGuide]} onIngested={onIngested} />,
     )
-    await act(async () => findBtn('生成学习指南')!.click())
-    await act(async () => findBtn('确认生成')!.click())
-    expect(api.studio.generateNote).toHaveBeenCalledWith('kb-1', { kind: 'study_guide', material_ids: null, title: null })
+    await act(async () => node.querySelector('.studio-note-card')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(document.body.textContent).toContain('矩阵特征值定义')
 
     await act(async () => findBtn('回写为知识库资料')!.click())
@@ -349,7 +372,7 @@ describe('Studio notes & Flashcard SM-2 review', () => {
 
   it('generates flashcards, flips to reveal answer, and submits SM-2 rating to advance', async () => {
     vi.mocked(api.studio.flashcardDecks).mockResolvedValue({ items: [] })
-    vi.mocked(api.studio.generateFlashcards).mockResolvedValue(sampleDeck)
+    vi.mocked(api.studio.flashcardDeck).mockResolvedValue(sampleDeck)
     vi.mocked(api.studio.reviewFlashcard).mockResolvedValue({
       ...sampleDeck.cards[0],
       interval_days: 2,
@@ -360,13 +383,13 @@ describe('Studio notes & Flashcard SM-2 review', () => {
 
     await render(
       <FlashcardPanel
+        initialDeckId={sampleDeck.id}
         knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]}
         defaultKbId="kb-1"
         notify={vi.fn()}
       />,
     )
-    await act(async () => findBtn('从当前库生成闪卡')!.click())
-    expect(api.studio.generateFlashcards).toHaveBeenCalledWith('kb-1', { count: 8, material_ids: null, title: null })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(node.textContent).toContain('什么是正交矩阵？')
 
     await act(async () => findBtn('翻转查看答案')!.click())
@@ -451,11 +474,11 @@ describe('Studio notes & Flashcard SM-2 review', () => {
   })
   it('retries an uncertain review with the same idempotency key and rating', async () => {
     vi.mocked(api.studio.flashcardDecks).mockResolvedValue({ items: [] })
-    vi.mocked(api.studio.generateFlashcards).mockResolvedValue(sampleDeck)
+    vi.mocked(api.studio.flashcardDeck).mockResolvedValue(sampleDeck)
     vi.mocked(api.studio.reviewFlashcard).mockRejectedValueOnce(new TypeError('offline'))
       .mockResolvedValueOnce(sampleDeck.cards[0]).mockResolvedValueOnce(sampleDeck.cards[1])
-    await render(<FlashcardPanel knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} defaultKbId="kb-1" notify={vi.fn()} />)
-    await act(async () => findBtn('从当前库生成闪卡')!.click())
+    await render(<FlashcardPanel initialDeckId={sampleDeck.id} knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} defaultKbId="kb-1" notify={vi.fn()} />)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
     await act(async () => findBtn('翻转查看答案')!.click())
     await act(async () => findBtn('熟练掌握')!.click())
     expect(node.textContent).toContain('评分结果尚未确认')
@@ -473,7 +496,7 @@ describe('Studio notes & Flashcard SM-2 review', () => {
 
   it('generates flashcards from selected ready materials and resets selection when the library changes', async () => {
     vi.mocked(api.studio.flashcardDecks).mockResolvedValue({ items: [] })
-    vi.mocked(api.studio.generateFlashcards).mockResolvedValue(sampleDeck)
+    vi.mocked(api.studio.generateFlashcards).mockResolvedValue(submittedFlashcards('我的线代卡组'))
     vi.mocked(api.materials).mockImplementation(async (kbId) => ({
       items: kbId === 'kb-2' ? secondLibraryMaterials : readyMaterials,
       next_cursor: null,
@@ -508,6 +531,7 @@ describe('Studio notes & Flashcard SM-2 review', () => {
       material_ids: ['material-1', 'material-2'],
       title: '我的线代卡组',
     })
+    expect(workspace.value.aiJobs.track).toHaveBeenCalledWith(submittedFlashcards('我的线代卡组'))
   })
 
   it('starts the cross-deck due queue, guards keyboard shortcuts, and reviews weak cards again', async () => {

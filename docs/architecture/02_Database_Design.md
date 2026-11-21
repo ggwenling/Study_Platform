@@ -1,5 +1,7 @@
 # Database Design — AI Learning Platform
 
+> **归档快照｜2026-11-14。** 本文保留当时的数据库设计。现行 schema 与迁移约定见 [数据库规则](../database-rules.md)。
+
 > 版本：2.0 / LangChain + LangGraph 版设计草案　|　2026-11-14  
 > 数据库：PostgreSQL 16 + pgvector（V1 `vector(1024)`）；独立 `study` schema；迁移：Alembic。  
 > 对应文档：[01 Architecture Design](01_Architecture_Design.md) · [03 API Design](03_API_Design.md)

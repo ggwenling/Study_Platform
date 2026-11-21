@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -27,7 +28,7 @@ from study_platform.persistence.models import (
     MaterialVersion,
     User,
 )
-from study_platform.services import rag_workshop
+from study_platform.services import chat, rag_workshop
 from study_platform.services.lexical import lexical_column_values
 
 pytestmark = pytest.mark.integration
@@ -59,8 +60,8 @@ def workshop_env(tmp_path, monkeypatch):
         allowed_origins=["http://testserver"],
     )
     for target in (
-        "study_platform.services.rag_workshop.get_settings",
         "study_platform.services.model_connections.get_settings",
+        "study_platform.services.rag_workshop.get_settings",
         "study_platform.core.config.get_settings",
     ):
         monkeypatch.setattr(target, lambda: settings)
@@ -215,6 +216,75 @@ def test_hit_test_hybrid_weights_and_fragment_reembedding(workshop_env):
     assert top_hit["vector_similarity"] == pytest.approx(1.0, abs=1e-3)
     assert top_hit["lexical_rank"] == 1
     assert len(top_hit["matched_terms"]) >= 1
+
+
+def test_retrieval_settings_patch_and_hit_test_inheritance(workshop_env):
+    http, db, kb_id, _ = workshop_env
+    payload = {
+        "top_k": 4,
+        "lexical_weight": 0.75,
+        "min_similarity": 0.6,
+        "rerank_enabled": True,
+        "rerank_candidate_k": 12,
+    }
+    saved = http.patch(f"/knowledge-bases/{kb_id}/retrieval-settings", json=payload)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["retrieval_settings"] == payload
+    assert http.get(f"/knowledge-bases/{kb_id}").json()["retrieval_settings"] == payload
+
+    result = http.post(
+        f"/knowledge-bases/{kb_id}/hit-test", json={"query": "拉格朗日乘子"}
+    )
+    assert result.status_code == 200, result.text
+    response = result.json()
+    assert response["lexical_weight"] == 0.75
+    assert response["min_similarity_threshold"] == 0.6
+    assert response["rerank_enabled"] is True
+    assert response["rerank_error"] == "rerank_not_configured"
+    assert len(response["items"]) <= 4
+
+    bad_range = http.patch(
+        f"/knowledge-bases/{kb_id}/retrieval-settings", json={"top_k": 21}
+    )
+    assert bad_range.status_code == 422
+    bad_connection = http.patch(
+        f"/knowledge-bases/{kb_id}/retrieval-settings",
+        json={"rerank_connection_id": str(uuid4())},
+    )
+    assert bad_connection.status_code == 422
+    assert db.get(KnowledgeBase, kb_id).retrieval_settings == payload
+
+
+def test_rerank_only_receives_candidates_that_contribute_to_retrieval(workshop_env, monkeypatch):
+    http, db, kb_id, (strong, lexical_only, _) = workshop_env
+    owner = db.get(KnowledgeBase, kb_id).owner_user_id
+    index_id = str(db.get(MaterialChunk, strong).index_version_id)
+    seen = []
+
+    def rank(_owner, _query, documents, **_):
+        seen.append(documents)
+        return [{"index": i, "relevance_score": 1.0} for i in reversed(range(len(documents)))]
+
+    monkeypatch.setattr(rag_workshop, "rerank", rank)
+    monkeypatch.setattr(chat, "rerank", rank)
+    monkeypatch.setattr(chat, "get_settings", rag_workshop.get_settings)
+    monkeypatch.setattr(chat, "session_factory", lambda: lambda: nullcontext(db))
+    for weight, expected in [(0, [strong]), (1, [lexical_only, strong])]:
+        settings = {"rerank_enabled": True, "min_similarity": 0.8, "lexical_weight": weight}
+        query = "拉格朗日乘子"
+        response = http.post(f"/knowledge-bases/{kb_id}/hit-test", json={"query": query, **settings})
+        assert response.status_code == 200, response.text
+        assert [item["chunk_id"] for item in response.json()["items"]] == [str(cid) for cid in expected]
+        chat.retrieve_hybrid({"index_version_ids": [index_id], "retrieval_settings": settings},
+                             [query], [_unit_vec(1, 0)], owner)
+        assert seen[-1] == seen[-2] and len(seen[-1]) == len(expected)
+    monkeypatch.setattr(rag_workshop, "embed_texts", lambda *_args, **_kwargs: [[0, 0, 1] + [0] * 1021])
+    response = http.post(f"/knowledge-bases/{kb_id}/hit-test", json={
+        "query": "拉格朗日乘子", "rerank_enabled": True, "min_similarity": 0.8, "lexical_weight": 0,
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == []
+    assert len(seen) == 4
 
 
 

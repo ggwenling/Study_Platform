@@ -31,12 +31,14 @@ from study_platform.services.model_calls import astream_chat
 from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.models import embed_texts, provider_error
 from study_platform.services.query_rewrite import rewrite_query
+from study_platform.services.rerank import rerank
 from study_platform.services.retrieval import (
     LEXICAL_IDF_POOL,
     dedup_documents,
     fuse_rankings,
     idf_rank,
 )
+from study_platform.services.retrieval_settings import effective_settings, rerank_snapshot
 
 ACTIVE = ("created", "running")
 STREAM_POLL_SECONDS = 1
@@ -69,7 +71,10 @@ def scope_dto(run):
     }
 
 
-def visible_indices(db, owner, kb_id, material_ids=None, *, index_ids=None):
+def visible_indices(
+    db, owner, kb_id, material_ids=None, *, index_ids=None,
+    allow_retired=False, expected_profile=None,
+):
     query = (
         sa.select(IndexVersion, Material.id)
         .join(MaterialVersion, IndexVersion.material_version_id == MaterialVersion.id)
@@ -78,10 +83,13 @@ def visible_indices(db, owner, kb_id, material_ids=None, *, index_ids=None):
             Material.owner_user_id == owner, Material.knowledge_base_id == kb_id,
             Material.deleted_at.is_(None), Material.status == "active",
             MaterialVersion.is_current.is_(True),
-            MaterialVersion.parse_status == "ready", IndexVersion.is_active.is_(True),
-            IndexVersion.status == "ready",
+            MaterialVersion.parse_status == "ready",
         )
     )
+    if allow_retired:
+        query = query.where(IndexVersion.status.in_(("ready", "retired")))
+    else:
+        query = query.where(IndexVersion.is_active.is_(True), IndexVersion.status == "ready")
     if material_ids is not None:
         query = query.where(Material.id.in_(material_ids))
     if index_ids is not None:
@@ -91,10 +99,17 @@ def visible_indices(db, owner, kb_id, material_ids=None, *, index_ids=None):
     rows = db.execute(query).all()
     if material_ids is not None and {r[1] for r in rows} != set(material_ids):
         raise ApiError(409, "scope_unavailable", "所选资料不存在或尚未完成索引")
-    profile = model_connections.embedding_profile(owner, kb_id, db)
+    profile = expected_profile or model_connections.embedding_profile(owner, kb_id, db)
     if any(row[0].embedding_profile != profile for row in rows):
         raise ApiError(409, "embedding_profile_mismatch", "资料向量配置已变更，请重新索引")
     return sorted(str(row[0].id) for row in rows)
+
+
+def scope_embedding_profile(scope):
+    profile = scope.get("embedding_profile")
+    if profile:
+        return profile
+    return (scope.get("embedding_connection") or {}).get("binding", {}).get("profile")
 
 
 def expire_runs(db, conversation_id):
@@ -156,6 +171,9 @@ def prepare(owner: UUID, data: dict, key: str):
             raise ApiError(422, "materials_required", "摘要需要明确选择资料；资料范围不能为空")
         indices = visible_indices(db, owner, kb.id,
                                   [UUID(x) for x in selected] if selected else None)
+        retrieval = effective_settings(kb.retrieval_settings)
+        embedding_connection = model_connections.library_snapshot(db, owner, kb.id)
+        rerank_connection = rerank_snapshot(db, owner, retrieval)
         llm_connection = model_connections.default_snapshot(db, owner, "llm")
         model_name = (model_connections.owned(db, owner, UUID(llm_connection["id"])).versions[str(llm_connection["revision"])]["model"]
                       if llm_connection["id"] else get_settings().chat_model)
@@ -167,7 +185,10 @@ def prepare(owner: UUID, data: dict, key: str):
             model_profile=model_name, prompt_version="rag-v1",
             source_scope={**data, "knowledge_base_name": kb.name, "index_version_ids": indices,
                           "llm_connection": llm_connection,
-                          "embedding_connection": model_connections.library_snapshot(db, owner, kb.id)},
+                          "embedding_connection": embedding_connection,
+                          "embedding_profile": embedding_connection.get("binding", {}).get("profile"),
+                          "retrieval_settings": retrieval,
+                          "rerank_connection": rerank_connection},
         )
         db.add(run)
         db.flush()
@@ -256,7 +277,9 @@ def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None)
         selected = run.source_scope.get("material_ids")
         current = visible_indices(db, owner, kb.id,
                                   [UUID(x) for x in selected] if selected else None,
-                                  index_ids=run.source_scope["index_version_ids"])
+                                  index_ids=run.source_scope["index_version_ids"],
+                                  allow_retired=True,
+                                  expected_profile=scope_embedding_profile(run.source_scope))
         if not set(run.source_scope["index_version_ids"]).issubset(current):
             raise ApiError(409, "scope_unavailable", "原资料版本已不可用，请开始新轮次")
         if edited_content is not None:
@@ -294,7 +317,11 @@ def checkpoint(run_id, fence, content, status=None, citations=None, failure=None
             status, failure = "failed", "turn_interrupted"
         elif status in (None, "completed"):
             expected = original.source_scope["index_version_ids"]
-            current = visible_indices(db, original.owner_user_id, kb.id, index_ids=expected)
+            current = visible_indices(
+                db, original.owner_user_id, kb.id, index_ids=expected,
+                allow_retired=True,
+                expected_profile=scope_embedding_profile(original.source_scope),
+            )
             if current != expected:
                 status, failure = "failed", "scope_unavailable"
         assistant = db.scalar(sa.select(Message).where(
@@ -409,10 +436,12 @@ def _finalize_ranking(chunks, limit):
     return dedup_documents(chunks, limit)
 
 
-def _vector_ranking(db, query, scoped, vector, limit):
+def _vector_ranking(db, query, scoped, vector, limit, min_similarity=None):
+    if min_similarity is None:
+        min_similarity = get_settings().retrieval_min_similarity
     distance = scoped.c.embedding.cosine_distance(vector)
     matches = sa.select(scoped.c.chunk_id, distance.label("distance")).where(
-        distance <= 1 - get_settings().retrieval_min_similarity,
+        distance <= 1 - min_similarity,
     ).order_by(distance, scoped.c.chunk_id).limit(limit).subquery()
     rows = db.execute(
         query.join(matches, matches.c.chunk_id == MaterialChunk.id).order_by(
@@ -493,9 +522,16 @@ def retrieve_hybrid(scope, queries, vectors, owner: UUID):
     if not indices or len(vectors) != len(queries):
         return []
     settings = get_settings()
-    candidate_k = _candidate_limit()
+    retrieval = effective_settings(scope.get("retrieval_settings"), settings)
+    top_k = int(retrieval["top_k"])
+    rerank_enabled = bool(retrieval["rerank_enabled"])
+    candidate_k = (
+        max(top_k, int(retrieval["rerank_candidate_k"]))
+        if rerank_enabled
+        else max(settings.retrieval_candidate_k, top_k)
+    )
     profile = model_connections.embedding_profile(owner)
-    lexical_weight = settings.retrieval_lexical_weight if settings.retrieval_hybrid_enabled else 0.0
+    lexical_weight = float(retrieval["lexical_weight"]) if settings.retrieval_hybrid_enabled else 0.0
     with session_factory()() as db:
         query = chunk_query(indices, owner)
         scoped = (
@@ -507,16 +543,34 @@ def retrieve_hybrid(scope, queries, vectors, owner: UUID):
             .cte("scoped")
             .prefix_with("MATERIALIZED")
         )
-        rankings = [_vector_ranking(db, query, scoped, vector, candidate_k) for vector in vectors]
+        rankings = [
+            _vector_ranking(
+                db, query, scoped, vector, candidate_k, float(retrieval["min_similarity"])
+            )
+            for vector in vectors
+        ]
         weights = [1.0] * len(rankings)
         if lexical_weight > 0:
             for text in queries:
                 branch = _lexical_ranking(db, query, text, candidate_k)
                 rankings.append(branch)
                 weights.append(lexical_weight)
-        return _finalize_ranking(
-            fuse_rankings(rankings, candidate_k, weights=weights), _final_limit()
-        )
+        candidates = fuse_rankings(rankings, candidate_k, weights=weights)
+    if not rerank_enabled:
+        return _finalize_ranking(candidates, top_k)
+    ranked = rerank(
+        owner,
+        queries[0],
+        [f"{item['title']}\n{item['text']}" for item in candidates],
+        top_n=len(candidates),
+        saved=scope.get("rerank_connection"),
+        fallback=True,
+    )
+    if not ranked:
+        return _finalize_ranking(candidates, top_k)
+    ordered_indexes = [item["index"] for item in ranked]
+    ordered_indexes.extend(index for index in range(len(candidates)) if index not in set(ordered_indexes))
+    return _finalize_ranking([candidates[index] for index in ordered_indexes], top_k)
 
 
 def prompt(scope, evidence, history):

@@ -31,6 +31,9 @@ vi.mock('./api/client', () => ({
     retryMaterial: vi.fn(),
     reparseMaterial: vi.fn(),
     job: vi.fn(),
+    knowledgeBase: vi.fn(),
+    modelConnections: vi.fn(),
+    reindexStatus: vi.fn(),
     libraryOverview: vi.fn(),
     syncLibrary: vi.fn(),
     documentLocations: vi.fn(),
@@ -93,6 +96,9 @@ function findButton(label: string) {
 beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(api.studio.notes).mockResolvedValue({ items: [] })
+  vi.mocked(api.knowledgeBase).mockImplementation(async (id) => ({ id, name: '资料库', description: null, created_at: '', updated_at: '' }))
+  vi.mocked(api.modelConnections).mockResolvedValue({ items: [], encryption_available: true, platform_llm: null, platform_embedding: null })
+  vi.mocked(api.reindexStatus).mockResolvedValue(null)
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('IntersectionObserver', class { observe() {} unobserve() {} disconnect() {} takeRecords() { return [] } })
@@ -112,6 +118,7 @@ beforeEach(() => {
     notify: vi.fn(),
     report: vi.fn(),
     requireLogin: vi.fn(),
+    aiJobs: { jobs: [], track: vi.fn(), cancel: vi.fn() },
     chat: { activeFor: () => null, pendingFor: () => null, isBusy: () => false, send: vi.fn(), stop: vi.fn(), resend: vi.fn() },
     libraryUploadQueue: { items: [], uploading: false, latestNote: '', enqueue: vi.fn(), retryItem: vi.fn(), cancelItem: vi.fn(), dismissFinished: vi.fn() },
   }

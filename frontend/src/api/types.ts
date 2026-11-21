@@ -15,7 +15,15 @@ export type ChatEvent =
   | ({ type: 'error' } & ApiErrorBody)
   | { type: 'stopped'; turn_id: string; message?: Message }
 export interface UploadResult { material_id: string; version_id: string; job_id: string; status: string }
-export interface KnowledgeBase { id: string; name: string; description: string | null; created_at: string; updated_at: string; embedding_connection_id?: string | null; embedding_binding?: { model: string; base_url: string; dimensions: number } | null }
+export interface RetrievalSettings {
+  top_k: number
+  lexical_weight: number
+  min_similarity: number
+  rerank_enabled: boolean
+  rerank_connection_id?: string | null
+  rerank_candidate_k: number
+}
+export interface KnowledgeBase { id: string; name: string; description: string | null; created_at: string; updated_at: string; embedding_connection_id?: string | null; embedding_binding?: { model: string; base_url: string; dimensions: number } | null; retrieval_settings?: Partial<RetrievalSettings> | null }
 export interface KnowledgeBaseInput { name: string; description?: string | null }
 export interface Conversation { id: string; project_knowledge_base_id: string | null; title: string | null; created_at: string; updated_at: string; archived_at?: string | null }
 export interface SearchItem {
@@ -26,6 +34,7 @@ export interface SearchItem {
   excerpt?: string
   locator?: Record<string, unknown>
   retrieval_enabled?: boolean
+  matched_terms?: string[]
 }
 export interface Dashboard {
   knowledge_base_count: number
@@ -36,7 +45,7 @@ export interface Dashboard {
   due_wrong_question_count: number
   activity: { date: string; count: number }[]
 }
-export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; vision?: boolean; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
+export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; vision?: boolean; rerank?: boolean; retrieval_defaults?: Omit<RetrievalSettings, 'rerank_connection_id'>; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
 export interface ModelUsageBucket { key: string; label?: string | null; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }
 export interface ModelUsageTotals { calls: number; successes: number; failures: number; fallback_calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }
 export interface ModelUsageSummary { days: number; since: string; totals: ModelUsageTotals; by_day: ModelUsageBucket[]; by_purpose: ModelUsageBucket[]; by_model: ModelUsageBucket[]; by_connection: ModelUsageBucket[] }
@@ -87,6 +96,8 @@ export interface LearningItem {
   sources?: LearningSource[]
 }
 
+export interface PendingQuiz { id: string; title: string; knowledge_base_id: string }
+
 export interface LearningAttempt {
   id: string
   quiz_id: string
@@ -132,6 +143,30 @@ export interface WrongQuestionItem {
 
 export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null; source_url?: string | null; page_count?: number | null }
 export interface Job { id: string; status: string; phase: string | null; progress: number; error_code: string | null; attempt_count: number }
+export type AiGenerationJobType = 'notes' | 'flashcards' | 'quiz'
+export type AiJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export interface SubmittedAiJob {
+  job_id: string
+  job_type: AiGenerationJobType
+  status: 'queued'
+  knowledge_base_id: string
+  title: string
+}
+export interface AiJob {
+  id: string
+  job_type: AiGenerationJobType
+  knowledge_base_id: string | null
+  status: AiJobStatus
+  phase: string
+  progress: number
+  title: string
+  result_resource_type: string | null
+  result_resource_id: string | null
+  error_code: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+}
 export interface MaterialPreview { version_id: string; mime_type: string; page_count: number | null; sections: { text: string; locator: Record<string, unknown> }[] }
 export interface MaterialReaderChunk { id: string; ordinal: number; text: string; locator: Record<string, unknown>; location_label: string; is_target: boolean }
 export interface MaterialReader {
@@ -171,6 +206,13 @@ export interface LibraryOverview {
   activity: Dashboard['activity']
 }
 export interface DocumentLocation { id: string; heading: string | null; locator: Record<string, unknown>; count: number }
+export interface ReindexSubmitted { job_id: string; status: 'queued'; total_materials: number }
+export interface ReindexStatus {
+  job_id: string; status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  total: number; succeeded: number; failed: number; running: number;
+  target_model: string; target_connection_id: string | null; error_code: string | null;
+  failures: { material_version_id: string; title: string; error_code: string }[];
+}
 export type Fragment = {
   id: string; text: string; material_id: string; title: string; mime_type: string;
   version_id: string; locator: Record<string, unknown>; estimated_tokens: number;
@@ -182,7 +224,7 @@ export interface ClassificationState extends Classification {
   ready: boolean; suggestion_id: string | null; status: string; suggestion: Classification | null
 }
 export interface ClassificationDecision extends Classification { suggestion_id: string; ignore?: boolean }
-export type ModelConnectionKind = 'llm' | 'embedding' | 'vision'
+export type ModelConnectionKind = 'llm' | 'embedding' | 'vision' | 'rerank'
 export type ExtractionMode = 'ocr' | 'vlm'
 
 export interface ModelConnection {
@@ -266,6 +308,9 @@ export interface HitTestItem {
   lexical_score: number | null
   matched_terms: string[]
   rrf_score: number
+  rrf_rank?: number | null
+  rerank_rank?: number | null
+  rerank_score?: number | null
 }
 
 export interface HitTestResponse {
@@ -273,5 +318,7 @@ export interface HitTestResponse {
   query_terms: string[]
   lexical_weight: number
   min_similarity_threshold: number
+  rerank_enabled?: boolean
+  rerank_error?: string | null
   items: HitTestItem[]
 }

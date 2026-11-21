@@ -67,6 +67,21 @@ it('tests and selects the visual connection independently of the text model', as
   expect(api.defaultModelConnection).toHaveBeenLastCalledWith('vision', null)
 })
 
+it('tests and enables a default rerank connection independently', async () => {
+  const rerank: ModelConnection = { ...row, id: 'rerank', name: '精排服务', kind: 'rerank', model: 'jina-reranker' }
+  const ready: ModelConnection = { ...rerank, status: 'ready' }
+  vi.mocked(api.modelConnections).mockResolvedValue(data([rerank]))
+  await act(async () => root.render(<ModelConnectionsPanel />))
+  expect(node.textContent).toContain('重排模型（Rerank）')
+  vi.mocked(api.testModelConnection).mockResolvedValue(ready)
+  vi.mocked(api.modelConnections).mockResolvedValue(data([ready]))
+  await click('测试连接')
+  expect(api.testModelConnection).toHaveBeenCalledWith('rerank')
+  expect(button('设为默认').disabled).toBe(false)
+  await click('设为默认')
+  expect(api.defaultModelConnection).toHaveBeenCalledWith('rerank', 'rerank')
+})
+
 it('saves credentials once as a draft and clears the form on close', async () => {
   await act(async () => root.render(<ModelConnectionsPanel />))
   await click('添加连接')

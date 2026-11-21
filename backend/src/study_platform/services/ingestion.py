@@ -1,13 +1,14 @@
 """Durable ingestion worker and document extraction."""
 
 import hashlib
+import logging
 import re
 import shutil
-import socket
 import zipfile
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from threading import Lock
 from uuid import uuid4
 
 import sqlalchemy as sa
@@ -27,14 +28,17 @@ from study_platform.persistence.models.materials import (
     MaterialVersion,
 )
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
-from study_platform.services import classification, model_connections
+from study_platform.services import chunking, classification, job_queue, model_connections
 from study_platform.services.lexical import lexical_column_values
+from study_platform.services.material_reader import PDFIUM_LOCK
 from study_platform.services.model_usage import ModelUsageContext
 from study_platform.services.models import embed_texts
 from study_platform.services.storage import source_path, version_dir
 from study_platform.services.vision_pipeline import extract_vision
 
 _ocr = None
+_ocr_lock = Lock()
+logger = logging.getLogger(__name__)
 
 
 def now():
@@ -43,13 +47,14 @@ def now():
 
 def ocr_image(image):
     global _ocr
-    if _ocr is None:
-        from rapidocr import RapidOCR
-
-        _ocr = RapidOCR()
     import numpy as np
 
-    result = _ocr(np.asarray(image.convert("RGB")))
+    with _ocr_lock, image.convert("RGB") as rgb:
+        if _ocr is None:
+            from rapidocr import RapidOCR
+
+            _ocr = RapidOCR()
+        result = _ocr(np.asarray(rgb))
     texts = getattr(result, "txts", None)
     if texts is None:
         texts = []
@@ -66,6 +71,25 @@ def ocr_image(image):
         ]
         if boxes is not None and scores is not None
         else []
+    )
+
+
+def effective_char_count(text):
+    """Count letters and digits, excluding whitespace and punctuation."""
+    return sum(character.isalnum() for character in text)
+
+
+def _has_large_image(page, pdfium):
+    width, height = page.get_size()
+    page_area = width * height
+    if page_area <= 0:
+        return False
+    return any(
+        max(0, right - left) * max(0, top - bottom) / page_area >= 0.25
+        for left, bottom, right, top in (
+            image.get_bounds()
+            for image in page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE])
+        )
     )
 
 
@@ -266,43 +290,81 @@ def extract(version, output_dir, phase):
     elif mime == "application/pdf":
         import pypdfium2 as pdfium
 
-        doc = pdfium.PdfDocument(path)
+        with PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(path)
         try:
-            if len(doc) > settings.max_pdf_pages or len(doc) == 0:
+            with PDFIUM_LOCK:
+                page_count = len(doc)
+            if page_count > settings.max_pdf_pages or page_count == 0:
                 raise ValueError("Invalid PDF page count")
-            version.page_count = len(doc)
-            for number in range(1, len(doc) + 1):
+            version.page_count = page_count
+            for number in range(1, page_count + 1):
                 phase("parsing")
-                page = doc[number - 1]
-                try:
-                    textpage = page.get_textpage()
+                with PDFIUM_LOCK:
+                    page = doc[number - 1]
                     try:
-                        text = textpage.get_text_range().strip()
-                    finally:
-                        textpage.close()
-                    if text:
-                        yield text, {"page": number}
-                    else:
-                        phase("ocr")
-                        width, height = page.get_size()
-                        scale = min(200 / 72, 2500 / max(width, height))
-                        bitmap = page.render(scale=scale)
+                        textpage = page.get_textpage()
                         try:
-                            image = bitmap.to_pil()
-                            image.save(output_dir / f"page-{number}.png")
-                            lines = ocr_image(image)
-                            image.close()
+                            text = textpage.get_text_range().strip()
                         finally:
-                            bitmap.close()
-                        if lines:
-                            yield (
-                                "\n".join(line["text"] for line in lines),
-                                {"page": number, "ocr": lines},
+                            textpage.close()
+                        effective_len = effective_char_count(text)
+                        should_ocr = effective_len < settings.pdf_ocr_min_effective_chars or (
+                            effective_len < settings.pdf_ocr_image_page_max_chars
+                            and _has_large_image(page, pdfium)
+                        )
+                        image = None
+                        if should_ocr:
+                            try:
+                                width, height = page.get_size()
+                                scale = min(200 / 72, 2500 / max(width, height))
+                                bitmap = page.render(scale=scale)
+                                try:
+                                    rendered = bitmap.to_pil()
+                                finally:
+                                    bitmap.close()
+                                image = rendered
+                            except (LostLease, DBAPIError):
+                                raise
+                            except Exception:
+                                if not effective_len:
+                                    raise
+                                logger.warning("Could not render PDF page %d for OCR. Using its text layer.", number)
+                    finally:
+                        page.close()
+                if image is not None:
+                    with closing(image):
+                        phase("ocr")
+                        try:
+                            lines = ocr_image(image)
+                            ocr_text = "\n".join(line["text"] for line in lines)
+                            ocr_effective_len = effective_char_count(ocr_text)
+                            use_ocr = ocr_effective_len > 0 and (
+                                effective_len == 0 or ocr_effective_len
+                                >= max(int(effective_len * 1.5), effective_len + 20)
                             )
-                finally:
-                    page.close()
+                        except (LostLease, DBAPIError):
+                            raise
+                        except Exception:
+                            if not effective_len:
+                                raise
+                            use_ocr = False
+                        if use_ocr:
+                            preview = output_dir / f"page-{number}.png"
+                            temporary = preview.with_name(f".{preview.name}.tmp")
+                            try:
+                                image.save(temporary, format="PNG")
+                                temporary.replace(preview)
+                            except OSError:
+                                logger.warning("Could not save OCR preview for PDF page %d.", number)
+                    if use_ocr:
+                        yield ocr_text, {"page": number, "ocr": lines}
+                        continue
+                if text:
+                    yield text, {"page": number}
         finally:
-            doc.close()
+            with PDFIUM_LOCK:
+                doc.close()
     elif mime in ("image/png", "image/jpeg"):
         from PIL import Image
 
@@ -329,72 +391,10 @@ def chunks(text, size=800, overlap=120):
         start += size - overlap
 
 
-class LostLease(Exception):
-    pass
-
+LostLease = job_queue.LostLease
 
 def claim(db):
-    current = now()
-    job = db.scalar(
-        select(AiJob)
-        .where(
-            AiJob.job_type.in_(("ingest", "classification")),
-            AiJob.cancel_requested_at.is_(None),
-            sa.or_(
-                sa.and_(AiJob.status == "queued", AiJob.next_run_at <= current),
-                sa.and_(AiJob.status == "running", AiJob.lease_expires_at < current),
-            ),
-        )
-        .order_by(AiJob.created_at)
-        .with_for_update(skip_locked=True)
-        .limit(1)
-    )
-    if not job:
-        return None
-    if job.attempt_count >= job.max_attempts:
-        previous = db.scalar(
-            select(AiJobAttempt).where(
-                AiJobAttempt.job_id == job.id, AiJobAttempt.attempt_no == job.attempt_count
-            )
-        )
-        if previous and previous.finished_at is None:
-            previous.finished_at = current
-            previous.outcome = "failed"
-            previous.failure_code = "lease_expired"
-        job.status = "failed"
-        job.failure_code = "lease_expired"
-        job.finished_at = current
-        db.commit()
-        return None
-    if job.status == "running":
-        previous = db.scalar(
-            select(AiJobAttempt).where(
-                AiJobAttempt.job_id == job.id, AiJobAttempt.attempt_no == job.attempt_count
-            )
-        )
-        if previous and previous.finished_at is None:
-            previous.finished_at = current
-            previous.outcome = "retry"
-            previous.failure_code = "lease_expired"
-    job.status = "running"
-    job.failure_code = None
-    job.attempt_count += 1
-    job.fencing += 1
-    job.lease_expires_at = current + timedelta(seconds=get_settings().job_lease_seconds)
-    job.lease_token_hash = hashlib.sha256(uuid4().bytes).hexdigest()
-    job.result = {"phase": "parsing"}
-    db.add(
-        AiJobAttempt(
-            job_id=job.id,
-            attempt_no=job.attempt_count,
-            worker_id=socket.gethostname()[:128],
-            fencing=job.fencing,
-            started_at=current,
-        )
-    )
-    result = (job.id, job.resource_id, job.fencing, job.attempt_count)
-    db.commit()
-    return result
+    return job_queue.claim(db, ("ingest", "classification", "reindex"))
 
 
 def locked_job(db, job_id, fence):
@@ -451,14 +451,20 @@ def update_phase(db, job_id, fence, phase, **details):
     return owner_id
 
 
-def run_once():
+def run_once(claimed=None):
     factory = session_factory()
     with factory() as db:
-        claim_result = claim(db)
+        claim_result = claimed or claim(db)
         if not claim_result:
             return False
         job_id, version_id, fence, attempt_no = claim_result
         job = db.get(AiJob, job_id)
+        if job.job_type == "reindex":
+            from study_platform.services import reindex
+
+            db.rollback()
+            reindex.run(job_id, version_id, fence)
+            return True
         version = db.get(MaterialVersion, version_id)
         material = db.get(Material, version.material_id)
         owner = job.owner_user_id
@@ -501,11 +507,12 @@ def run_once():
                 def phase_changed(phase):
                     update_phase(db, job_id, fence, phase)
 
-                pipeline = "document-v1"
+                parser_profile = "document-v1"
+                pipeline = chunking.SEMANTIC_PROFILE
                 if job.payload.get("extraction_mode") == "vlm":
                     if not vision:
                         raise ApiError(409, "vision_not_configured", "当前任务没有就绪的视觉模型连接。")
-                    pipeline = "document-vision-v1"
+                    parser_profile = "document-vision-v1"
                     page_count, extracted = extract_vision(
                         source_path(version.id), version.source_mime, phase_changed, owner=owner, saved=vision,
                     )
@@ -543,7 +550,7 @@ def run_once():
                 chunk_rows = [
                     (part, locator, ordinal)
                     for ordinal, (text, locator) in enumerate(extracted)
-                    for part in chunks(text)
+                    for part in chunking.semantic_chunks(text)
                 ]
                 vectors = []
                 for offset in range(0, len(chunk_rows), 20):
@@ -607,7 +614,7 @@ def run_once():
                 index.chunk_count = len(chunk_rows)
                 version.page_count = page_count
                 version.parse_status = "ready"
-                version.parser_profile = pipeline
+                version.parser_profile = parser_profile
                 version.failure_code = None
                 if job.payload.get("activate_version"):
                     prior = (
@@ -634,9 +641,16 @@ def run_once():
                 )
                 attempt.outcome = "success"
                 attempt.finished_at = now()
-                # Copy page previews before publication while the job row is locked.
+                # Publish page previews while holding the fenced job row.
                 for image in staging.glob("page-*.png"):
-                    shutil.copyfile(image, version_dir(version_id) / image.name)
+                    destination = version_dir(version_id) / image.name
+                    if version.source_mime == "application/pdf":
+                        try:
+                            image.replace(destination)
+                        except OSError:
+                            logger.warning("Could not publish OCR preview for PDF %s.", version_id)
+                    else:
+                        shutil.copyfile(image, destination)
                 db.commit()
             except LostLease:
                 db.rollback()

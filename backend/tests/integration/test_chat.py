@@ -803,23 +803,33 @@ def test_summary_and_empty_library_skip_rewrite_even_when_enabled(chat_db, monke
     assert events[-1]["type"] == "done"
 
 
-@pytest.mark.parametrize("deleted", [True, False])
-def test_deleted_material_or_retired_index_cannot_publish(chat_db, deleted):
-    from study_platform.persistence.models import IndexVersion, Material
+def test_deleted_material_cannot_publish(chat_db):
+    from study_platform.persistence.models import Material
 
     s = chat_db
     evidence = seed_evidence(s)
     run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
     with s.factory.begin() as db:
-        if deleted:
-            db.get(Material, evidence["material_id"]).deleted_at = chat.now()
-        else:
-            index = db.get(IndexVersion, evidence["index_version_id"])
-            index.status, index.is_active = "retired", False
+        db.get(Material, evidence["material_id"]).deleted_at = chat.now()
     assert not chat.checkpoint(run, fence, "Stale evidence [S2]", "completed", [evidence])
     state = chat.turn(s.owner, conversation_for(s, run), run)
     assert state["status"] == "failed" and state["error_code"] == "scope_unavailable"
     assert state["messages"][-1]["citations"] == []
+
+
+def test_frozen_chat_scope_completes_after_reindex_retires_its_index(chat_db):
+    from study_platform.persistence.models import IndexVersion
+
+    s = chat_db
+    evidence = seed_evidence(s)
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+    with s.factory.begin() as db:
+        index = db.get(IndexVersion, evidence["index_version_id"])
+        index.status, index.is_active = "retired", False
+    assert chat.checkpoint(run, fence, "Frozen evidence [S1]", "completed", [evidence])
+    state = chat.turn(s.owner, conversation_for(s, run), run)
+    assert state["status"] == "completed"
+    assert str(state["messages"][-1]["citations"][0]["chunk_id"]) == str(evidence["id"])
 
 
 def test_provider_stream_failure_preserves_partial_and_error_event(chat_db, monkeypatch):

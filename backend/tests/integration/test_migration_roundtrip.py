@@ -14,6 +14,8 @@ from sqlalchemy.engine import make_url
 from alembic import command
 from study_platform.persistence import models  # noqa: F401
 from study_platform.persistence.base import Base
+from study_platform.services.lexical import plain_tsquery
+from study_platform.services.workspace_search import body_search_expression
 
 pytestmark = pytest.mark.integration
 
@@ -77,6 +79,11 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                         column["name"] for column in inspector.get_columns("materials", schema="study")
                     } if upgraded else set()
                     assert ("source_url" in material_columns) is upgraded
+                    if upgraded:
+                        notes = {column["name"] for column in inspector.get_columns("notes", schema="study")}
+                        library = {column["name"] for column in inspector.get_columns("knowledge_bases", schema="study")}
+                        assert "lexical" in notes and "retrieval_settings" in library
+                        assert any(index["name"] == "ix_notes_lexical" for index in inspector.get_indexes("notes", schema="study"))
                     version = connection.scalar(
                         sa.text("SELECT version_num FROM study.alembic_version")
                     )
@@ -108,6 +115,15 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                             VALUES (:owner, :conversation, :kb, 'completed')"""), {"owner": owner, "conversation": conversation, "kb": kb})
             command.upgrade(config, "0009_model_call_records")
             with engine.begin() as connection:
+                connection.execute(sa.text("INSERT INTO study.courses(id, owner_user_id, name) "
+                                           "VALUES (:kb, :owner, 'Notes')"), {"kb": kb_ids[0], "owner": owner})
+                note_id = connection.scalar(sa.text("""
+                    INSERT INTO study.notes(owner_user_id, course_id, title, note_type, content_md,
+                        generated_content_md, status, source_scope, generator_profile, prompt_version)
+                    VALUES (:owner, :kb, '雪松仓库', 'summary', '向量模型 QZ-731', '', 'ready',
+                        '{}'::jsonb, 'test', 'test') RETURNING id
+                """), {"kb": kb_ids[0], "owner": owner})
+
                 def add_material(profile: str, *, deleted: bool = False):
                     material = connection.execute(sa.insert(models.Material).values(
                         owner_user_id=owner, knowledge_base_id=kb_ids[0], title=profile,
@@ -165,6 +181,36 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                 for conversation, expected_project in zip(conversations, [kb_ids[0], None, None, None], strict=True):
                     assert connection.scalar(sa.text("SELECT project_knowledge_base_id FROM study.conversations WHERE id=:id"), {"id": conversation}) == expected_project
             check(True)
+            if offline:
+                with engine.connect() as connection:
+                    note = models.Note.__table__
+                    assert connection.scalar(sa.select(note.c.lexical).where(note.c.id == note_id)) is None
+                    term = "向量模型"
+                    assert connection.scalar(sa.select(note.c.id).where(
+                        body_search_expression(note.c.content_md, note.c.lexical, term, plain_tsquery(term)),
+                    )) == note_id
+            else:
+                with engine.connect() as connection:
+                    assert connection.scalar(sa.text("SELECT lexical @@ plainto_tsquery('simple', '雪松') "
+                        "FROM study.notes WHERE id=:id"), {"id": note_id})
+            with engine.begin() as connection:
+                # Exercise the widened constraints without leaving data that would prevent downgrade.
+                revision_tx = connection.begin_nested()
+                connection.execute(sa.text("INSERT INTO study.model_connections(owner_user_id, kind, name, versions) "
+                    "VALUES (:owner, 'rerank', 'Rank', '{}'::jsonb)"), {"owner": owner})
+                connection.execute(sa.text("INSERT INTO study.model_call_records(owner_user_id, purpose, model_name, success) "
+                    "VALUES (:owner, 'rerank', 'rank-test', true)"), {"owner": owner})
+                connection.execute(sa.text("INSERT INTO study.ai_jobs(owner_user_id, job_type, resource_type, resource_id, "
+                    "status, attempt_count, max_attempts, next_run_at) "
+                    "VALUES (:owner, 'reindex', 'knowledge_base', :kb, 'queued', 0, 1, now())"), {"owner": owner, "kb": kb_ids[0]})
+                revision_tx.rollback()
+            command.downgrade(config, "0014_vision_model_connections")
+            with engine.connect() as connection:
+                inspector = sa.inspect(connection)
+                assert "lexical" not in {column["name"] for column in inspector.get_columns("notes", schema="study")}
+                assert "retrieval_settings" not in {column["name"] for column in inspector.get_columns("knowledge_bases", schema="study")}
+            command.upgrade(config, "head")
+            check(True)
             with engine.begin() as connection:
                 vision_connection = connection.scalar(sa.text(
                     "INSERT INTO study.model_connections(owner_user_id, kind, name, versions) "
@@ -189,7 +235,7 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                 connection.execute(sa.delete(models.IndexVersion).where(models.IndexVersion.id.in_(indexes)))
                 connection.execute(sa.delete(models.MaterialVersion).where(models.MaterialVersion.id.in_(versions)))
                 connection.execute(sa.delete(models.Material).where(models.Material.id.in_(materials)))
-                for table in ("ai_workflow_runs", "conversations", "knowledge_bases"):
+                for table in ("ai_workflow_runs", "conversations", "notes", "courses", "knowledge_bases"):
                     connection.execute(sa.text(f"DELETE FROM study.{table} WHERE owner_user_id=:owner"), {"owner": owner})
                 connection.execute(sa.text("DELETE FROM study.users WHERE id=:owner"), {"owner": owner})
             command.downgrade(config, "base")

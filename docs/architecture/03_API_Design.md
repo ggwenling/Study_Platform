@@ -1,5 +1,7 @@
 # API Design — AI Learning Platform
 
+> **归档快照｜2026-11-14。** 本文保留当时的目标接口。现行接口见 [API 接入](../api-integration.md)。
+
 > 版本：2.0 / LangChain + LangGraph 版设计草案　|　2026-11-14  
 > **运行前提**：V1 仅部署 Python/FastAPI（内部集成 LangChain + LangGraph）。本文的“未来 Java 对外 API”与“Java↔Python 内部 API”是**预先冻结的目标兼容契约，不是 V1 需要上线的服务**。  
 > 对应文档：[01 Architecture Design](01_Architecture_Design.md) · [02 Database Design](02_Database_Design.md)

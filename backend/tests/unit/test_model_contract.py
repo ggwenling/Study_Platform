@@ -60,6 +60,7 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
     expected["study.conversations"].add("archived_at")
     expected["study.message_citations"].add("quote_text")
     expected["study.note_citations"].update({"quote_text", "quote_sha256"})
+    expected["study.notes"].add("lexical")
     expected["study.quiz_item_sources"].add("quote_text")
     expected["study.ai_workflow_runs"].update(
         {"knowledge_base_id", "answer_mode", "lease_expires_at", "fencing"}
@@ -72,6 +73,7 @@ def test_all_dictionary_tables_and_fields_are_present_without_extra_columns():
         "last_synced_at",
         "embedding_connection_id",
         "embedding_binding",
+        "retrieval_settings",
         "created_at",
         "updated_at",
         "deleted_at",

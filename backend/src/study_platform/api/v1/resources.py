@@ -1,6 +1,5 @@
 """Authenticated personal knowledge library and conversation resources."""
 
-import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 from uuid import UUID
@@ -34,7 +33,17 @@ from study_platform.persistence.models import (
 )
 from study_platform.services.citations import citation_dto, message_dto
 from study_platform.services.learning import count_due_wrong_questions
+from study_platform.services.lexical import lexical_query_terms, plain_tsquery
 from study_platform.services.studio import count_due_flashcards
+from study_platform.services.workspace_search import (
+    body_score_expression,
+    body_search_expression,
+    decode_search_cursor,
+    encode_search_cursor,
+    matched_search_terms,
+    search_excerpt,
+    title_search_expressions,
+)
 
 router = APIRouter()
 
@@ -59,6 +68,7 @@ class KnowledgeBaseDTO(BaseModel):
     updated_at: datetime
     embedding_connection_id: UUID | None = None
     embedding_binding: dict | None = None
+    retrieval_settings: dict | None = None
 
 
 class KnowledgeBasePage(BaseModel):
@@ -140,7 +150,7 @@ class MessagePage(BaseModel):
 
 def kb_dto(kb):
     return {k: getattr(kb, k) for k in ("id", "name", "description", "created_at", "updated_at",
-                                      "embedding_connection_id", "embedding_binding")}
+                                      "embedding_connection_id", "embedding_binding", "retrieval_settings")}
 
 
 def conversation_dto(row):
@@ -231,6 +241,9 @@ def update_knowledge_base(
 def delete_knowledge_base(
     kb_id: UUID, db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
+    from study_platform.services import ai_jobs
+    from study_platform.services.reindex import cancel_for_deleted_library
+
     row = db.scalar(
         sa.select(KnowledgeBase)
         .where(
@@ -275,6 +288,8 @@ def delete_knowledge_base(
             .where(AiJobAttempt.job_id == job.id, AiJobAttempt.finished_at.is_(None))
             .values(outcome="cancelled", finished_at=now)
         )
+    cancel_for_deleted_library(db, row)
+    ai_jobs.cancel_for_deleted_library(db, row)
     runs = db.scalars(
         sa.select(AiWorkflowRun)
         .where(
@@ -440,66 +455,110 @@ class SearchItem(BaseModel):
     excerpt: str | None = None
     locator: dict | None = None
     retrieval_enabled: bool | None = None
+    matched_terms: list[str] = Field(default_factory=list)
 
 
 class SearchPage(BaseModel):
     items: list[SearchItem]
-    next_cursor: UUID | None
-
-
-def search_excerpt(text: str, query: str) -> str:
-    match = re.search(re.escape(query), text, re.IGNORECASE)
-    start = max(0, match.start() - 60) if match else 0
-    end = min(len(text), match.end() + 60) if match else min(len(text), 120)
-    return ("…" if start else "") + text[start:end].strip() + ("…" if end < len(text) else "")
+    next_cursor: str | None
 
 
 @router.get("/search", response_model=SearchPage, response_model_exclude_unset=True)
 def search(
     q: str = Query(min_length=1, max_length=200),
     limit: int = Query(20, ge=1, le=100),
-    cursor: UUID | None = None,
+    cursor: str | None = None,
     include_content: bool = False,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    term = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    anchor = None
+    if cursor is not None:
+        try:
+            anchor = decode_search_cursor(cursor)
+        except ValueError as exc:
+            raise ApiError(400, "invalid_cursor", "Invalid cursor") from exc
+    q = q.strip()
+    if not q:
+        return {"items": [], "next_cursor": None}
+
+    terms = lexical_query_terms(q)
+    tsquery = plain_tsquery(q)
+    no_text = sa.cast(sa.null(), sa.Text).label("match_text")
+    no_locator = sa.cast(sa.null(), JSONB).label("locator")
+    no_retrieval_flag = sa.cast(sa.null(), sa.Boolean).label("retrieval_enabled")
+
+    kb_title_match, kb_title_score = title_search_expressions(KnowledgeBase.name, q, terms)
     kb = sa.select(
         KnowledgeBase.id.label("id"),
         sa.literal("knowledge_base").label("type"),
         KnowledgeBase.name.label("title"),
         KnowledgeBase.id.label("knowledge_base_id"),
+        no_text,
+        no_locator,
+        no_retrieval_flag,
+        kb_title_score.label("score"),
+        sa.literal(0).label("type_rank"),
     ).where(
         KnowledgeBase.owner_user_id == user.id,
         KnowledgeBase.deleted_at.is_(None),
-        KnowledgeBase.name.ilike(term, escape="\\"),
+        kb_title_match,
     )
+    material_title_match, material_title_score = title_search_expressions(Material.title, q, terms)
     materials = (
-        sa.select(Material.id, sa.literal("material"), Material.title, Material.knowledge_base_id)
+        sa.select(
+            Material.id.label("id"),
+            sa.literal("material").label("type"),
+            Material.title.label("title"),
+            Material.knowledge_base_id.label("knowledge_base_id"),
+            no_text,
+            no_locator,
+            no_retrieval_flag,
+            material_title_score.label("score"),
+            sa.literal(1).label("type_rank"),
+        )
         .join(KnowledgeBase, KnowledgeBase.id == Material.knowledge_base_id)
         .where(
             Material.owner_user_id == user.id,
             Material.deleted_at.is_(None),
             KnowledgeBase.deleted_at.is_(None),
-            Material.title.ilike(term, escape="\\"),
+            material_title_match,
         )
     )
+    conversation_title_match, conversation_title_score = title_search_expressions(
+        Conversation.title, q, terms
+    )
     conversations = sa.select(
-        Conversation.id, sa.literal("conversation"), Conversation.title, sa.cast(sa.null(), sa.Uuid)
+        Conversation.id.label("id"),
+        sa.literal("conversation").label("type"),
+        Conversation.title.label("title"),
+        sa.cast(sa.null(), sa.Uuid).label("knowledge_base_id"),
+        no_text,
+        no_locator,
+        no_retrieval_flag,
+        conversation_title_score.label("score"),
+        sa.literal(3).label("type_rank"),
     ).where(
         Conversation.owner_user_id == user.id,
         Conversation.deleted_at.is_(None),
-        Conversation.title.ilike(term, escape="\\"),
+        conversation_title_match,
     )
     queries = [kb, materials, conversations]
     if include_content:
-        no_text = sa.cast(sa.null(), sa.Text).label("match_text")
-        no_locator = sa.cast(sa.null(), JSONB).label("locator")
-        no_retrieval_flag = sa.cast(sa.null(), sa.Boolean).label("retrieval_enabled")
-        queries = [query.add_columns(no_text, no_locator, no_retrieval_flag) for query in queries]
+        fragment_body_match = body_search_expression(
+            MaterialChunk.text, MaterialChunk.lexical, q, tsquery
+        )
+        fragment_body_score = body_score_expression(MaterialChunk.lexical, terms, tsquery)
         fragment_matches = active_chunks(sa.select(
-            MaterialChunk.id, sa.literal("fragment"), Material.title, Material.knowledge_base_id,
-            MaterialChunk.text, MaterialChunk.locator, MaterialChunk.retrieval_enabled,
+            MaterialChunk.id.label("id"),
+            sa.literal("fragment").label("type"),
+            Material.title.label("title"),
+            Material.knowledge_base_id.label("knowledge_base_id"),
+            MaterialChunk.text.label("match_text"),
+            MaterialChunk.locator.label("locator"),
+            MaterialChunk.retrieval_enabled.label("retrieval_enabled"),
+            fragment_body_score.label("score"),
+            sa.literal(4).label("type_rank"),
         )).join(KnowledgeBase, KnowledgeBase.id == Material.knowledge_base_id).where(
             KnowledgeBase.owner_user_id == user.id,
             KnowledgeBase.deleted_at.is_(None),
@@ -507,37 +566,69 @@ def search(
             Material.deleted_at.is_(None),
             Material.status == "active",
             MaterialVersion.parse_status == "ready",
-            MaterialChunk.text.ilike(term, escape="\\"),
+            fragment_body_match,
         )
-        note_body_matches = Note.content_md.ilike(term, escape="\\")
+        note_title_match, note_title_score = title_search_expressions(Note.title, q, terms)
+        note_body_match = body_search_expression(Note.content_md, Note.lexical, q, tsquery)
+        note_body_score = body_score_expression(Note.lexical, terms, tsquery)
         note_matches = sa.select(
-            Note.id, sa.literal("note"), Note.title, KnowledgeBase.id,
-            sa.case((note_body_matches, Note.content_md)), no_locator, no_retrieval_flag,
+            Note.id.label("id"),
+            sa.literal("note").label("type"),
+            Note.title.label("title"),
+            KnowledgeBase.id.label("knowledge_base_id"),
+            sa.case((note_body_match, Note.content_md), else_=no_text).label("match_text"),
+            no_locator,
+            no_retrieval_flag,
+            (note_title_score + note_body_score).label("score"),
+            sa.literal(2).label("type_rank"),
         ).select_from(Note).join(KnowledgeBase, KnowledgeBase.id == Note.course_id).where(
             KnowledgeBase.owner_user_id == user.id,
             KnowledgeBase.deleted_at.is_(None),
             Note.owner_user_id == user.id,
             Note.deleted_at.is_(None),
-            sa.or_(Note.title.ilike(term, escape="\\"), note_body_matches),
+            sa.or_(note_title_match, note_body_match),
         )
         queries.extend((fragment_matches, note_matches))
     combined = sa.union_all(*queries).subquery()
     stmt = sa.select(combined)
-    if cursor:
-        stmt = stmt.where(combined.c.id > cursor)
-    rows = db.execute(stmt.order_by(combined.c.id).limit(limit + 1)).mappings().all()
+    if anchor is not None:
+        cursor_score, cursor_type_rank, cursor_id = anchor
+        stmt = stmt.where(
+            sa.or_(
+                combined.c.score < cursor_score,
+                sa.and_(
+                    combined.c.score == cursor_score,
+                    combined.c.type_rank > cursor_type_rank,
+                ),
+                sa.and_(
+                    combined.c.score == cursor_score,
+                    combined.c.type_rank == cursor_type_rank,
+                    combined.c.id > cursor_id,
+                ),
+            )
+        )
+    rows = db.execute(
+        stmt.order_by(combined.c.score.desc(), combined.c.type_rank, combined.c.id).limit(limit + 1)
+    ).mappings().all()
     items = []
     for row in rows[:limit]:
         item = {key: row[key] for key in ("id", "type", "title", "knowledge_base_id")}
         if row.get("match_text") is not None:
-            item["excerpt"] = search_excerpt(row["match_text"], q)
+            item["excerpt"] = search_excerpt(row["match_text"], q, terms)
         if row["type"] == "fragment":
             item["locator"] = public_locator(row["locator"])
             item["retrieval_enabled"] = row["retrieval_enabled"]
+        if include_content:
+            item["matched_terms"] = matched_search_terms(
+                row["title"] or "", row.get("match_text"), q, terms
+            )
         items.append(item)
     return {
         "items": items,
-        "next_cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
+        "next_cursor": (
+            encode_search_cursor(rows[limit - 1]["score"], rows[limit - 1]["type_rank"], rows[limit - 1]["id"])
+            if len(rows) > limit else None
+        ),
     }
 
 
@@ -546,6 +637,8 @@ class CapabilitiesDTO(BaseModel):
     library_rag: dict[str, bool] = Field(default_factory=dict)
     ocr: bool
     vision: bool
+    rerank: bool
+    retrieval_defaults: dict[str, int | float | bool]
     answer_modes: list[str]
     upload_mime_types: list[str]
     max_upload_bytes: int
@@ -571,6 +664,10 @@ def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
         vision = bool(default_snapshot(db, user.id, "vision").get("id"))
     except ApiError:
         vision = False
+    try:
+        rerank = bool(default_snapshot(db, user.id, "rerank").get("id"))
+    except ApiError:
+        rerank = False
     library_rag = {str(kb): available["llm"] and (status == "ready" if connection else bool(settings.embedding_api_key.get_secret_value()))
                    for kb, connection, status in libraries}
     return {
@@ -578,6 +675,14 @@ def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
         "library_rag": library_rag,
         "ocr": True,
         "vision": vision,
+        "rerank": rerank,
+        "retrieval_defaults": {
+            "top_k": settings.retrieval_top_k,
+            "lexical_weight": settings.retrieval_lexical_weight,
+            "min_similarity": settings.retrieval_min_similarity,
+            "rerank_enabled": False,
+            "rerank_candidate_k": settings.retrieval_candidate_k,
+        },
         "answer_modes": ["knowledge_only", "with_general"],
         "upload_mime_types": sorted(set(MIMES.values())),
         "max_upload_bytes": settings.max_upload_bytes,

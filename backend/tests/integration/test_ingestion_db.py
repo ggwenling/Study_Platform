@@ -4,6 +4,7 @@ import hashlib
 import os
 from contextlib import nullcontext
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -24,11 +25,13 @@ from study_platform.persistence.models.identity import Material, User
 from study_platform.persistence.models.knowledge import KnowledgeBase
 from study_platform.persistence.models.materials import (
     IndexVersion,
+    MaterialChunk,
     MaterialSection,
     MaterialVersion,
 )
+from study_platform.persistence.models.model_connections import ModelConnection
 from study_platform.persistence.models.operations import AiJob, AiJobAttempt
-from study_platform.services import ingestion, model_calls, model_connections
+from study_platform.services import ingestion, job_queue, model_calls, model_connections, reindex
 from study_platform.services.storage import source_path
 from study_platform.services.web_clip import WebClip
 
@@ -120,8 +123,10 @@ def test_worker_publishes_text_and_vector(state):
         assert job.status == "succeeded"
         assert db.get(MaterialVersion, version_id).parse_status == "ready"
         assert db.scalar(
-            sa.select(IndexVersion).where(IndexVersion.material_version_id == version_id)
-        ).is_active
+            sa.select(IndexVersion.pipeline_profile).where(
+                IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True),
+            )
+        ) == "semantic-v3"
         assert (
             db.scalar(
                 sa.select(MaterialSection.text).where(
@@ -130,6 +135,251 @@ def test_worker_publishes_text_and_vector(state):
             )
             == "hello"
         )
+
+
+def test_worker_publishes_pdf_ocr_even_if_preview_cannot_be_published(state, monkeypatch):
+    factory, job_id, version_id, _, _ = state
+    source = source_path(version_id)
+    with Image.new("RGB", (100, 100), "white") as image:
+        image.save(source, format="PDF")
+    with factory() as db:
+        db.get(MaterialVersion, version_id).source_mime = "application/pdf"
+        db.commit()
+    ocr_lines = [{"text": "扫描页正文", "box": [[1, 2], [3, 4]], "confidence": 0.9}]
+    monkeypatch.setattr(ingestion, "ocr_image", lambda _: ocr_lines)
+    replace = Path.replace
+
+    def fail_final_preview(path, target):
+        if path.name == "page-1.png" and target.parent == source.parent:
+            raise OSError("cannot publish preview")
+        return replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_final_preview)
+    assert ingestion.run_once()
+    with factory() as db:
+        assert db.get(AiJob, job_id).status == "succeeded"
+        chunk = db.scalar(sa.select(MaterialChunk).join(IndexVersion).where(
+            MaterialChunk.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        ))
+        assert chunk.text == "扫描页正文"
+        assert chunk.locator == {"page": 1, "ocr": ocr_lines}
+    assert not (source.parent / "page-1.png").exists()
+
+
+@pytest.mark.parametrize("cancel", [False, True], ids=["retry", "cancel"])
+def test_reindex_keeps_both_active_indexes_until_atomic_switch(state, monkeypatch, cancel):
+    factory, _, first_version, material_id, kb_id = state
+    monkeypatch.setattr(reindex, "session_factory", lambda: factory)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **__: nullcontext())
+    monkeypatch.setattr(ingestion.classification, "enqueue", lambda *_: None)
+    assert ingestion.run_once()
+    with factory() as db:
+        from study_platform.api.v1.materials import create_job
+
+        kb = db.get(KnowledgeBase, kb_id)
+        owner = db.get(User, kb.owner_user_id)
+        material = Material(id=uuid4(), owner_user_id=owner.id, knowledge_base_id=kb.id,
+                            title="Second", kind="other", status="active")
+        second = MaterialVersion(id=uuid4(), material_id=material.id, version_no=1, is_current=True,
+                                 source_mime="text/plain", source_sha256="b" * 64, byte_size=6,
+                                 object_key=str(uuid4()), parse_status="pending")
+        target = ModelConnection(id=uuid4(), owner_user_id=owner.id, kind="embedding", name="Next",
+                                 status="ready", revision=1, versions={"1": {
+                                     "base_url": "https://example.test/v1", "model": "vector-next",
+                                 }})
+        db.add_all([material, target])
+        db.flush()
+        db.add(second)
+        db.flush()
+        create_job(db, owner, second)
+        db.commit()
+        source = source_path(second.id)
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("second", encoding="utf-8")
+        versions = [first_version, second.id]
+        target_id = target.id
+        owner_id = owner.id
+    assert ingestion.run_once()
+    with factory() as db:
+        old_ids = set(db.scalars(sa.select(IndexVersion.id).where(
+            IndexVersion.material_version_id.in_(versions), IndexVersion.is_active.is_(True),
+        )))
+        assert len(old_ids) == 2
+
+    app = FastAPI()
+    app.include_router(library_detail.router)
+    app.add_exception_handler(ApiError, api_error_handler)
+
+    def provide_db():
+        with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = provide_db
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=owner_id)
+    prefix = f"/knowledge-bases/{kb_id}"
+    calls = []
+    with TestClient(app) as client:
+        created = client.post(f"{prefix}/reindex", json={"embedding_connection_id": str(target_id)})
+        assert created.status_code == 202, created.text
+        job_id = created.json()["job_id"]
+        assert created.json()["total_materials"] == 2
+        assert client.post(f"{prefix}/reindex", json={}).json()["code"] == "reindex_in_progress"
+
+        def embed(texts, **_):
+            calls.extend(texts)
+            status = client.get(f"{prefix}/reindex-status").json()
+            assert status["running"] == 1 and status["status"] == "running"
+            with factory() as db:
+                assert not db.get(KnowledgeBase, kb_id).embedding_connection_id
+                assert old_ids == set(db.scalars(sa.select(IndexVersion.id).where(
+                    IndexVersion.material_version_id.in_(versions), IndexVersion.is_active.is_(True),
+                )))
+            if len(calls) == 2:
+                assert status["succeeded"] == 1
+                if cancel:
+                    response = client.post(f"{prefix}/reindex/cancel")
+                    assert response.json()["status"] == "cancelled", response.text
+                else:
+                    raise ApiError(502, "embedding_unavailable", "test failure")
+            return [[0.1] * 1024 for _ in texts]
+
+        monkeypatch.setattr(reindex, "embed_texts", embed)
+
+        def run():
+            with factory() as db:
+                claimed = job_queue.claim(db, ("reindex",))
+            assert str(claimed[0]) == job_id
+            assert ingestion.run_once(claimed)
+
+        run()
+        status = client.get(f"{prefix}/reindex-status").json()
+        if cancel:
+            assert status["status"] == "cancelled"
+        else:
+            assert (status["status"], status["succeeded"], status["failed"]) == ("failed", 1, 1)
+            assert status["failures"][0]["error_code"] == "embedding_unavailable"
+            assert client.post(f"{prefix}/reindex/retry-failed").status_code == 202
+            run()
+            assert len(calls) == 3 and calls[1] == calls[2]
+            assert client.get(f"{prefix}/reindex-status").json()["status"] == "succeeded"
+    with factory() as db:
+        indexes = db.scalars(sa.select(IndexVersion).where(IndexVersion.material_version_id.in_(versions))).all()
+        assert sum(row.is_active for row in indexes) == 2
+        assert db.get(KnowledgeBase, kb_id).embedding_connection_id == (None if cancel else target_id)
+        assert all(row.is_active is cancel for row in indexes if row.id in old_ids)
+        assert all(row.status == "ready" and row.embedding_profile == f"connection:{target_id}:1024"
+                   for row in indexes if row.id not in old_ids)
+        assert len(indexes) == (2 if cancel else 4)
+        assert len(db.scalars(sa.select(MaterialChunk.id).where(MaterialChunk.index_version_id.in_(old_ids))).all()) == 2
+        assert db.get(Material, material_id).title == "Test"
+
+
+def test_reindex_yields_to_pending_ingestion_and_includes_its_new_index(state, monkeypatch):
+    factory, _, version_id, _, kb_id = state
+    monkeypatch.setattr(reindex, "session_factory", lambda: factory)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **__: nullcontext())
+    monkeypatch.setattr(reindex, "embed_texts", lambda texts, **_: [[0.1] * 1024 for _ in texts])
+    with factory() as db:
+        kb = db.get(KnowledgeBase, kb_id, with_for_update=True)
+        submitted = reindex.enqueue(db, kb, None, True)
+        assert submitted["total_materials"] == 0
+        claimed = job_queue.claim(db, ("reindex",))
+    assert ingestion.run_once(claimed)
+    with factory() as db:
+        waiting = db.get(AiJob, submitted["job_id"])
+        assert waiting.status == "queued"
+        assert waiting.result["phase"] == "waiting_for_ingestion"
+        assert db.get(KnowledgeBase, kb_id).embedding_binding is None
+        claimed = job_queue.claim(db, ("ingest",))
+    assert ingestion.run_once(claimed)
+    with factory() as db:
+        db.get(AiJob, submitted["job_id"]).next_run_at = job_queue.now()
+        db.commit()
+        claimed = job_queue.claim(db, ("reindex",))
+    assert ingestion.run_once(claimed)
+    with factory() as db:
+        finished = reindex.status(db.get(AiJob, submitted["job_id"]))
+        assert (finished["status"], finished["total"], finished["succeeded"]) == ("succeeded", 1, 1)
+        indexes = db.scalars(sa.select(IndexVersion).where(IndexVersion.material_version_id == version_id)
+                            .order_by(IndexVersion.generation)).all()
+        assert [(index.generation, index.status) for index in indexes] == [(1, "retired"), (2, "ready")]
+
+
+@pytest.mark.parametrize("profile", ["document-v1", "semantic-v2", "semantic-v3"])
+def test_reindex_keeps_fragment_edit_that_is_a_substring_of_the_source(state, monkeypatch, profile):
+    factory, _, version_id, _, kb_id = state
+    monkeypatch.setattr(reindex, "session_factory", lambda: factory)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **__: nullcontext())
+    monkeypatch.setattr(ingestion.classification, "enqueue", lambda *_: None)
+    monkeypatch.setattr(reindex, "embed_texts", lambda texts, **_: [[0.1] * 1024 for _ in texts])
+    source_path(version_id).write_text("保留第一句。删除第二句。", encoding="utf-8")
+    assert ingestion.run_once()
+    with factory() as db:
+        chunk = db.scalar(sa.select(MaterialChunk).where(MaterialChunk.material_version_id == version_id))
+        db.get(IndexVersion, chunk.index_version_id).pipeline_profile = profile
+        db.commit()
+        kb = db.get(KnowledgeBase, kb_id)
+        monkeypatch.setattr("study_platform.services.rag_workshop.embed_texts", reindex.embed_texts)
+        from study_platform.services.rag_workshop import edit_fragment_text
+
+        edit_fragment_text(db, user=SimpleNamespace(id=kb.owner_user_id), kb_id=kb_id,
+                           chunk_id=chunk.id, text="保留第一句。")
+        reindex.enqueue(db, db.get(KnowledgeBase, kb_id, with_for_update=True), None, True)
+        claimed = job_queue.claim(db, ("reindex",))
+    assert claimed is not None and ingestion.run_once(claimed)
+    with factory() as db:
+        active = db.scalars(sa.select(MaterialChunk.text).join(IndexVersion).where(
+            MaterialChunk.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        )).all()
+        assert active == ["保留第一句。"]
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_reindex_recognizes_pre_fix_semantic_v2_chunks(state, monkeypatch, edited):
+    factory, _, version_id, _, kb_id = state
+    monkeypatch.setattr(reindex, "session_factory", lambda: factory)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **__: nullcontext())
+    monkeypatch.setattr(ingestion.classification, "enqueue", lambda *_: None)
+    monkeypatch.setattr(reindex, "embed_texts", ingestion.embed_texts)
+    body = "    value = '" + "x" * 1700 + "'"
+    source_path(version_id).write_text(f"```python\n{body}\n```", encoding="utf-8")
+    with factory() as db:
+        db.get(MaterialVersion, version_id).source_mime = "text/markdown"
+        db.commit()
+    assert ingestion.run_once()
+
+    with factory() as db:
+        old = db.scalar(sa.select(IndexVersion).where(IndexVersion.material_version_id == version_id))
+        old.pipeline_profile = "semantic-v2"
+        chunks = db.scalars(sa.select(MaterialChunk).where(MaterialChunk.index_version_id == old.id)
+                            .order_by(MaterialChunk.ordinal)).all()
+        assert len(chunks) == 2
+        # The original v2 used 1586 body characters per fenced Python chunk and stripped indentation.
+        expected = [f"```python\n{part.strip()}\n```" for part in (body[:1586], body[1586:])]
+        if edited:
+            expected[0] = expected[0].replace("x" * 100, "", 1)
+        for chunk, part in zip(chunks, expected, strict=True):
+            chunk.text = part
+            chunk.text_sha256 = hashlib.sha256(part.encode()).hexdigest()
+        reindex.enqueue(db, db.get(KnowledgeBase, kb_id, with_for_update=True), None, True)
+        claimed = job_queue.claim(db, ("reindex",))
+    assert claimed is not None and ingestion.run_once(claimed)
+    with factory() as db:
+        active = db.scalars(sa.select(MaterialChunk.text).join(IndexVersion).where(
+            MaterialChunk.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        ).order_by(MaterialChunk.ordinal)).all()
+        assert db.scalar(sa.select(IndexVersion.pipeline_profile).where(
+            IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        )) == "semantic-v3"
+        retired = db.scalars(sa.select(MaterialChunk.text).join(IndexVersion).where(
+            MaterialChunk.material_version_id == version_id, IndexVersion.status == "retired",
+        ).order_by(MaterialChunk.ordinal)).all()
+        assert retired == expected
+        if edited:
+            assert active == expected
+        else:
+            assert active[0].startswith("```python\n    value =")
+            assert "".join(part.removeprefix("```python\n").removesuffix("\n```") for part in active) == body
 
 
 def test_web_clip_persists_source_and_publishes_markdown(state, monkeypatch):
