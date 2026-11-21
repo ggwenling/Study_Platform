@@ -1,8 +1,8 @@
 # 产品定位与路线图
 
-> 状态：产品方向与阶段范围，2026-11-14。本文定义目标，不代表功能已经实现或验收。
-> 首页交互详见 [首页需求](homepage-requirements.md)。既有 [架构](../architecture/01_Architecture_Design.md)、[数据库](../architecture/02_Database_Design.md) 与 [API](../architecture/03_API_Design.md) 文档是旧方向的设计快照，尚未与本文对齐。
-> 实现状态补记（2026-11-15）：个人多库 RAG、OCR、引用与恢复已有实现；本轮优先完成本人本地使用的上传闭环和运行恢复。实际接口以 [API 接入说明](../api-integration.md) 为准，已验证范围见 [本地 RAG 验收](../verification-local-rag.md)。下文路线与历史设计缺口不代表当前待办清单。
+> 状态：产品定位与阶段范围，2026-11-14。本文记录目标，不单独作为实现或质量验收证明。
+> 当前架构与数据边界见[架构索引](../architecture/README.md)，其中的归档部分保留历史设计快照。当前 API 以 [API 接入说明](../api-integration.md) 为准。
+> 实现状态补记（2026-11-21）：维度 B（B1–B4）与维度 C（C1–C4）已实现，模块入口和自动化验证范围见[维度 B 状态表](dimension-b-core-expansion-plan.md#当前实现状态)与[维度 C 状态表](dimension-c-rag-and-architecture-plan.md#当前实现状态)。文中路线和历史设计缺口不等同于当前待办清单。
 
 ## 一、定位与边界
 
