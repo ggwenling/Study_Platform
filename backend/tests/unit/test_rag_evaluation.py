@@ -300,3 +300,74 @@ def test_equivalent_supporting_passages_are_accepted_but_file_match_alone_is_not
     assert not support_hit(
         case, [{"material_version_id": "v", "text": "本学期课程安排。"}], documents
     )
+
+
+def test_edge_case_dataset_has_eight_groups_and_balanced_paraphrases():
+    path = Path(__file__).resolve().parents[2] / "evaluation/edge_cases/facts.jsonl"
+    cases, _ = read_dataset(path)
+
+    assert len(cases) == 16
+    assert len({case["fact_group"] for case in cases}) == 8
+    for split in ("calibration", "heldout"):
+        groups = {
+            case["fact_group"]
+            for case in cases
+            if case["split"] == split
+        }
+        assert len(groups) == 4
+        for group in groups:
+            paraphrases = [case for case in cases if case["fact_group"] == group]
+            assert len(paraphrases) == 2
+            assert {case["split"] for case in paraphrases} == {split}
+            assert len({case["question"] for case in paraphrases}) == 2
+            assert all(case["expected_facts"] == paraphrases[0]["expected_facts"] for case in paraphrases)
+            assert all(case["support"] == paraphrases[0]["support"] for case in paraphrases)
+
+
+def test_edge_case_cross_document_evidence_and_scanned_formats_are_annotated():
+    path = Path(__file__).resolve().parents[2] / "evaluation/edge_cases/facts.jsonl"
+    cases, materials = read_dataset(path)
+    by_id = {case["id"]: case for case in cases}
+    by_material = {material["id"]: material for material in materials}
+
+    cross_document = by_id["E03-1"]
+    assert {item["document"] for item in cross_document["support"]} == {
+        "batch-policy",
+        "batch-index",
+    }
+    assert len(cross_document["expected_facts"]) == 3
+    assert all("CX-8042" in by_id[case_id]["question"] for case_id in ("E01-1", "E01-2"))
+    assert by_id["E01-1"]["expected_facts"] == [["北侧C-17柜"]]
+    assert [item["document"] for item in by_id["E01-1"]["support"]] == ["asset-index"]
+    competing_text = by_material["near-id-match"]["sections"][0]
+    assert by_material["near-id-match"]["knowledge_base"] == "A"
+    assert "CX-8402" in competing_text and "CX-8042" not in competing_text
+    assert "南侧C-18柜" in competing_text
+    assert all("待核暂存" in by_id[case_id]["question"] for case_id in ("E02-1", "E02-2"))
+    assert by_id["E02-1"]["expected_facts"] == [["尚未完成复核、仅供暂时留存", "复核前暂存"]]
+    assert "待核保留" in by_material["terms-and-counts"]["sections"][1]
+    assert by_id["H01-1"]["expected_facts"] == [["36天"]]
+    assert all("第2班" in by_id[case_id]["question"] for case_id in ("H01-1", "H01-2"))
+    assert all("36" not in by_id[case_id]["question"] for case_id in ("H01-1", "H01-2"))
+    assert "上一周期为30天" in by_material["calibration-schedule"]["sections"][0]
+    assert by_material["processing-matrix"]["format"] == "docx"
+    assert "| 平衡 | 4 | 27 |" in by_material["processing-matrix"]["sections"][0]
+    assert "\\times 4=32" in by_material["batch-formula"]["sections"][0]
+    assert by_material["scan-inspection"]["format"] == "pdf"
+    assert by_id["H04-1"]["support"][0]["quote"] == "备用阀门铭牌为VN-528。"
+
+
+def test_edge_case_unanswerable_near_answer_is_confined_to_other_library():
+    path = Path(__file__).resolve().parents[2] / "evaluation/edge_cases/facts.jsonl"
+    cases, materials = read_dataset(path)
+    no_answer_cases = [case for case in cases if case["fact_group"] == "E04"]
+    requested_materials = [material for material in materials if material["knowledge_base"] == "A"]
+    other_library = [material for material in materials if material["knowledge_base"] == "B"]
+
+    assert len(no_answer_cases) == 2
+    assert all(not case["answerable"] and not case["expected_facts"] and not case["support"] for case in no_answer_cases)
+    requested_text = "\n".join(section for material in requested_materials for section in material["sections"])
+    distractor_text = "\n".join(other_library[0]["sections"])
+    assert "沧屿储物箱" in no_answer_cases[0]["question"]
+    assert "沧屿储物箱" in requested_text and "沧屿储物箱" in distractor_text
+    assert "当班库管" not in requested_text and "当班库管" in distractor_text
