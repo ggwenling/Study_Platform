@@ -8,6 +8,7 @@ __pycache__/
 .env.*
 !.env.example
 .local/
+artifacts/deep-test/
 *.log
 backend/.coverage
 backend/htmlcov/
