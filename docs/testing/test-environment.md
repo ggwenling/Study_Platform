@@ -54,13 +54,21 @@ export RUN_DB_TESTS=1
 
 密码：仅写入 `.local/deep-test/env/deep-test.env`（`DEEP_TEST_U1_PASSWORD` 等），**不提交**。
 
-## 4. 离线门禁（无模型花费）
+## 4. 门禁（隔离 DB + 无模型花费）
 
 ```bash
-# 语料校验
-python3 backend/evaluation/deep-test/validate_dataset.py
+# 1) 引导隔离库与 env
+python3 backend/evaluation/deep-test/harness/bootstrap_isolated_env.py
+set -a && source .local/deep-test/env/deep-test.env && set +a
 
-# 全门禁（Ruff + pytest + Vitest + build）
+# 2) 证明角色/库/存储隔离
+cd backend && uv run python evaluation/deep-test/harness/prove_isolation.py
+
+# 3) 双账号种子与跨用户探测
+uv run python evaluation/deep-test/harness/seed_accounts.py
+uv run python evaluation/deep-test/harness/run_cross_user_isolation.py
+
+# 4) 一键汇总（含 RUN_DB_TESTS=1 全量 pytest -rs）
 python3 backend/evaluation/deep-test/harness/run_offline_gate.py
 ```
 
@@ -68,15 +76,31 @@ python3 backend/evaluation/deep-test/harness/run_offline_gate.py
 
 ## 5. Live RAG 对照（**需审批后执行**）
 
+**Dry（无 DB/模型，已验证）：** 仅校验 `questions.jsonl` + 同目录 `materials.json`：
+
 ```bash
-set -a && source .local/deep-test/env/deep-test.env && set +a
-# TEST_DATABASE_URL 必须指向 *_test 且具备 CREATEDB
 cd backend
-uv run study-eval-rag --dataset evaluation/deep-test/questions.jsonl \
-  --strategy compare --live --output ../../.local/deep-test/rag-live-<id>
+uv run study-eval-rag --dataset evaluation/deep-test/questions.jsonl
 ```
 
-**Fail-closed：** 无 `DEEPSEEK_API_KEY` / `EMBEDDING_API_KEY` 时命令应失败；不得使用生产用户密钥。
+成功时输出：`Validated N questions … No database or provider calls; use --live to evaluate.`
+
+**Live 对照（会产生费用，需审批）：**
+
+```bash
+set -a && source ../.local/deep-test/env/deep-test.env && set +a
+export TEST_DATABASE_URL   # 必须指向具备 CREATEDB 的 *_test
+cd backend
+uv run study-eval-rag \
+  --dataset evaluation/deep-test/questions.jsonl \
+  --strategy compare \
+  --live \
+  --output ../.local/deep-test/rag-live-<run-id>
+```
+
+`--strategy` 可选值（见 `evaluate_rag.py --help`）：`baseline`、`rewrite`、`compare`、`hybrid`、`hybrid_compare`。
+
+**Fail-closed：** 无 `--live` 时不连库、不调用模型；无 API Key 时 `--live` 会在运行期失败，不得使用生产用户密钥。
 
 ### 5.1 花费估算公式（无单价臆测）
 

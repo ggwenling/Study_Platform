@@ -11,6 +11,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from shutil import which as shutil_which
 
 ROOT = Path(__file__).resolve().parents[4]
 BACKEND = ROOT / "backend"
@@ -48,8 +49,9 @@ def main() -> int:
         "AUTH_JWT_SECRET", "deep-test-jwt-secret-at-least-32-characters-long"
     )
 
+    uv = shutil_which("uv") or "uv"
     subprocess.check_call(
-        [sys.executable, str(BACKEND / "tests" / "ci_bootstrap_postgres.py")],
+        [uv, "run", "python", "tests/ci_bootstrap_postgres.py"],
         cwd=BACKEND,
         env=env,
     )

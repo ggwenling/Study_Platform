@@ -81,13 +81,13 @@ flowchart TD
 
 ## 5. 八项准备状态（模板）
 
-| # | 项 | 离线 PR 状态 |
+| # | 项 | 状态（2026-11-21 云 VM） |
 | --- | --- | --- |
-| 1 | 冻结代码 SHA | ✅ manifest 记录 |
-| 2 | 隔离环境 | ⚠️ 脚本就绪；须本机 PG |
-| 3 | 模型预算/连接 | ❌ 待业主审批 |
-| 4 | 标准语料 | ✅ 100 题 + 校验器 |
-| 5 | 测试用户/种子 | ⚠️ 剧本文档；种子脚本 Phase 2 |
-| 6 | 矩阵/门禁 | ✅ 矩阵 + 提案门禁 |
-| 7 | 结果/缺陷记录 | ✅ artifacts 结构 |
-| 8 | 负载/恢复条件 | ⚠️ 负载 BLOCKED；迁移走 pytest |
+| 1 | 冻结代码 SHA | ✅ 基线 `20a20b96`；harness SHA 见 manifest |
+| 2 | 隔离环境 | ✅ PG 16.16 + pgvector；`prove_isolation.py` 通过 |
+| 3 | 模型预算/连接 | ❌ 待业主审批（live `study-eval-rag` 仍 BLOCKED） |
+| 4 | 标准语料 | ✅ 100 题；`synthetic_not_human_curated` |
+| 5 | 测试用户/种子 | ✅ `seed_accounts.py` 双账号 + 上传 canary |
+| 6 | 矩阵/门禁 | ✅ 矩阵 + 离线门禁脚本 |
+| 7 | 结果/缺陷记录 | ✅ `artifacts/deep-test/<run-id>/` |
+| 8 | 负载/恢复条件 | ⚠️ 负载 BLOCKED；`test_migration_roundtrip` 已跑 |

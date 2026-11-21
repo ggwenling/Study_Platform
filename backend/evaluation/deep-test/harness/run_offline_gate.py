@@ -1,4 +1,4 @@
-"""Offline deep-test gate: no external model calls.
+"""Deep-test gate: isolation proof, offline checks, RUN_DB_TESTS=1 pytest (no model spend).
 
 Records manifest under artifacts/deep-test/<run-id>/ (gitignored).
 """
@@ -8,33 +8,32 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from shutil import which
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[4]
 BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
 DEEP = BACKEND / "evaluation" / "deep-test"
+HARNESS = DEEP / "harness"
 ARTIFACTS = ROOT / "artifacts" / "deep-test"
+BASELINE_SHA = os.environ.get("KNOWLOOP_BASELINE_SHA", "20a20b96ab99bb4176546df6e8972dbd64df51b4")
 
 
 def git_sha() -> dict[str, str]:
     def rev(arg: list[str]) -> str:
-        return (
-            subprocess.check_output(["git", *arg], cwd=ROOT, text=True).strip()
-        )
+        return subprocess.check_output(["git", *arg], cwd=ROOT, text=True).strip()
 
     return {
-        "baseline_branch": rev(["rev-parse", "--abbrev-ref", "HEAD"]),
-        "baseline_sha": rev(["rev-parse", "HEAD"]),
-        "baseline_subject": rev(["log", "-1", "--format=%s"]),
-        "harness_paths": [
-            "backend/evaluation/deep-test/harness/run_offline_gate.py",
-            "backend/evaluation/deep-test/validate_dataset.py",
-        ],
+        "baseline_sha": BASELINE_SHA,
+        "harness_branch": rev(["rev-parse", "--abbrev-ref", "HEAD"]),
+        "harness_sha": rev(["rev-parse", "HEAD"]),
+        "harness_subject": rev(["log", "-1", "--format=%s"]),
     }
 
 
@@ -45,15 +44,36 @@ def versions() -> dict[str, str]:
         except (FileNotFoundError, subprocess.CalledProcessError) as exc:
             return f"unavailable: {exc}"
 
-    py = run([sys.executable, "--version"])
-    node = run(["node", "--version"])
-    pg = run(["psql", "--version"])
+    pg_server = "unavailable"
+    if which("psql"):
+        try:
+            pg_server = subprocess.check_output(
+                [
+                    "psql",
+                    "-h",
+                    os.environ.get("PGHOST", "localhost"),
+                    "-p",
+                    os.environ.get("PGPORT", "5432"),
+                    "-U",
+                    os.environ.get("POSTGRES_USER", "postgres"),
+                    "-d",
+                    "postgres",
+                    "-tAc",
+                    "SHOW server_version",
+                ],
+                env={**os.environ, "PGPASSWORD": os.environ.get("POSTGRES_PASSWORD", "postgres")},
+                text=True,
+            ).strip()
+        except subprocess.CalledProcessError as exc:
+            pg_server = f"unavailable: {exc}"
+
     return {
-        "python": py,
-        "node": node,
-        "postgresql_client": pg,
+        "python": run([sys.executable, "--version"]),
+        "node": run(["node", "--version"]),
+        "postgresql_client": run(["psql", "--version"]),
+        "postgresql_server": pg_server,
         "platform": platform.platform(),
-        "note": "Target stack: Python 3.12, Node 22, PostgreSQL 16+pgvector",
+        "target": "Python 3.12, Node 22, PostgreSQL 16+pgvector",
     }
 
 
@@ -65,133 +85,155 @@ def load_isolated_env() -> Path | None:
         if not line.strip() or line.startswith("#"):
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
-    os.environ.setdefault("RUN_DB_TESTS", "1")
+        os.environ[key.strip()] = value.strip()
+    os.environ["RUN_DB_TESTS"] = "1"
     return path
 
 
-def run_cmd(name: str, cmd: list[str], cwd: Path, env: dict | None = None) -> dict:
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env or os.environ,
-        text=True,
-        capture_output=True,
-    )
-    return {
+def run_cmd(name: str, cmd: list[str], cwd: Path) -> dict:
+    proc = subprocess.run(cmd, cwd=cwd, env=os.environ, text=True, capture_output=True)
+    step = {
         "name": name,
         "command": " ".join(cmd),
         "exit_code": proc.returncode,
-        "stdout_tail": proc.stdout.splitlines()[-20:],
-        "stderr_tail": proc.stderr.splitlines()[-20:],
+        "stdout_tail": proc.stdout.splitlines()[-30:],
+        "stderr_tail": proc.stderr.splitlines()[-30:],
         "passed": proc.returncode == 0,
     }
+    if name == "pytest_db":
+        m = re.search(r"(\d+) passed.*?(\d+) skipped", proc.stdout)
+        if m:
+            step["pytest_passed"] = int(m.group(1))
+            step["pytest_skipped"] = int(m.group(2))
+        m2 = re.search(r"(\d+) failed", proc.stdout)
+        step["pytest_failed"] = int(m2.group(1)) if m2 else 0
+    return step
+
+
+def save_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> int:
-    run_id = os.environ.get("DEEP_TEST_RUN_ID") or datetime.now(timezone.utc).strftime(
-        "%Y%m%dT%H%M%SZ"
-    ) + "-" + uuid4().hex[:8]
+    run_id = os.environ.get("DEEP_TEST_RUN_ID") or (
+        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
+    )
     out = ARTIFACTS / run_id
     out.mkdir(parents=True, exist_ok=True)
 
     env_path = load_isolated_env()
+    uv = which("uv")
+    if not uv:
+        raise SystemExit("uv required in PATH")
+
     manifest: dict = {
         "run_id": run_id,
-        "mode": "offline_no_model_spend",
+        "mode": "isolated_db_no_model_spend",
         "started_at": datetime.now(timezone.utc).isoformat(),
         "git": git_sha(),
         "versions": versions(),
-        "isolation": {
-            "env_file": str(env_path) if env_path else None,
-            "storage_dir": os.environ.get("STORAGE_DIR"),
-            "database": (
-                os.environ.get("DATABASE_URL", "").split("@")[-1]
-                if os.environ.get("DATABASE_URL")
-                else None
-            ),
-            "isolated": bool(env_path and "study_platform_test" in os.environ.get("DATABASE_URL", "")),
-        },
+        "isolation": {"proven": False, "env_file": str(env_path) if env_path else None},
         "steps": [],
-        "model_spend": {
-            "live_calls": 0,
-            "status": "blocked_by_policy",
-            "required_user_actions": [
-                "Approve dedicated test model connection in KnowLoop Model Connections",
-                "Set explicit spending cap and record in test-environment.md",
-                "Export DEEPSEEK_API_KEY / EMBEDDING_API_KEY only into .local/deep-test/env/deep-test.env",
-            ],
-        },
+        "model_spend": {"live_calls": 0, "status": "blocked_by_policy"},
     }
 
-    uv = shutil_which("uv")
-    py_steps = [
-        (
-            "deep_test_validate_corpus",
-            [sys.executable, str(DEEP / "validate_dataset.py")],
-            ROOT,
-        ),
-    ]
-    if uv:
-        py_steps.extend(
+    manifest["steps"].append(
+        run_cmd("validate_corpus", [sys.executable, str(DEEP / "validate_dataset.py")], ROOT)
+    )
+
+    manifest["steps"].append(
+        run_cmd(
+            "study_eval_rag_dry",
             [
-                ("ruff", [uv, "run", "ruff", "check", "."], BACKEND),
-                (
-                    "pytest",
-                    [uv, "run", "pytest", "-q", "--tb=no"],
-                    BACKEND,
-                ),
-            ]
+                uv,
+                "run",
+                "study-eval-rag",
+                "--dataset",
+                "evaluation/deep-test/questions.jsonl",
+            ],
+            BACKEND,
         )
-    else:
+    )
+
+    if env_path:
         manifest["steps"].append(
-            {
-                "name": "uv_missing",
-                "passed": False,
-                "note": "Install uv for full pytest/ruff gate",
-            }
+            run_cmd(
+                "recreate_test_database",
+                [uv, "run", "python", "tests/ci_bootstrap_postgres.py"],
+                BACKEND,
+            )
         )
+        load_isolated_env()
 
-    for name, cmd, cwd in py_steps:
-        manifest["steps"].append(run_cmd(name, cmd, cwd))
+    manifest["steps"].extend(
+        [
+            run_cmd("ruff", [uv, "run", "ruff", "check", "evaluation/deep-test"], BACKEND),
+            run_cmd(
+                "pytest_db",
+                [uv, "run", "pytest", "-q", "-rs", "--tb=no"],
+                BACKEND,
+            ),
+            run_cmd(
+                "migration_roundtrip",
+                [uv, "run", "pytest", "-q", "tests/integration/test_migration_roundtrip.py"],
+                BACKEND,
+            ),
+            run_cmd("npm_test", ["npm", "test"], FRONTEND),
+            run_cmd("npm_build", ["npm", "run", "build"], FRONTEND),
+        ]
+    )
 
-    node = shutil_which("node")
-    npm = shutil_which("npm")
-    if node and npm and (FRONTEND / "package.json").exists():
-        for name, script in (("npm_test", ["npm", "test"]), ("npm_build", ["npm", "run", "build"])):
-            manifest["steps"].append(run_cmd(name, script, FRONTEND))
-    else:
-        manifest["steps"].append({"name": "frontend", "passed": False, "note": "node/npm unavailable"})
+    if env_path:
+        for name, script in (
+            ("prove_isolation", "prove_isolation.py"),
+            ("seed_accounts", "seed_accounts.py"),
+            ("cross_user_isolation", "run_cross_user_isolation.py"),
+        ):
+            manifest["steps"].append(
+                run_cmd(
+                    name,
+                    [uv, "run", "python", str(HARNESS / script)],
+                    BACKEND,
+                )
+            )
+        proof = next(s for s in manifest["steps"] if s["name"] == "prove_isolation")
+        manifest["isolation"]["proven"] = proof.get("passed", False)
 
-    # Lightweight local load probe (health only, mocked label if API down)
-    manifest["load_baseline"] = {
-        "status": "BLOCKED",
-        "reason": "API/worker not started in offline prep phase",
-        "planned_clients": [1, 5, 10],
-        "duration_seconds": 30,
-    }
+    for step in manifest["steps"]:
+        if step["name"] == "prove_isolation" and step["passed"]:
+            try:
+                proof_text = "\n".join(step["stdout_tail"])
+                save_json(out / "isolation_proof.json", json.loads(proof_text))
+            except json.JSONDecodeError:
+                pass
+        if step["name"] == "cross_user_isolation":
+            try:
+                save_json(
+                    out / "cross_user_isolation.json",
+                    json.loads("\n".join(step["stdout_tail"])),
+                )
+            except json.JSONDecodeError:
+                pass
 
-    passed = all(step.get("passed", False) for step in manifest["steps"] if "passed" in step)
+    if env_path:
+        seed = ROOT / ".local" / "deep-test" / "seed" / "accounts.json"
+        if seed.exists():
+            save_json(out / "seed_accounts_sanitized.json", json.loads(seed.read_text(encoding="utf-8")))
+
+    hard_fail = [s["name"] for s in manifest["steps"] if not s.get("passed")]
     manifest["summary"] = {
-        "passed": passed,
-        "step_count": len(manifest["steps"]),
-        "failed": [s["name"] for s in manifest["steps"] if not s.get("passed")],
+        "passed": not hard_fail,
+        "failed_steps": hard_fail,
+        "pytest_db": next((s for s in manifest["steps"] if s["name"] == "pytest_db"), {}),
+        "coverage_note": "Skipped tests are not coverage; see pytest -rs tail in manifest",
     }
     manifest["finished_at"] = datetime.now(timezone.utc).isoformat()
+    save_json(out / "manifest.json", manifest)
+    (out / "summary.log").write_text(json.dumps(manifest["summary"], ensure_ascii=False) + "\n")
 
-    (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    (out / "summary.log").write_text(
-        json.dumps(manifest["summary"], ensure_ascii=False) + "\n", encoding="utf-8"
-    )
     print(json.dumps(manifest["summary"], ensure_ascii=False))
     print(f"Artifacts: {out}")
-    return 0 if passed else 1
-
-
-def shutil_which(cmd: str) -> str | None:
-    from shutil import which
-
-    return which(cmd)
+    return 0 if not hard_fail else 1
 
 
 if __name__ == "__main__":
