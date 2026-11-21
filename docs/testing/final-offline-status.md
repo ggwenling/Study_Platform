@@ -1,9 +1,9 @@
 # Final offline phase status（PR #19 完成度）
 
 | 产品基线 | `20a20b96ab99bb4176546df6e8972dbd64df51b4` |
-| Harness | 见当前 PR 头 `git rev-parse HEAD` |
-| 最后整包 | `uv run python evaluation/deep-test/harness/run_final_offline_phase.py` |
-| 产物 | `artifacts/deep-test/final-<run-id>/final_phase_manifest.json` |
+| Harness | `586f8d0` |
+| 最后整包 | **PASS** `final-20261121T172000Z` |
+| 产物 | `artifacts/deep-test/final-20261121T172000Z/final_phase_manifest.json` |
 
 ## 九域状态（诚实）
 

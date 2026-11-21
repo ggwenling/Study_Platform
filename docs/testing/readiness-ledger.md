@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 产品基线 | `20a20b96ab99bb4176546df6e8972dbd64df51b4` |
-| Harness | `24dcae4` on `cursor/deep-testing-prep-9b8e` |
+| Harness | `586f8d0` on `cursor/deep-testing-prep-9b8e` |
 | Phase 1 离线门 | **406** pytest pass；Vitest/build；`study-eval-rag` dry 100Q |
 | Phase 2 套件 | `uv run python evaluation/deep-test/harness/run_phase2_suite.py` |
 | 最近产物 | `artifacts/deep-test/phase2-20261121T171800Z/phase2_manifest.json`（gitignored） |
