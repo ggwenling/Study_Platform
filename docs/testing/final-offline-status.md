@@ -25,7 +25,7 @@
 | --- | --- | --- |
 | 1 | 冻结 SHA | ✅ 产品 `20a20b96` |
 | 2 | 隔离环境 | ✅ `study_platform_test` / `.local/deep-test/` |
-| 3 | 模型预算 | ❌ 见下「用户动作」 |
+| 3 | 模型预算 | ⚠️ 花费**已批**（无上限·有界评测）；**密钥仍缺** → live BLOCKED |
 | 4 | 语料 | ✅ 100Q synthetic |
 | 5 | 种子用户 | ✅ mock + backup 剧本 |
 | 6 | 矩阵/门禁 | ✅ + `run_final_offline_phase.py` |

@@ -30,7 +30,7 @@
 
 | 能力 | 缺失输入 |
 | --- | --- |
-| Live RAG / chat 质量 | `DEEPSEEK_API_KEY`、`EMBEDDING_API_KEY`、`DEEP_TEST_ALLOW_LIVE=1`、花费上限书面批准 |
+| Live RAG / chat 质量 | 花费已批（无上限·有界评测）；仍缺 **`DEEPSEEK_API_KEY` + `EMBEDDING_API_KEY` + `DEEP_TEST_ALLOW_LIVE=1`**（见 `live-rag-readiness.md`） |
 | 浏览器 E2E / 截图 | headed stack + 前端 dev 常驻 |
 | Windows  soak | 物理机/协议未执行 |
 | BAK 全量 restore | 本回合 `restore_protocol: NOT_RUN` |
