@@ -227,7 +227,7 @@ def seed_corpus(factory, materials):
                 id=uuid4(),
                 material_version_id=version.id,
                 generation=1,
-                pipeline_profile="semantic-v2",
+                pipeline_profile=chunking.SEMANTIC_PROFILE,
                 embedding_profile=f"{settings.embedding_model}:1024",
                 embedding_dim=1024,
                 status="ready",

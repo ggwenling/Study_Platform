@@ -22,7 +22,7 @@ from study_platform.persistence.models.materials import (
 )
 from study_platform.persistence.models.operations import AiJob
 from study_platform.services import job_queue, model_connections
-from study_platform.services.chunking import semantic_chunks
+from study_platform.services.chunking import SEMANTIC_PROFILE, semantic_chunks, semantic_v2_chunks
 from study_platform.services.ingestion import chunks as legacy_chunks
 from study_platform.services.lexical import lexical_column_values
 from study_platform.services.model_usage import ModelUsageContext
@@ -203,20 +203,23 @@ def _signature(rows):
 
 
 def _parts(rows, rechunk, source_profile):
-    original_chunker = {
-        "document-v1": legacy_chunks,
-        "document-vision-v1": legacy_chunks,
-        "semantic-v2": semantic_chunks,
-    }.get(source_profile)
+    original_chunkers = {
+        "document-v1": (legacy_chunks,),
+        "document-vision-v1": (legacy_chunks,),
+        # Existing v2 generations were written both before and after the atomic-block fix.
+        "semantic-v2": (semantic_chunks, semantic_v2_chunks),
+        SEMANTIC_PROFILE: (semantic_chunks,),
+    }.get(source_profile, ())
     for section_id, group in groupby(rows, key=lambda row: row[2]):
         chunks = list(group)
         _, locator, _, group_id, _, section_text = chunks[0]
         # Only regenerate an entire section if its active chunks still exactly
         # match the original segmentation. An edit can also be a source substring.
         if (
-            rechunk and original_chunker and section_id and section_text
+            rechunk and section_id and section_text
             and all(enabled and not row_group for _, _, _, row_group, enabled, _ in chunks)
-            and [row[0] for row in chunks] == list(original_chunker(section_text))
+            and any([row[0] for row in chunks] == list(original(section_text))
+                    for original in original_chunkers)
         ):
             yield from ((part, locator, section_id, group_id, True) for part in semantic_chunks(section_text))
         else:
@@ -346,7 +349,7 @@ def run(job_id, kb_id, fence):
                     source = db.get(IndexVersion, UUID(item["source_index_id"]))
                     source_profile = source.pipeline_profile
                     rows = _chunks(db, item["source_index_id"])
-                    pipeline = "semantic-v2" if rechunk else source_profile
+                    pipeline = SEMANTIC_PROFILE if rechunk else source_profile
                     _set_result(job, items, "reindexing", key)
                     db.commit()
                     parts = list(_parts(rows, rechunk, source_profile))

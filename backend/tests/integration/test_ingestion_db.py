@@ -4,6 +4,7 @@ import hashlib
 import os
 from contextlib import nullcontext
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -122,8 +123,10 @@ def test_worker_publishes_text_and_vector(state):
         assert job.status == "succeeded"
         assert db.get(MaterialVersion, version_id).parse_status == "ready"
         assert db.scalar(
-            sa.select(IndexVersion).where(IndexVersion.material_version_id == version_id)
-        ).is_active
+            sa.select(IndexVersion.pipeline_profile).where(
+                IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True),
+            )
+        ) == "semantic-v3"
         assert (
             db.scalar(
                 sa.select(MaterialSection.text).where(
@@ -132,6 +135,35 @@ def test_worker_publishes_text_and_vector(state):
             )
             == "hello"
         )
+
+
+def test_worker_publishes_pdf_ocr_even_if_preview_cannot_be_published(state, monkeypatch):
+    factory, job_id, version_id, _, _ = state
+    source = source_path(version_id)
+    with Image.new("RGB", (100, 100), "white") as image:
+        image.save(source, format="PDF")
+    with factory() as db:
+        db.get(MaterialVersion, version_id).source_mime = "application/pdf"
+        db.commit()
+    ocr_lines = [{"text": "扫描页正文", "box": [[1, 2], [3, 4]], "confidence": 0.9}]
+    monkeypatch.setattr(ingestion, "ocr_image", lambda _: ocr_lines)
+    replace = Path.replace
+
+    def fail_final_preview(path, target):
+        if path.name == "page-1.png" and target.parent == source.parent:
+            raise OSError("cannot publish preview")
+        return replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_final_preview)
+    assert ingestion.run_once()
+    with factory() as db:
+        assert db.get(AiJob, job_id).status == "succeeded"
+        chunk = db.scalar(sa.select(MaterialChunk).join(IndexVersion).where(
+            MaterialChunk.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        ))
+        assert chunk.text == "扫描页正文"
+        assert chunk.locator == {"page": 1, "ocr": ocr_lines}
+    assert not (source.parent / "page-1.png").exists()
 
 
 @pytest.mark.parametrize("cancel", [False, True], ids=["retry", "cancel"])
@@ -273,7 +305,7 @@ def test_reindex_yields_to_pending_ingestion_and_includes_its_new_index(state, m
         assert [(index.generation, index.status) for index in indexes] == [(1, "retired"), (2, "ready")]
 
 
-@pytest.mark.parametrize("profile", ["document-v1", "semantic-v2"])
+@pytest.mark.parametrize("profile", ["document-v1", "semantic-v2", "semantic-v3"])
 def test_reindex_keeps_fragment_edit_that_is_a_substring_of_the_source(state, monkeypatch, profile):
     factory, _, version_id, _, kb_id = state
     monkeypatch.setattr(reindex, "session_factory", lambda: factory)
@@ -300,6 +332,54 @@ def test_reindex_keeps_fragment_edit_that_is_a_substring_of_the_source(state, mo
             MaterialChunk.material_version_id == version_id, IndexVersion.is_active.is_(True),
         )).all()
         assert active == ["保留第一句。"]
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_reindex_recognizes_pre_fix_semantic_v2_chunks(state, monkeypatch, edited):
+    factory, _, version_id, _, kb_id = state
+    monkeypatch.setattr(reindex, "session_factory", lambda: factory)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **__: nullcontext())
+    monkeypatch.setattr(ingestion.classification, "enqueue", lambda *_: None)
+    monkeypatch.setattr(reindex, "embed_texts", ingestion.embed_texts)
+    body = "    value = '" + "x" * 1700 + "'"
+    source_path(version_id).write_text(f"```python\n{body}\n```", encoding="utf-8")
+    with factory() as db:
+        db.get(MaterialVersion, version_id).source_mime = "text/markdown"
+        db.commit()
+    assert ingestion.run_once()
+
+    with factory() as db:
+        old = db.scalar(sa.select(IndexVersion).where(IndexVersion.material_version_id == version_id))
+        old.pipeline_profile = "semantic-v2"
+        chunks = db.scalars(sa.select(MaterialChunk).where(MaterialChunk.index_version_id == old.id)
+                            .order_by(MaterialChunk.ordinal)).all()
+        assert len(chunks) == 2
+        # The original v2 used 1586 body characters per fenced Python chunk and stripped indentation.
+        expected = [f"```python\n{part.strip()}\n```" for part in (body[:1586], body[1586:])]
+        if edited:
+            expected[0] = expected[0].replace("x" * 100, "", 1)
+        for chunk, part in zip(chunks, expected, strict=True):
+            chunk.text = part
+            chunk.text_sha256 = hashlib.sha256(part.encode()).hexdigest()
+        reindex.enqueue(db, db.get(KnowledgeBase, kb_id, with_for_update=True), None, True)
+        claimed = job_queue.claim(db, ("reindex",))
+    assert claimed is not None and ingestion.run_once(claimed)
+    with factory() as db:
+        active = db.scalars(sa.select(MaterialChunk.text).join(IndexVersion).where(
+            MaterialChunk.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        ).order_by(MaterialChunk.ordinal)).all()
+        assert db.scalar(sa.select(IndexVersion.pipeline_profile).where(
+            IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        )) == "semantic-v3"
+        retired = db.scalars(sa.select(MaterialChunk.text).join(IndexVersion).where(
+            MaterialChunk.material_version_id == version_id, IndexVersion.status == "retired",
+        ).order_by(MaterialChunk.ordinal)).all()
+        assert retired == expected
+        if edited:
+            assert active == expected
+        else:
+            assert active[0].startswith("```python\n    value =")
+            assert "".join(part.removeprefix("```python\n").removesuffix("\n```") for part in active) == body
 
 
 def test_web_clip_persists_source_and_publishes_markdown(state, monkeypatch):

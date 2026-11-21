@@ -133,6 +133,43 @@ def test_ocr_failure_preserves_usable_text_but_propagates_lost_lease(tmp_path, m
     assert not (tmp_path / "page-1.png").exists()
 
 
+@pytest.mark.parametrize(("text", "error", "falls_back"), [
+    ("目录", OSError, True), ("", OSError, False), ("目录", ingestion.LostLease, False),
+])
+def test_render_failure_uses_pdf_text_only_when_usable(tmp_path, monkeypatch, text, error, falls_back):
+    version = setup_pdf(tmp_path, monkeypatch, text)
+    phases = []
+
+    def fail(_page, *, scale):
+        raise error()
+
+    monkeypatch.setattr(FakePage, "render", fail)
+    if falls_back:
+        assert list(ingestion.extract(version, tmp_path, phases.append)) == [(text, {"page": 1})]
+    else:
+        with pytest.raises(error):
+            list(ingestion.extract(version, tmp_path, phases.append))
+    assert phases == ["parsing"]
+
+
+@pytest.mark.parametrize("text_layer", ["水印 1", ""])
+def test_ocr_text_survives_preview_write_failure(tmp_path, monkeypatch, text_layer):
+    version = setup_pdf(tmp_path, monkeypatch, text_layer)
+    ocr_text = "扫描页正文：青竹项目安全阈值为48帕，本文由知循系统提供服务，最终以原始资料正文为准。"
+    lines = [{"text": ocr_text, "box": [[1, 2], [3, 4]], "confidence": 0.9}]
+    monkeypatch.setattr(ingestion, "ocr_image", lambda _: lines)
+
+    def fail(_image, path, **_):
+        path.write_bytes(b"incomplete")
+        raise OSError("preview unavailable")
+
+    monkeypatch.setattr(Image.Image, "save", fail)
+    assert list(ingestion.extract(version, tmp_path, lambda _: None)) == [
+        (ocr_text, {"page": 1, "ocr": lines}),
+    ]
+    assert not (tmp_path / "page-1.png").exists()
+
+
 def test_large_image_page_with_sparse_text_triggers_ocr(tmp_path, monkeypatch):
     text_layer = "A" * 60
     version = setup_pdf(tmp_path, monkeypatch, text_layer, (0, 0, 60, 60))

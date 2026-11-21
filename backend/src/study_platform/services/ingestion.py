@@ -1,10 +1,11 @@
 """Durable ingestion worker and document extraction."""
 
 import hashlib
+import logging
 import re
 import shutil
 import zipfile
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from threading import Lock
@@ -37,6 +38,7 @@ from study_platform.services.vision_pipeline import extract_vision
 
 _ocr = None
 _ocr_lock = Lock()
+logger = logging.getLogger(__name__)
 
 
 def now():
@@ -313,17 +315,25 @@ def extract(version, output_dir, phase):
                         )
                         image = None
                         if should_ocr:
-                            width, height = page.get_size()
-                            scale = min(200 / 72, 2500 / max(width, height))
-                            bitmap = page.render(scale=scale)
                             try:
-                                image = bitmap.to_pil()
-                            finally:
-                                bitmap.close()
+                                width, height = page.get_size()
+                                scale = min(200 / 72, 2500 / max(width, height))
+                                bitmap = page.render(scale=scale)
+                                try:
+                                    rendered = bitmap.to_pil()
+                                finally:
+                                    bitmap.close()
+                                image = rendered
+                            except (LostLease, DBAPIError):
+                                raise
+                            except Exception:
+                                if not effective_len:
+                                    raise
+                                logger.warning("Could not render PDF page %d for OCR. Using its text layer.", number)
                     finally:
                         page.close()
-                if should_ocr:
-                    with image:
+                if image is not None:
+                    with closing(image):
                         phase("ocr")
                         try:
                             lines = ocr_image(image)
@@ -333,8 +343,6 @@ def extract(version, output_dir, phase):
                                 effective_len == 0 or ocr_effective_len
                                 >= max(int(effective_len * 1.5), effective_len + 20)
                             )
-                            if use_ocr:
-                                image.save(output_dir / f"page-{number}.png")
                         except (LostLease, DBAPIError):
                             raise
                         except Exception:
@@ -342,10 +350,17 @@ def extract(version, output_dir, phase):
                                 raise
                             use_ocr = False
                         if use_ocr:
-                            yield ocr_text, {"page": number, "ocr": lines}
-                        elif text:
-                            yield text, {"page": number}
-                elif text:
+                            preview = output_dir / f"page-{number}.png"
+                            temporary = preview.with_name(f".{preview.name}.tmp")
+                            try:
+                                image.save(temporary, format="PNG")
+                                temporary.replace(preview)
+                            except OSError:
+                                logger.warning("Could not save OCR preview for PDF page %d.", number)
+                    if use_ocr:
+                        yield ocr_text, {"page": number, "ocr": lines}
+                        continue
+                if text:
                     yield text, {"page": number}
         finally:
             with PDFIUM_LOCK:
@@ -493,7 +508,7 @@ def run_once(claimed=None):
                     update_phase(db, job_id, fence, phase)
 
                 parser_profile = "document-v1"
-                pipeline = "semantic-v2"
+                pipeline = chunking.SEMANTIC_PROFILE
                 if job.payload.get("extraction_mode") == "vlm":
                     if not vision:
                         raise ApiError(409, "vision_not_configured", "当前任务没有就绪的视觉模型连接。")
@@ -626,9 +641,16 @@ def run_once(claimed=None):
                 )
                 attempt.outcome = "success"
                 attempt.finished_at = now()
-                # Copy page previews before publication while the job row is locked.
+                # Publish page previews while holding the fenced job row.
                 for image in staging.glob("page-*.png"):
-                    shutil.copyfile(image, version_dir(version_id) / image.name)
+                    destination = version_dir(version_id) / image.name
+                    if version.source_mime == "application/pdf":
+                        try:
+                            image.replace(destination)
+                        except OSError:
+                            logger.warning("Could not publish OCR preview for PDF %s.", version_id)
+                    else:
+                        shutil.copyfile(image, destination)
                 db.commit()
             except LostLease:
                 db.rollback()

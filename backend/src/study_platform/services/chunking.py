@@ -3,6 +3,8 @@
 import re
 from collections.abc import Iterator
 
+SEMANTIC_PROFILE = "semantic-v3"
+
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 _HEADING = re.compile(r"^ {0,3}#{1,6}[ \t]+")
 _SENTENCE = re.compile(r".+?(?:[。！？.!?;；]+|\n+|$)", re.DOTALL)
@@ -11,7 +13,8 @@ _SENTENCE_END = "。！？.!?;；"
 
 
 def semantic_chunks(
-    text: str, chunk_size: int = 800, overlap: int = 120, atomic_max: int = 1600
+    text: str, chunk_size: int = 800, overlap: int = 120, atomic_max: int = 1600,
+    *, _legacy_atoms: bool = False,
 ) -> Iterator[str]:
     """Yield chunks that prefer semantic boundaries and keep Markdown atoms intact."""
     if chunk_size < 1 or overlap < 0 or overlap >= chunk_size or atomic_max < chunk_size:
@@ -34,9 +37,14 @@ def semantic_chunks(
             continue
 
         yield from flush_pending()
-        yield from _atomic_chunks(kind, block, atomic_max)
+        yield from _atomic_chunks(kind, block, atomic_max, legacy_atoms=_legacy_atoms)
 
     yield from flush_pending()
+
+
+def semantic_v2_chunks(text: str) -> Iterator[str]:
+    """Replay the original v2 output solely to recognize unedited stored chunks."""
+    return semantic_chunks(text, _legacy_atoms=True)
 
 
 def _blocks(text: str) -> Iterator[tuple[str, str]]:
@@ -220,7 +228,7 @@ def _split_long_text(text: str, size: int, overlap: int) -> list[str]:
     return parts
 
 
-def _atomic_chunks(kind: str, block: str, limit: int) -> list[str]:
+def _atomic_chunks(kind: str, block: str, limit: int, *, legacy_atoms: bool) -> list[str]:
     if len(block) <= limit:
         return [block]
     lines = block.splitlines()
@@ -228,14 +236,17 @@ def _atomic_chunks(kind: str, block: str, limit: int) -> list[str]:
         opener = lines[0]
         closing = lines[-1] if len(lines) > 1 and _is_fence_close(lines[0], lines[-1]) else ""
         body = lines[1:-1] if closing else lines[1:]
-        return _wrap_line_parts(opener, closing, body, limit)
+        body_limit = max(1, limit - len(opener) - len(closing) - 2)
+        return [f"{opener}\n{part}\n{closing}" if closing else f"{opener}\n{part}"
+                for part in _line_parts(body, body_limit, legacy_atoms=legacy_atoms)]
     if kind == "table":
         prefix = "\n".join(lines[:2])
         allowance = limit - len(prefix) - 1
-        if allowance <= 0:
+        if allowance <= 0 and not legacy_atoms:
             # An oversized header cannot be repeated inside the per-chunk limit.
             return [block[start:start + limit] for start in range(0, len(block), limit)]
-        return [f"{prefix}\n{part}" for part in _line_parts(lines[2:], allowance)]
+        return [f"{prefix}\n{part}"
+                for part in _line_parts(lines[2:], max(1, allowance), legacy_atoms=legacy_atoms)]
     if kind == "math":
         opening = lines[0].find("$$")
         same_line_close = lines[0].find("$$", opening + 2)
@@ -247,9 +258,9 @@ def _atomic_chunks(kind: str, block: str, limit: int) -> list[str]:
             last = lines[-1][:closing].strip() if closing >= 0 else lines[-1]
             body_lines = [line for line in (first, *lines[1:-1], last) if line]
         body = "\n".join(body_lines)
-        parts = _line_parts(body.splitlines(), max(1, limit - 6))
+        parts = _line_parts(body.splitlines(), max(1, limit - 6), legacy_atoms=legacy_atoms)
         return [f"$$\n{part}\n$$" for part in parts]
-    return _line_parts(lines, limit)
+    return _line_parts(lines, limit, legacy_atoms=legacy_atoms)
 
 
 def _is_fence_close(opening: str, closing: str) -> bool:
@@ -263,19 +274,17 @@ def _is_fence_close(opening: str, closing: str) -> bool:
     )
 
 
-def _wrap_line_parts(opener: str, closing: str, lines: list[str], limit: int) -> list[str]:
-    wrapper_size = len(opener) + len(closing) + 2
-    body_limit = max(1, limit - wrapper_size)
-    return [f"{opener}\n{part}\n{closing}" if closing else f"{opener}\n{part}"
-            for part in _line_parts(lines, body_limit)]
-
-
-def _line_parts(lines: list[str], limit: int) -> list[str]:
+def _line_parts(lines: list[str], limit: int, *, legacy_atoms: bool) -> list[str]:
     parts: list[str] = []
     current: list[str] = []
     current_size = 0
     for line in lines:
-        pieces = [line[start:start + limit] for start in range(0, len(line), limit)] if line else [""]
+        if len(line) <= limit:
+            pieces = [line]
+        elif legacy_atoms:
+            pieces = _split_long_text(line, limit, 0)
+        else:
+            pieces = [line[start:start + limit] for start in range(0, len(line), limit)]
         for piece in pieces:
             extra = len(piece) + (1 if current else 0)
             if current and current_size + extra > limit:
