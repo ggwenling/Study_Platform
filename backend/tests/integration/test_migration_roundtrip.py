@@ -14,6 +14,8 @@ from sqlalchemy.engine import make_url
 from alembic import command
 from study_platform.persistence import models  # noqa: F401
 from study_platform.persistence.base import Base
+from study_platform.services.lexical import plain_tsquery
+from study_platform.services.workspace_search import body_search_expression
 
 pytestmark = pytest.mark.integration
 
@@ -179,7 +181,15 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                 for conversation, expected_project in zip(conversations, [kb_ids[0], None, None, None], strict=True):
                     assert connection.scalar(sa.text("SELECT project_knowledge_base_id FROM study.conversations WHERE id=:id"), {"id": conversation}) == expected_project
             check(True)
-            if not offline:
+            if offline:
+                with engine.connect() as connection:
+                    note = models.Note.__table__
+                    assert connection.scalar(sa.select(note.c.lexical).where(note.c.id == note_id)) is None
+                    term = "向量模型"
+                    assert connection.scalar(sa.select(note.c.id).where(
+                        body_search_expression(note.c.content_md, note.c.lexical, term, plain_tsquery(term)),
+                    )) == note_id
+            else:
                 with engine.connect() as connection:
                     assert connection.scalar(sa.text("SELECT lexical @@ plainto_tsquery('simple', '雪松') "
                         "FROM study.notes WHERE id=:id"), {"id": note_id})

@@ -188,7 +188,7 @@ it('starts a completed quiz only after the user chooses its toast action', async
     await Promise.resolve()
     await Promise.resolve()
   })
-  expect(api.learning.startAttempt).toHaveBeenCalledWith('quiz-1')
+  expect(api.learning.startAttempt).toHaveBeenCalledWith('quiz-1', true)
   expect(node.querySelector('[data-location]')?.textContent).toContain('"attemptId":"attempt-1"')
 })
 

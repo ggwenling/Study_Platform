@@ -33,6 +33,7 @@ from study_platform.persistence.models import (
     MaterialChunk,
     MaterialVersion,
     Message,
+    Note,
 )
 from study_platform.services import auth_limits
 from study_platform.services.chat import chunk_query
@@ -530,3 +531,18 @@ def test_workspace_search_ranks_lexical_matches_and_pages_with_a_stable_cursor(r
     )
     assert updated.status_code == 200, updated.text
     assert editable["id"] in {item["id"] for item in search("模型 向量")["items"]}
+
+
+def test_unindexed_note_remains_searchable_by_its_body_after_offline_upgrade(resource_client):
+    http, db = resource_client
+    signup(http)
+    kb = http.post("/knowledge-bases", json={"name": "旧研究资料"}).json()["id"]
+    note = http.post(f"/knowledge-bases/{kb}/notes", json={
+        "title": "旧笔记", "content_md": "实验结论使用冻原温度校验。",
+    }).json()
+    db.get(Note, UUID(note["id"])).lexical = None
+    db.commit()
+    response = http.get("/search", params={"q": "冻原温度校验", "include_content": "true"})
+
+    assert response.status_code == 200, response.text
+    assert [item["id"] for item in response.json()["items"]] == [note["id"]]

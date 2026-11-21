@@ -35,10 +35,13 @@ def title_search_expressions(column, query: str, terms: list[str]):
 
 
 def body_search_expression(text_column, lexical_column, query: str, tsquery):
-    if tsquery is not None and len(query) > 3:
-        return lexical_column.op("@@")(tsquery)
     substring = text_column.ilike(f"%{_escape_like(query)}%", escape="\\")
-    return substring if tsquery is None else sa.or_(substring, lexical_column.op("@@")(tsquery))
+    if tsquery is None:
+        return substring
+    if len(query) > 3:
+        # Offline migration cannot run jieba, so historical rows may lack a vector.
+        substring = sa.and_(lexical_column.is_(None), substring)
+    return sa.or_(lexical_column.op("@@")(tsquery), substring)
 
 
 def body_score_expression(lexical_column, terms: list[str], tsquery):

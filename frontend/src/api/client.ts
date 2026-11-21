@@ -2,6 +2,7 @@ import { ApiError, errorFromResponse, parseChatStream } from './stream'
 import type { DueFlashcard, ExtractionMode, ModelConnectionKind } from './types'
 import type { ReindexStatus, ReindexSubmitted } from './types'
 import type { AiGenerationJobType, AiJob, SubmittedAiJob } from './types'
+import type { PendingQuiz } from './types'
 import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, MaterialReader, Message, ModelUsageSummary, Page, RetrievalSettings, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
 
 const base = '/api/v1'
@@ -252,8 +253,10 @@ export const api = {
       request<Page<LearningAttemptSummary>>(
         '/learning/attempts' + query({ knowledge_base_id: knowledgeBaseId, limit: String(limit), cursor }),
       ),
-    startAttempt: (quizId: string) =>
-      request<LearningAttempt>('/learning/attempts', json('POST', { quiz_id: quizId })),
+    pendingQuizzes: (cursor?: string, signal?: AbortSignal) =>
+      request<Page<PendingQuiz>>('/learning/quizzes/pending' + query({ cursor }), { signal }),
+    startAttempt: (quizId: string, resumeExisting?: boolean) =>
+      request<LearningAttempt>('/learning/attempts', json('POST', { quiz_id: quizId, resume_existing: resumeExisting })),
     attempt: (id: string) => request<LearningAttempt>(`/learning/attempts/${pathId(id)}`),
     submitAnswerText: (responseId: string, answerText: string) =>
       request<LearningResponseResult>(

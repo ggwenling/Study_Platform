@@ -273,6 +273,35 @@ def test_reindex_yields_to_pending_ingestion_and_includes_its_new_index(state, m
         assert [(index.generation, index.status) for index in indexes] == [(1, "retired"), (2, "ready")]
 
 
+@pytest.mark.parametrize("profile", ["document-v1", "semantic-v2"])
+def test_reindex_keeps_fragment_edit_that_is_a_substring_of_the_source(state, monkeypatch, profile):
+    factory, _, version_id, _, kb_id = state
+    monkeypatch.setattr(reindex, "session_factory", lambda: factory)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **__: nullcontext())
+    monkeypatch.setattr(ingestion.classification, "enqueue", lambda *_: None)
+    monkeypatch.setattr(reindex, "embed_texts", lambda texts, **_: [[0.1] * 1024 for _ in texts])
+    source_path(version_id).write_text("保留第一句。删除第二句。", encoding="utf-8")
+    assert ingestion.run_once()
+    with factory() as db:
+        chunk = db.scalar(sa.select(MaterialChunk).where(MaterialChunk.material_version_id == version_id))
+        db.get(IndexVersion, chunk.index_version_id).pipeline_profile = profile
+        db.commit()
+        kb = db.get(KnowledgeBase, kb_id)
+        monkeypatch.setattr("study_platform.services.rag_workshop.embed_texts", reindex.embed_texts)
+        from study_platform.services.rag_workshop import edit_fragment_text
+
+        edit_fragment_text(db, user=SimpleNamespace(id=kb.owner_user_id), kb_id=kb_id,
+                           chunk_id=chunk.id, text="保留第一句。")
+        reindex.enqueue(db, db.get(KnowledgeBase, kb_id, with_for_update=True), None, True)
+        claimed = job_queue.claim(db, ("reindex",))
+    assert claimed is not None and ingestion.run_once(claimed)
+    with factory() as db:
+        active = db.scalars(sa.select(MaterialChunk.text).join(IndexVersion).where(
+            MaterialChunk.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        )).all()
+        assert active == ["保留第一句。"]
+
+
 def test_web_clip_persists_source_and_publishes_markdown(state, monkeypatch):
     factory, job_id, _, material_id, kb_id = state
     with factory() as db:

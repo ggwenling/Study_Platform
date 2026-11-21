@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, BookOpen, Camera, Check, ChevronRight, Download, FileText, History, MessageCircle, RotateCcw, X } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { Accordion } from '@/components/arc/accordion/accordion'
@@ -15,6 +15,7 @@ import type {
   LearningResponseResult,
   LearningSource,
   Material,
+  PendingQuiz,
   WrongQuestionItem,
 } from '@/api/types'
 import { ApiError } from '@/api/stream'
@@ -90,7 +91,7 @@ function SourceList({ sources, onOpenSource, disabled = false }: {
 }
 
 export function Learning({ knowledgeBases, notify, overview, refreshOverview }: Props) {
-  const { capabilities, aiJobs } = useWorkspace()
+  const { capabilities, aiJobs, revision } = useWorkspace()
   const navigate = useNavigate()
   const location = useLocation()
   const historyState = location.state as {
@@ -111,6 +112,10 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   const [materialsError, setMaterialsError] = useState('')
   const [materialsRetry, setMaterialsRetry] = useState(0)
   const [attempt, setAttempt] = useState<LearningAttempt | null>(null)
+  const [pendingQuizzes, setPendingQuizzes] = useState<PendingQuiz[]>([])
+  const [pendingError, setPendingError] = useState('')
+  const [pendingRetry, setPendingRetry] = useState(0)
+  const pendingRequest = useRef<AbortController | null>(null)
   const [attempts, setAttempts] = useState<LearningAttemptSummary[]>([])
   const [attemptsCursor, setAttemptsCursor] = useState<string | null>(null)
   const [loadingMoreAttempts, setLoadingMoreAttempts] = useState(false)
@@ -204,6 +209,20 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   }, [refreshWrongs, refreshAttempts])
 
   useEffect(() => {
+    const controller = new AbortController()
+    pendingRequest.current = controller
+    void allPages((cursor) => api.learning.pendingQuizzes(cursor, controller.signal)).then((rows) => {
+      if (!controller.signal.aborted) {
+        setPendingQuizzes(rows)
+        setPendingError('')
+      }
+    }, (error: unknown) => {
+      if (!controller.signal.aborted) setPendingError(errorMessage(error))
+    })
+    return () => controller.abort()
+  }, [revision, pendingRetry])
+
+  useEffect(() => {
     const state = location.state as typeof historyState
     setTab(state?.tab ?? 'practice')
     setStartDueQueue(Boolean(state?.startDueQueue))
@@ -261,16 +280,36 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
     })
   }
 
+  function showAttempt(loaded: LearningAttempt) {
+    setAttempt(loaded)
+    const firstUnanswered = loaded.items.findIndex((item) => !item.verdict)
+    setIndex(firstUnanswered >= 0 ? firstUnanswered : 0)
+    setTab('practice')
+  }
+
   async function openAttemptById(attemptId: string) {
     setBusy(true)
     try {
-      const loaded = await api.learning.attempt(attemptId)
-      setAttempt(loaded)
-      const firstUnanswered = loaded.items.findIndex((item) => !item.verdict)
-      setIndex(firstUnanswered >= 0 ? firstUnanswered : 0)
-      setTab('practice')
+      showAttempt(await api.learning.attempt(attemptId))
     } catch (error) {
       notify(error instanceof ApiError ? errorMessage(error) : '无法加载练习记录')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function startPendingQuiz(quiz: PendingQuiz) {
+    setBusy(true)
+    try {
+      const loaded = await api.learning.startAttempt(quiz.id, true)
+      pendingRequest.current?.abort()
+      setPendingQuizzes((rows) => rows.filter((row) => row.id !== quiz.id))
+      setKbId(quiz.knowledge_base_id)
+      showAttempt(loaded)
+      void refreshAttempts()
+      refreshDailyOverview()
+    } catch (error) {
+      notify(errorMessage(error))
     } finally {
       setBusy(false)
     }
@@ -543,6 +582,16 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
         aria-labelledby="learning-tab-practice"
         hidden={tab !== 'practice'}
       >
+        {pendingError && <div role="alert">读取待开始试卷失败。{pendingError} <Button type="button" size="sm" variant="ghost" onClick={() => setPendingRetry((value) => value + 1)}>重新读取试卷</Button></div>}
+        {pendingQuizzes.length > 0 && <section aria-label="待开始试卷">
+          <h2>待开始试卷</h2>
+          <ul className="learning-history-list">
+            {pendingQuizzes.map((quiz) => <li key={quiz.id}>
+              <strong>{quiz.title}</strong>
+              <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void startPendingQuiz(quiz)}>开始练习</Button>
+            </li>)}
+          </ul>
+        </section>}
         <div className="learning-config">
           <div className="learning-config-grid">
             <Select

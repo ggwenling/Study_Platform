@@ -2,6 +2,7 @@ import sys
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from PIL import Image
 
 from study_platform.services import ingestion
@@ -111,6 +112,24 @@ def test_short_text_layer_is_kept_when_ocr_does_not_improve_it(tmp_path, monkeyp
 
     assert extracted == [("目录", {"page": 1})]
     assert calls == [True]
+    assert not (tmp_path / "page-1.png").exists()
+
+
+@pytest.mark.parametrize(("text", "error", "falls_back"), [
+    ("目录", RuntimeError, True), ("", RuntimeError, False), ("目录", ingestion.LostLease, False),
+])
+def test_ocr_failure_preserves_usable_text_but_propagates_lost_lease(tmp_path, monkeypatch, text, error, falls_back):
+    version = setup_pdf(tmp_path, monkeypatch, text)
+
+    def fail(_):
+        raise error()
+
+    monkeypatch.setattr(ingestion, "ocr_image", fail)
+    if falls_back:
+        assert list(ingestion.extract(version, tmp_path, lambda _: None)) == [(text, {"page": 1})]
+    else:
+        with pytest.raises(error):
+            list(ingestion.extract(version, tmp_path, lambda _: None))
     assert not (tmp_path / "page-1.png").exists()
 
 

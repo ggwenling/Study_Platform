@@ -230,11 +230,12 @@ def _atomic_chunks(kind: str, block: str, limit: int) -> list[str]:
         body = lines[1:-1] if closing else lines[1:]
         return _wrap_line_parts(opener, closing, body, limit)
     if kind == "table":
-        header = lines[:2]
-        body = lines[2:]
-        prefix = "\n".join(header)
-        allowance = max(1, limit - len(prefix) - 1)
-        return [f"{prefix}\n{part}" for part in _line_parts(body, allowance)]
+        prefix = "\n".join(lines[:2])
+        allowance = limit - len(prefix) - 1
+        if allowance <= 0:
+            # An oversized header cannot be repeated inside the per-chunk limit.
+            return [block[start:start + limit] for start in range(0, len(block), limit)]
+        return [f"{prefix}\n{part}" for part in _line_parts(lines[2:], allowance)]
     if kind == "math":
         opening = lines[0].find("$$")
         same_line_close = lines[0].find("$$", opening + 2)
@@ -274,7 +275,8 @@ def _line_parts(lines: list[str], limit: int) -> list[str]:
     current: list[str] = []
     current_size = 0
     for line in lines:
-        for piece in _split_long_text(line, limit, 0) if len(line) > limit else [line]:
+        pieces = [line[start:start + limit] for start in range(0, len(line), limit)] if line else [""]
+        for piece in pieces:
             extra = len(piece) + (1 if current else 0)
             if current and current_size + extra > limit:
                 parts.append("\n".join(current))

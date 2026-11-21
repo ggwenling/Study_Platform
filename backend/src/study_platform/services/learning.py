@@ -358,20 +358,19 @@ def _guess_answer(body: str) -> str:
     return body[:60]
 
 
-def start_attempt(db: Session, *, owner_user_id: UUID, quiz_id: UUID) -> QuizAttempt:
-    quiz = (
-        db.execute(
-            sa.select(Quiz).where(
-                Quiz.id == quiz_id,
-                Quiz.owner_user_id == owner_user_id,
-                Quiz.deleted_at.is_(None),
-            )
-        )
-        .scalars()
-        .first()
+def start_attempt(db: Session, *, owner_user_id: UUID, quiz_id: UUID, resume_existing: bool = False) -> QuizAttempt:
+    query = sa.select(Quiz).where(
+        Quiz.id == quiz_id, Quiz.owner_user_id == owner_user_id, Quiz.deleted_at.is_(None),
     )
+    quiz = db.scalar(query.with_for_update() if resume_existing else query)
     if quiz is None:
         raise ApiError(404, "quiz_not_found", "练习不存在")
+    if resume_existing:
+        existing = db.scalar(sa.select(QuizAttempt).where(
+            QuizAttempt.quiz_id == quiz.id, QuizAttempt.owner_user_id == owner_user_id,
+        ).order_by(QuizAttempt.created_at.desc(), QuizAttempt.id.desc()).limit(1))
+        if existing is not None:
+            return existing
     items = list(
         db.execute(sa.select(QuizItem).where(QuizItem.quiz_id == quiz.id).order_by(QuizItem.ordinal))
         .scalars()

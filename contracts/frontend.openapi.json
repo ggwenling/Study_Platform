@@ -3400,6 +3400,73 @@
         }
       }
     },
+    "/api/v1/learning/quizzes/pending": {
+      "get": {
+        "tags": [
+          "learning"
+        ],
+        "summary": "Pending Quizzes",
+        "operationId": "pending_quizzes_api_v1_learning_quizzes_pending_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingQuizPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/learning/attempts": {
       "get": {
         "tags": [
@@ -5500,6 +5567,11 @@
             "type": "string",
             "format": "uuid",
             "title": "Quiz Id"
+          },
+          "resume_existing": {
+            "type": "boolean",
+            "title": "Resume Existing",
+            "default": false
           }
         },
         "type": "object",
@@ -8081,6 +8153,60 @@
           "password"
         ],
         "title": "PasswordBody"
+      },
+      "PendingQuiz": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "knowledge_base_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Knowledge Base Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "knowledge_base_id"
+        ],
+        "title": "PendingQuiz"
+      },
+      "PendingQuizPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PendingQuiz"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "PendingQuizPage"
       },
       "PreviewSection": {
         "properties": {

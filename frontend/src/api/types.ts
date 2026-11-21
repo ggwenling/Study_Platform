@@ -96,6 +96,8 @@ export interface LearningItem {
   sources?: LearningSource[]
 }
 
+export interface PendingQuiz { id: string; title: string; knowledge_base_id: string }
+
 export interface LearningAttempt {
   id: string
   quiz_id: string

@@ -93,6 +93,26 @@ def test_generation_is_queued_scoped_and_published(queued_jobs, kind, template, 
         assert db.get(model, UUID(finished["result_resource_id"])).owner_user_id == owner_id
 
 
+def test_finished_quiz_stays_available_until_first_attempt(queued_jobs):
+    client, factory, kb_id, user = queued_jobs
+    pending = "/learning/quizzes/pending"
+    endpoint = f"/learning/knowledge-bases/{kb_id}/quizzes/generate"
+    queued = client.post(endpoint, json={"count": 1}).json()
+    assert client.get(pending).json()["items"] == []
+    run("quiz", factory)
+    quiz_id = client.get(f"/ai-jobs/{queued['job_id']}").json()["result_resource_id"]
+    assert client.get(pending).json()["items"][0]["id"] == quiz_id
+    owner, user.id = user.id, uuid4()
+    assert client.get(pending).json()["items"] == []
+    user.id = owner
+    body = {"quiz_id": quiz_id, "resume_existing": True}
+    first = client.post("/learning/attempts", json=body)
+    assert first.status_code == 200, first.text
+    assert client.get(pending).json()["items"] == []
+    assert client.post("/learning/attempts", json=body).json()["id"] == first.json()["id"]
+    assert client.get("/learning/attempts").json()["items"][0]["id"] == first.json()["id"]
+
+
 def test_cancellation_during_model_call_prevents_result_and_releases_slot(queued_jobs, monkeypatch):
     client, factory, kb_id, user = queued_jobs
     endpoint = f"/knowledge-bases/{kb_id}/notes/generate"

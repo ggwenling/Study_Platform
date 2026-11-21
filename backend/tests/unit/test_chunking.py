@@ -70,3 +70,22 @@ def test_long_single_line_is_bounded_without_splitting_words():
     assert len(chunks) > 1
     assert all(len(chunk) <= 800 for chunk in chunks)
     assert all(not chunk.startswith("ord") for chunk in chunks[1:])
+
+
+def test_oversized_header_only_table_keeps_all_characters():
+    table = "| " + "列名" * 910 + " | 值 |\n| --- | --- |"
+    chunks = list(semantic_chunks(table))
+
+    assert len(chunks) >= 2
+    assert all(len(chunk) <= 1600 for chunk in chunks)
+    assert "".join(chunks) == table
+
+
+def test_oversized_python_line_keeps_indentation_and_internal_spaces():
+    line = "\t    value = '" + "word  " * 340 + "'"
+    chunks = list(semantic_chunks(f"```python\n{line}\n```"))
+
+    assert len(chunks) >= 2
+    assert all(len(chunk) <= 1600 for chunk in chunks)
+    assert all(chunk.startswith("```python\n") and chunk.endswith("\n```") for chunk in chunks)
+    assert "".join(chunk.removeprefix("```python\n").removesuffix("\n```") for chunk in chunks) == line

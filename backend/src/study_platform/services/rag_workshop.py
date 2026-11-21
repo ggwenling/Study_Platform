@@ -11,6 +11,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from study_platform.api.v1.materials import missing, owned_kb
+from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
 from study_platform.persistence.models import (
     AiJob,
@@ -66,7 +67,8 @@ def run_hit_test(
         raise ApiError(422, "validation_error", "测试提问不能为空")
 
     kb = owned_kb(db, user, kb_id, lock=True)
-    retrieval = effective_settings(kb.retrieval_settings)
+    settings = get_settings()
+    retrieval = effective_settings(kb.retrieval_settings, settings)
     for key, value in (
         ("top_k", top_k),
         ("lexical_weight", lexical_weight),
@@ -81,6 +83,9 @@ def run_hit_test(
     top_k = int(retrieval["top_k"])
     lexical_weight = float(retrieval["lexical_weight"])
     rerank_enabled = bool(retrieval["rerank_enabled"])
+    if rerank_enabled and not settings.retrieval_hybrid_enabled:
+        lexical_weight = 0.0
+    use_ts_rank = rerank_enabled and settings.retrieval_lexical_scoring == "ts_rank"
     embedding_model = model_connections.library_snapshot(db, user.id, kb_id)
     rerank_model = rerank_snapshot(db, user.id, retrieval)
     index_ids = visible_indices(db, user.id, kb_id, material_ids)
@@ -169,9 +174,13 @@ def run_hit_test(
                 base_query.add_columns(ts_rank_col, *matched_cols)
                 .where(MaterialChunk.lexical.is_not(None), MaterialChunk.lexical.op("@@")(any_term))
                 .order_by(sa.desc(ts_rank_col), MaterialChunk.id)
-                .limit(LEXICAL_IDF_POOL)
+                .limit(candidate_k if use_ts_rank else LEXICAL_IDF_POOL)
             ).all()
-            if lex_rows:
+            if use_ts_rank:
+                for rank, (chunk, title, mat_id, ts_rank, *flags) in enumerate(lex_rows, start=1):
+                    lexical_info[chunk.id] = (rank, round(float(ts_rank), 4), [t for t, flag in zip(terms, flags) if flag])
+                    chunk_meta.setdefault(chunk.id, {"chunk": chunk, "title": title, "material_id": mat_id})
+            elif lex_rows:
                 total_pool = db.scalar(
                     sa.select(sa.func.count()).select_from(query.subquery())
                 ) or len(lex_rows)
@@ -211,17 +220,20 @@ def run_hit_test(
                 score += 1.0 / (rrf_k + v_rank)
             if lexical_weight > 0 and l_rank is not None:
                 score += lexical_weight / (rrf_k + l_rank)
-            if score <= 0.0 and v_rank is None:
+            if score <= 0.0 and (rerank_enabled or v_rank is None):
                 continue
+            # Below-threshold vectors are useful diagnostics, but they carry no
+            # vector rank in the live RRF ordering used before reranking.
+            fusion_vector_rank = v_rank if v_rank is not None and (v_above or not rerank_enabled) else 10**9
             best_rank = min(
-                v_rank if v_rank is not None else 10**9,
+                fusion_vector_rank,
                 l_rank if l_rank is not None else 10**9,
             )
             combined.append(
                 (
                     -score,
                     best_rank,
-                    v_rank if v_rank is not None else 10**9,
+                    fusion_vector_rank,
                     str(cid),
                     cid,
                     round(score, 6),

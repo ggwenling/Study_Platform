@@ -138,10 +138,15 @@ export function useAiJobs({
         action = {
           label: '立即练习',
           onClick: () => {
-            void api.learning.startAttempt(resourceId).then(
-              (attempt) => navigate('/learning', {
-                state: { tab: 'practice', attemptId: attempt.id, kbId: completed.knowledge_base_id },
-              }),
+            if (activeUserId.current !== ownerId) return
+            void api.learning.startAttempt(resourceId, true).then(
+              (attempt) => {
+                if (activeUserId.current !== ownerId) return
+                refresh()
+                return navigate('/learning', {
+                  state: { tab: 'practice', attemptId: attempt.id, kbId: completed.knowledge_base_id },
+                })
+              },
               report,
             )
           },

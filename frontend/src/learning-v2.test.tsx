@@ -51,6 +51,7 @@ vi.mock('./api/client', () => ({
     studio: { notes: vi.fn(), createNote: vi.fn(), appendNote: vi.fn() },
     learning: {
       generateQuiz: vi.fn(),
+      pendingQuizzes: vi.fn(),
       attempts: vi.fn(),
       startAttempt: vi.fn(),
       attempt: vi.fn(),
@@ -169,6 +170,7 @@ beforeEach(() => {
   node = document.body.appendChild(document.createElement('div'))
   root = createRoot(node)
   vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  vi.mocked(api.learning.pendingQuizzes).mockResolvedValue({ items: [], next_cursor: null })
   vi.mocked(api.learning.attempts).mockResolvedValue({
     items: [
       {
@@ -199,6 +201,21 @@ afterEach(async () => {
 })
 
 describe('Learning 2.0 workflow', () => {
+  it('opens a durable generated quiz on a fresh page without a job notification', async () => {
+    const quiz = { id: 'saved-quiz', title: '向量检索测验', knowledge_base_id: 'kb-1' }
+    vi.mocked(api.learning.pendingQuizzes).mockResolvedValue({ items: [quiz], next_cursor: null })
+    vi.mocked(api.learning.startAttempt).mockResolvedValue({ ...sampleAttempt, quiz_id: quiz.id })
+
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    const pending = node.querySelector('[aria-label="待开始试卷"]')
+    expect(pending?.textContent).toContain(quiz.title)
+    expect(api.learning.startAttempt).not.toHaveBeenCalled()
+    await act(async () => pending?.querySelector('button')?.click())
+    expect(api.learning.startAttempt).toHaveBeenCalledWith(quiz.id, true)
+    expect(node.querySelector('[aria-label="待开始试卷"]')).toBeNull()
+    expect(node.textContent).toContain(sampleAttempt.items[0].stem)
+  })
+
   it('requires explicit vision consent for photo grading and labels pending or failed vision results', async () => {
     workspace.capabilities = { vision: true }
     vi.mocked(api.learning.submitAnswerImage)

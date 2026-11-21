@@ -323,22 +323,28 @@ def extract(version, output_dir, phase):
                     finally:
                         page.close()
                 if should_ocr:
-                    phase("ocr")
-                    try:
-                        lines = ocr_image(image)
-                        ocr_text = "\n".join(line["text"] for line in lines)
-                        ocr_effective_len = effective_char_count(ocr_text)
-                        if lines and ocr_effective_len > 0 and (
-                            effective_len == 0
-                            or ocr_effective_len
-                            >= max(int(effective_len * 1.5), effective_len + 20)
-                        ):
-                            image.save(output_dir / f"page-{number}.png")
+                    with image:
+                        phase("ocr")
+                        try:
+                            lines = ocr_image(image)
+                            ocr_text = "\n".join(line["text"] for line in lines)
+                            ocr_effective_len = effective_char_count(ocr_text)
+                            use_ocr = ocr_effective_len > 0 and (
+                                effective_len == 0 or ocr_effective_len
+                                >= max(int(effective_len * 1.5), effective_len + 20)
+                            )
+                            if use_ocr:
+                                image.save(output_dir / f"page-{number}.png")
+                        except (LostLease, DBAPIError):
+                            raise
+                        except Exception:
+                            if not effective_len:
+                                raise
+                            use_ocr = False
+                        if use_ocr:
                             yield ocr_text, {"page": number, "ocr": lines}
                         elif text:
                             yield text, {"page": number}
-                    finally:
-                        image.close()
                 elif text:
                     yield text, {"page": number}
         finally:

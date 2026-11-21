@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -27,7 +28,7 @@ from study_platform.persistence.models import (
     MaterialVersion,
     User,
 )
-from study_platform.services import rag_workshop
+from study_platform.services import chat, rag_workshop
 from study_platform.services.lexical import lexical_column_values
 
 pytestmark = pytest.mark.integration
@@ -60,7 +61,7 @@ def workshop_env(tmp_path, monkeypatch):
     )
     for target in (
         "study_platform.services.model_connections.get_settings",
-        "study_platform.services.retrieval_settings.get_settings",
+        "study_platform.services.rag_workshop.get_settings",
         "study_platform.core.config.get_settings",
     ):
         monkeypatch.setattr(target, lambda: settings)
@@ -252,6 +253,38 @@ def test_retrieval_settings_patch_and_hit_test_inheritance(workshop_env):
     )
     assert bad_connection.status_code == 422
     assert db.get(KnowledgeBase, kb_id).retrieval_settings == payload
+
+
+def test_rerank_only_receives_candidates_that_contribute_to_retrieval(workshop_env, monkeypatch):
+    http, db, kb_id, (strong, lexical_only, _) = workshop_env
+    owner = db.get(KnowledgeBase, kb_id).owner_user_id
+    index_id = str(db.get(MaterialChunk, strong).index_version_id)
+    seen = []
+
+    def rank(_owner, _query, documents, **_):
+        seen.append(documents)
+        return [{"index": i, "relevance_score": 1.0} for i in reversed(range(len(documents)))]
+
+    monkeypatch.setattr(rag_workshop, "rerank", rank)
+    monkeypatch.setattr(chat, "rerank", rank)
+    monkeypatch.setattr(chat, "get_settings", rag_workshop.get_settings)
+    monkeypatch.setattr(chat, "session_factory", lambda: lambda: nullcontext(db))
+    for weight, expected in [(0, [strong]), (1, [lexical_only, strong])]:
+        settings = {"rerank_enabled": True, "min_similarity": 0.8, "lexical_weight": weight}
+        query = "拉格朗日乘子"
+        response = http.post(f"/knowledge-bases/{kb_id}/hit-test", json={"query": query, **settings})
+        assert response.status_code == 200, response.text
+        assert [item["chunk_id"] for item in response.json()["items"]] == [str(cid) for cid in expected]
+        chat.retrieve_hybrid({"index_version_ids": [index_id], "retrieval_settings": settings},
+                             [query], [_unit_vec(1, 0)], owner)
+        assert seen[-1] == seen[-2] and len(seen[-1]) == len(expected)
+    monkeypatch.setattr(rag_workshop, "embed_texts", lambda *_args, **_kwargs: [[0, 0, 1] + [0] * 1021])
+    response = http.post(f"/knowledge-bases/{kb_id}/hit-test", json={
+        "query": "拉格朗日乘子", "rerank_enabled": True, "min_similarity": 0.8, "lexical_weight": 0,
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == []
+    assert len(seen) == 4
 
 
 
