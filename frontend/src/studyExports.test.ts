@@ -24,7 +24,11 @@ describe('study export downloads', () => {
     await downloadExportResponse(response, 'flashcards.tsv')
 
     expect(downloadedFilename).toBe('学习问答.tsv')
-    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob))
+    expect(createObjectURL).toHaveBeenCalledOnce()
+    expect(createObjectURL.mock.calls[0]?.[0]).toMatchObject({
+      size: 15,
+      type: 'text/plain;charset=utf-8',
+    })
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:study-export')
     expect(document.querySelector('a[download]')).toBeNull()
   })
