@@ -13,7 +13,7 @@ describe('study export downloads', () => {
     const response = new Response('front\tback\ttags', {
       headers: { 'Content-Disposition': "attachment; filename*=UTF-8''%E5%AD%A6%E4%B9%A0%E9%97%AE%E7%AD%94.tsv" },
     })
-    const createObjectURL = vi.fn(() => 'blob:study-export')
+    const createObjectURL = vi.fn((..._args: unknown[]) => 'blob:study-export')
     const revokeObjectURL = vi.fn()
     vi.stubGlobal('URL', { createObjectURL, revokeObjectURL })
     let downloadedFilename = ''
