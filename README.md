@@ -110,7 +110,7 @@ flowchart LR
     API --> Models
 ```
 
-React, TypeScript, and Vite provide the web interface. FastAPI handles authentication, retrieval, notes, learning, and streamed chat. The worker independently processes ingestion jobs. PostgreSQL stores project data and indexes using pgvector and PostgreSQL text-search support. Alembic manages the `study` schema. The LangGraph checkpointer uses `study_graph` separately. [Architecture details](docs/architecture/01_Architecture_Design.md) · [API integration](docs/api-integration.md)
+React, TypeScript, and Vite provide the web interface. FastAPI handles authentication, retrieval, notes, learning, and streamed chat. A separate worker processes ingestion, reindexing, and generation jobs. PostgreSQL stores project data and indexes using pgvector and PostgreSQL text-search support. Alembic manages the `study` schema. The LangGraph checkpointer uses `study_graph` separately. [Architecture details](docs/architecture/README.md) · [API integration](docs/api-integration.md)
 
 ## Verification
 

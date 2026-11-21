@@ -80,7 +80,7 @@ jobs:
           tail -1 pytest.log
 
   frontend:
-    name: Frontend (Node 20 · Vitest · build)
+    name: Frontend (Node 22 · Vitest · build)
   # ubuntu-latest is Ubuntu 26; jsdom/undici + vitest workers fail there — stay on 24.04 for now.
     runs-on: ubuntu-24.04
     defaults:

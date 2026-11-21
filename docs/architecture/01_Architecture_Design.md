@@ -1,5 +1,7 @@
 # Architecture Design — AI Learning Platform（KnowFlow 演进版）
 
+> **归档快照｜2026-11-14。** 本文保留当时的目标架构和部署方案。现行架构见 [当前架构入口](README.md)。
+
 > 文档版本：2.0 / LangChain + LangGraph 版设计草案　|　2026-11-14  
 > 适用范围：V1 纯 Python + FastAPI + LangChain + LangGraph；未来 Java 仅定义兼容性边界。  
 > **状态说明**：本文件为目标架构，不代表现有 KnowFlow 已经集成 LangChain/LangGraph 或完成 Python 全后端迁移。  

@@ -110,7 +110,7 @@ flowchart LR
     API --> Models
 ```
 
-前端使用 React、TypeScript 和 Vite。FastAPI 提供认证、检索、笔记、学习和流式问答，worker 独立处理资料任务。PostgreSQL 通过 pgvector 和内建的文本搜索能力存储应用数据及索引。Alembic 管理 `study` schema，LangGraph checkpointer 使用单独的 `study_graph`。[架构说明](docs/architecture/01_Architecture_Design.md) · [API 接入](docs/api-integration.md)
+前端使用 React、TypeScript 和 Vite。FastAPI 提供认证、检索、笔记、学习和流式问答，独立 worker 处理资料入库、索引重建和生成任务。PostgreSQL 通过 pgvector 和内建的文本搜索能力存储应用数据及索引。Alembic 管理 `study` schema，LangGraph checkpointer 使用单独的 `study_graph`。[架构说明](docs/architecture/README.md) · [API 接入](docs/api-integration.md)
 
 ## 测试与验收
 
