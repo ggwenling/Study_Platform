@@ -79,7 +79,25 @@ flowchart TD
 | 合成语料 | `backend/evaluation/deep-test/` |
 | 运行结果 | `artifacts/deep-test/<run-id>/` |
 
-## 5. 八项准备状态（模板）
+## 5. Phase 2 实测覆盖（2026-11-21 云 VM）
+
+| 能力 | 状态 | 标签 |
+| --- | --- | --- |
+| `read_dataset` + 语料引文对齐 | pass | 非 live RAG |
+| MOCK 上传 + `ingestion.run_once` | pass，双账号各 ≥1 chunk | **provider=MOCK** |
+| 索引后正向检索（本人） | pass | search items≥1 |
+| 索引后跨用户 search | **fail**（见缺陷 DEEP-SEC-01） | 非 stub |
+| 跨用户 notes GET | pass 404 | API |
+| `/health/live` 负载 1/5/10 × 15s | pass，有 p50/p95 | TestClient 基线 |
+| 备份快照（storage tar + 表计数） | pass | 未做全量 restore |
+| SSRF（`test_web_clip` 单测集） | pass | 本地 mock |
+| Worker 取消/失败样例 pytest | pass | 集成子集 |
+| 浏览器 E2E | BLOCKED | — |
+| Live RAG / 模型 | BLOCKED | 无预算 |
+
+产物：`artifacts/deep-test/phase2-<run-id>/phase2_manifest.json`
+
+## 6. 八项准备状态（模板）
 
 | # | 项 | 状态（2026-11-21 云 VM） |
 | --- | --- | --- |

@@ -8,14 +8,14 @@
 
 | ID | 前置 | 操作 | 期望 | 严重度 | 证据 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| ING-01 | 隔离 DB；账号 U1 | 上传 `fixtures/samples/notes.txt` | 作业成功；chunks>0；活跃 index | P0 | ingest job 日志 | MANUAL Phase2 |
+| ING-01 | 隔离 DB；账号 U1/U2 | MOCK `run_mock_ingest_index` | 双账号 chunks≥1；**provider=MOCK** | P0 | mock_ingest_report.json | **PASS** Phase2 VM |
 | ING-02 | U1 KB | 上传 `empty.txt` | 拒绝或无可索引文本；无脏活跃索引 | P0 | API 4xx + worker | MANUAL |
 | ING-03 | U1 | 上传 malformed PDF 字节 | 失败可重试；错误码稳定 | P0 | worker + DB status | MANUAL |
 | ING-04 | 渲染 materials `ocr-yard` png | evaluate_rag 渲染 → ingest | OCR 文本进入 chunk | P0 | chunk text | MOCK |
 | ING-05 | 重复 SHA 两文件 | 连续上传 duplicate-a/b | 去重或版本策略符合产品 | P1 | materials 行 | MANUAL |
 | ING-06 | `max_upload_bytes` | 运行时超大 txt | 413/422 | P1 | API body | BLOCKED |
 | ING-07 | pytest `RUN_DB_TESTS=1` | `test_database_schema` 约束 | FK/CHECK 拒绝非法索引态 | P0 | pytest | AUTO |
-| ING-08 | Worker 运行中 | 中断 worker 再启 | 作业可恢复/重试幂等 | P1 | job 表 | DIAG Phase2 |
+| ING-08 | Worker 运行中 | 中断 worker 再启 | 作业可恢复/重试幂等 | P1 | job 表 | unit sample PASS；integration 见 Phase1 gate |
 
 ## P0 — RAG / 检索 / 引用
 
@@ -39,7 +39,8 @@
 | SEC-02 | study_graph 角色 | 读 checkpoints；拒 `study.users` | 图状态隔离 | P0 | test_runtime_access | AUTO |
 | SEC-03 | U1/U2 各一库 | U1 读 U2 material id | 404/403 | P0 | integration pattern | AUTO partial |
 | SEC-04 | ISO-02 语料 | U1 问 NIGHTJAR-3 | 不得出现 B 库专有事实 | P0 | chat answer | BLOCKED live |
-| SEC-05 | SSRF mock | 模型连接 URL → 127.0.0.1 mock | 拒绝或仅允许列表 | P0 | MOCK server | BLOCKED |
+| SEC-04b | MOCK 索引后 | U1 搜 U2 canary 字符串 | items=0 | P0 | run_indexed_isolation | **FAIL** 2026-11-21 VM |
+| SEC-05 | SSRF mock | `tests/unit/test_web_clip.py` | 私有网/重定向用例绿 | P0 | pytest 16 passed | **PASS** Phase2 VM |
 | SEC-06 | `.env` | 仓库扫描 | 无密钥提交 | P0 | git grep | AUTO |
 
 ## P0 — 备份 / 迁移 / 恢复
@@ -48,7 +49,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | MIG-01 | 空 `_test` 库 | `alembic upgrade head` | schema 完整 | P0 | pytest bootstrap | AUTO |
 | MIG-02 | 有数据 | `test_migration_roundtrip` | 降级保护/往返 | P0 | pytest | AUTO |
-| BAK-01 | storage 有原件 | 导出+删库+重建+还原 | 原件 SHA 一致 | P0 | manifest | MANUAL Phase2 |
+| BAK-01 | storage 有原件 | tar+pg_dump 快照 | SHA256+表计数；**restore NOT_RUN** | P0 | run_backup_snapshot | **PARTIAL** Phase2 VM |
 | BAK-02 | 索引 building | 中断恢复 | 无 twin active index | P0 | DB 行 | DIAG |
 
 ## P1 — 业务功能
@@ -80,7 +81,7 @@
 
 | ID | 前置 | 操作 | 期望 | 严重度 | 证据 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| PERF-01 | 本地 API | 1/5/10 客户端 30s health | 记录 P50/P95；不设硬门槛 | P1 | load.json | BLOCKED |
+| PERF-01 | 本地 API | 1/5/10 客户端 15s `/health/live` | 记录样本数/P50/P95 | P1 | phase2 load step | **PASS** VM baseline |
 | PERF-02 | 用量 API | 登录后 summary | 仅本用户 | P1 | pytest | AUTO |
 
 ## P2 — 安装 / 契约
