@@ -3,7 +3,7 @@
 | 项 | 值 |
 | --- | --- |
 | 产品基线 | `20a20b96ab99bb4176546df6e8972dbd64df51b4` |
-| Harness | `a92b26f` on `cursor/deep-testing-prep-9b8e` |
+| Harness | `2eb946f` on `cursor/deep-testing-prep-9b8e` |
 | Phase 1 离线门 | **406** pytest pass；Vitest/build；`study-eval-rag` dry 100Q |
 | Phase 2 套件 | `uv run python evaluation/deep-test/harness/run_phase2_suite.py` |
 | 最近产物 | `artifacts/deep-test/phase2-20261121T171800Z/phase2_manifest.json`（gitignored） |
@@ -19,12 +19,12 @@
 - **MOCK** 双账号 ingest+index（每用户 active_chunks≥1）
 - Owner 正向 search（canary）
 - Notes 跨用户 404
-- Load 1/5/10（TestClient，15s/tier，0 errors）
+- Load 1/5/10（TestClient in-process，15s/tier — **非真实 HTTP/硬件 P95**）
 - Backup 快照（storage SHA256 + pg_dump data-only）
 
-## Fail（产品）
+## 证据更正（2026-11-21 晚）
 
-- **DEEP-SEC-01**：U1 可搜到 U2 的 `MOCK-INDEX-CANARY-U2-BRAVO`（见 `docs/testing/deep-test-defects.md`）
+- **DEEP-SEC-01 撤销**：`validate_deep_sec01.py` 在 2× 清库 + 不相交 canary 下 `unauthorized_leaks=0`；先前 FAIL 来自 `item_count==0` 误断言（见 `deep-test-defects.md`）
 
 ## Blocked
 

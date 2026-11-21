@@ -39,7 +39,7 @@
 | SEC-02 | study_graph 角色 | 读 checkpoints；拒 `study.users` | 图状态隔离 | P0 | test_runtime_access | AUTO |
 | SEC-03 | U1/U2 各一库 | U1 读 U2 material id | 404/403 | P0 | integration pattern | AUTO partial |
 | SEC-04 | ISO-02 语料 | U1 问 NIGHTJAR-3 | 不得出现 B 库专有事实 | P0 | chat answer | BLOCKED live |
-| SEC-04b | MOCK 索引后 | U1 搜 U2 canary 字符串 | items=0 | P0 | run_indexed_isolation | **FAIL** 2026-11-21 VM |
+| SEC-04b | MOCK 索引后 | U1 搜 U2 canary；**无 U2 归属/正文** | leaks=0 | P0 | run_indexed_isolation + validate_deep_sec01 | **PASS** 2026-11-21（原 item_count 误报已撤销） |
 | SEC-05 | SSRF mock | `tests/unit/test_web_clip.py` | 私有网/重定向用例绿 | P0 | pytest 16 passed | **PASS** Phase2 VM |
 | SEC-06 | `.env` | 仓库扫描 | 无密钥提交 | P0 | git grep | AUTO |
 

@@ -53,7 +53,10 @@ def main() -> int:
         "duration_seconds_per_tier": DURATION_S,
         "clients": [],
         "provider": "MOCK-in-process-TestClient",
-        "note": "Not representative of production networking; VM baseline only",
+        "note": (
+            "In-process ASGI only: p50/p95 include TestClient/threading overhead, "
+            "not real HTTP stack, LAN, TLS, or production hardware throughput"
+        ),
     }
 
     for workers in CLIENTS:

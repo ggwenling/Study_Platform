@@ -86,7 +86,7 @@ flowchart TD
 | `read_dataset` + 语料引文对齐 | pass | 非 live RAG |
 | MOCK 上传 + `ingestion.run_once` | pass，双账号各 ≥1 chunk | **provider=MOCK** |
 | 索引后正向检索（本人） | pass | search items≥1 |
-| 索引后跨用户 search | **fail**（见缺陷 DEEP-SEC-01） | 非 stub |
+| 索引后跨用户 search（归属校验） | pass | `validate_deep_sec01` 2× 清库；非 item_count |
 | 跨用户 notes GET | pass 404 | API |
 | `/health/live` 负载 1/5/10 × 15s | pass，有 p50/p95 | TestClient 基线 |
 | 备份快照（storage tar + 表计数） | pass | 未做全量 restore |

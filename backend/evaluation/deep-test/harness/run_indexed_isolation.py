@@ -1,4 +1,4 @@
-"""Cross-user retrieval with indexed chunks (positive control + unauthorized probe)."""
+"""Cross-user retrieval with indexed chunks (positive control + ownership-based negative)."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ import os
 import sys
 from pathlib import Path
 
+import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[4]
 API = "/api/v1"
 PASSWORD = "deep-test-safe-password-42"
 REPORT = ROOT / ".local" / "deep-test" / "seed" / "mock_ingest_report.json"
+HARNESS_DIR = Path(__file__).resolve().parent
 
 
 def _load_env() -> None:
@@ -25,10 +27,14 @@ def _load_env() -> None:
 
 def _login(client: TestClient, email: str) -> None:
     r = client.post(f"{API}/auth/login", json={"email": email, "password": PASSWORD})
+    assert r.status_code == 200, r.text
     client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
 
 
 def main() -> int:
+    sys.path.insert(0, str(HARNESS_DIR))
+    from search_leak_checks import classify_search_items
+
     if not REPORT.exists():
         raise SystemExit("Run run_mock_ingest_index.py first")
     data = json.loads(REPORT.read_text(encoding="utf-8"))
@@ -60,6 +66,15 @@ def main() -> int:
     checks: list[dict] = []
 
     with TestClient(app, headers={"Origin": "http://127.0.0.1:5173"}) as client:
+        unauth = client.get(f"{API}/search", params={"q": "MOCK-INDEX-CANARY-U2-BRAVO", "include_content": "true"})
+        checks.append(
+            {
+                "check": "unauth_search",
+                "status_code": unauth.status_code,
+                "pass": unauth.status_code in (401, 403),
+            }
+        )
+
         for label, marker_suffix in (("u1", "U1-ALPHA"), ("u2", "U2-BRAVO")):
             _login(client, users[label]["email"])
             q = f"MOCK-INDEX-CANARY-{marker_suffix}"
@@ -76,19 +91,42 @@ def main() -> int:
             )
             client.headers.pop("Authorization", None)
 
-        _login(client, users["u1"]["email"])
         u2_marker = "MOCK-INDEX-CANARY-U2-BRAVO"
+        with session_factory()() as db:
+            from study_platform.persistence.models.identity import User
+
+            u1_row = db.scalar(sa.select(User).where(User.email == users["u1"]["email"]))
+            u2_row = db.scalar(sa.select(User).where(User.email == users["u2"]["email"]))
+            assert u1_row and u2_row
+
+        _login(client, users["u1"]["email"])
         search = client.get(f"{API}/search", params={"q": u2_marker, "include_content": "true"})
         items = search.json().get("items", []) if search.status_code == 200 else []
+        with session_factory()() as db:
+            classified, leaks = classify_search_items(
+                db,
+                items,
+                requester_user_id=str(u1_row.id),
+                peer_user_id=str(u2_row.id),
+                peer_knowledge_base_id=users["u2"]["knowledge_base_id"],
+                peer_material_id=users["u2"]["material_id"],
+                peer_exact_canary=u2_marker,
+            )
         checks.append(
             {
-                "check": "u1_must_not_find_u2_indexed_marker",
+                "check": "u1_must_not_see_u2_owned_or_exact_canary",
                 "query": u2_marker,
                 "item_count": len(items),
-                "pass": len(items) == 0,
+                "unauthorized_leaks": len(leaks),
+                "leak_sample": leaks[:5],
+                "pass": len(leaks) == 0,
                 "provider": "MOCK-indexed",
+                "note": "item_count may be >0 when OR-lexical terms overlap own documents; not a leak by itself",
             }
         )
+        client.headers.pop("Authorization", None)
+
+        _login(client, users["u1"]["email"])
         note = client.post(
             f"{API}/knowledge-bases/{users['u1']['knowledge_base_id']}/notes",
             json={"title": "隔离笔记", "content_md": "MOCK-NOTE-U1-SECRET"},
