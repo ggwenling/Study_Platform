@@ -28,6 +28,47 @@ def supporting_quotes(support):
     return value if isinstance(value, list) else [value]
 
 
+def proof_text(text):
+    """Keep comparison operators in versioned evidence."""
+    return re.sub(r"[^\w<>=≤≥≠+−%±×÷]", "", unicodedata.normalize("NFKC", text).casefold())
+
+
+def alternatives(requirement):
+    return requirement.get("alternatives", (requirement,))
+
+
+def validate_support(support, material_ids, question):
+    for span in alternatives(support):
+        if span.get("document") not in material_ids:
+            raise ValueError("Gold evidence must belong to the requested knowledge base")
+        if "parts" in span:
+            parts = span["parts"]
+            if not isinstance(parts, list) or not parts:
+                raise ValueError("Evidence alternative requires at least one part")
+            for part in parts:
+                loc = part.get("locator", {})
+                if not isinstance(loc, dict) or set(loc) not in (
+                    {"page"}, {"start_line", "end_line"}
+                ) or any(type(n) is not int or n < 1 for n in loc.values()) or (
+                    "end_line" in loc and loc["start_line"] > loc["end_line"]
+                ):
+                    raise ValueError("Evidence part requires a physical page or valid line range")
+            quotes = [part.get("quote") for part in parts]
+            norm = proof_text
+        else:
+            if "alternatives" in support:
+                raise ValueError("An alternative needs anchored evidence parts")
+            quotes = supporting_quotes(span)
+            norm = normalized
+        if not quotes or any(
+            not isinstance(quote, str) or not norm(quote) or norm(quote) == norm(question)
+            for quote in quotes
+        ):
+            raise ValueError("Use natural questions and separately labelled supporting passages")
+    if not alternatives(support):
+        raise ValueError("Evidence requirement needs at least one alternative")
+
+
 def read_dataset(path):
     cases = [
         json.loads(line)
@@ -56,44 +97,75 @@ def read_dataset(path):
             raise ValueError("Invalid answerability or question")
         if case["answerable"] and (not case["expected_facts"] or not case["support"]):
             raise ValueError("Answerable cases require facts and supporting passages")
+        if any(not isinstance(aliases, list) or not aliases or any(
+            not isinstance(alias, str) or not normalized(alias) for alias in aliases
+        ) for aliases in case["expected_facts"]):
+            raise ValueError("Each fact needs a nonempty normalized alias")
+        if not case["answerable"] and (case["expected_facts"] or case["support"]):
+            raise ValueError("Unanswerable cases cannot declare answer facts or mandatory support")
+        material_ids = {row["id"] for row in materials if row["knowledge_base"] == case["knowledge_base"]}
         for support in case["support"]:
-            document = next((item for item in materials if item["id"] == support["document"]), None)
-            if not document or document["knowledge_base"] != case["knowledge_base"]:
-                raise ValueError("Gold evidence must belong to the requested knowledge base")
-            if not supporting_quotes(support) or any(
-                not isinstance(quote, str)
-                or not normalized(quote)
-                or normalized(quote) == normalized(case["question"])
-                for quote in supporting_quotes(support)
-            ):
-                raise ValueError(
-                    "Use natural questions and separately labelled supporting passages"
-                )
+            validate_support(support, material_ids, case["question"])
     return cases, materials
 
 
 def expected_documents(case):
     if not case["answerable"]:
         return set()
-    return {item["document"] for item in case["support"]}
+    return {alternatives(item)[0]["document"] for item in case["support"]}
 
 
 def retrieved_documents(evidence, documents):
     return [documents[str(row["material_version_id"])] for row in evidence]
 
 
-def support_hit(case, evidence, documents):
-    return all(
-        any(
-            documents[str(row["material_version_id"])] == support["document"]
-            and any(
-                phrase and phrase in normalized(row["text"])
-                for phrase in map(normalized, supporting_quotes(support))
-            )
-            for row in evidence
-        )
-        for support in case["support"]
+def same_locator(actual, expected):
+    if "page" in expected:
+        return actual.get("page") == expected["page"]
+    start = actual.get("start_line", actual.get("line"))
+    end = actual.get("end_line", actual.get("line"))
+    return (
+        isinstance(start, int) and isinstance(end, int)
+        and start <= expected["end_line"] and end >= expected["start_line"]
     )
+
+
+def support_witness(case, evidence, documents):
+    """Return one sufficient set of positions per proposition, or None if absent."""
+    by_document = {}
+    for index, row in enumerate(evidence):
+        document = documents[str(row["material_version_id"])]
+        by_document.setdefault(document, []).append((index, row))
+    witnessed = []
+    for requirement in case["support"]:
+        choices = []
+        for span in alternatives(requirement):
+            candidates = by_document.get(span["document"], ())
+            if "parts" not in span:
+                quotes = tuple(map(normalized, supporting_quotes(span)))
+                match = next((i for i, row in candidates if any(
+                    quote and quote in normalized(row["text"]) for quote in quotes
+                )), None)
+                if match is not None:
+                    choices.append({match})
+                continue
+            positions = []
+            for part in span["parts"]:
+                quote = proof_text(part["quote"])
+                match = next((i for i, row in candidates if (
+                    same_locator(row.get("locator", {}), part["locator"]) and quote in proof_text(row["text"])
+                )), None)
+                if match is None:
+                    break
+                positions.append(match)
+            else:
+                choices.append(set(positions))
+        witnessed.append(min(choices, key=len) if choices else None)
+    return witnessed
+
+
+def support_hit(case, evidence, documents):
+    return all(part is not None for part in support_witness(case, evidence, documents))
 
 
 async def evaluate_case(
@@ -107,16 +179,19 @@ async def evaluate_case(
 ):
     """Strategies share the same original query vector and index snapshot."""
     rewritten = None
-    if strategy in ("rewrite", "compare") and scope["index_version_ids"]:
+    if strategy in ("rewrite", "compare", "three_way") and scope["index_version_ids"]:
         rewritten = await rewrite_query(case["question"])
     queries = [case["question"]]
-    if strategy in ("rewrite", "compare") and rewritten and rewritten.query:
+    if rewritten and rewritten.query:
         queries.append(rewritten.query)
     embedding = {"calls": 0, "input_count": 0, "usage": None}
     vectors = embed_texts(queries, diagnostics=embedding) if scope["index_version_ids"] else []
     results = []
+    has_anchored_support = any("alternatives" in item for item in case["support"])
     if strategy == "compare":
         strategy_names = ["baseline", "rewrite"]
+    elif strategy == "three_way":
+        strategy_names = ["baseline", "hybrid", "rewrite"]
     elif strategy == "hybrid_compare":
         strategy_names = ["baseline", "hybrid"]
     else:
@@ -124,16 +199,22 @@ async def evaluate_case(
     for name in strategy_names:
         started = time.monotonic()
         if name == "hybrid":
-            evidence = chat.retrieve_hybrid(scope, [case["question"]], vectors[:1], owner)
+            hybrid_scope = scope
+            if strategy == "three_way":
+                hybrid_scope = {**scope, "retrieval_settings": {
+                    "lexical_weight": 0.4, "top_k": 10, "min_similarity": 0.35, "rerank_enabled": False,
+                }}
+            evidence = chat.retrieve_hybrid(hybrid_scope, [case["question"]], vectors[:1], owner)
         elif name == "baseline":
             evidence = chat.retrieve_vectors(scope, vectors[:1], owner)
         else:
             evidence = chat.retrieve_vectors(scope, vectors, owner)
         retrieval_ms = (time.monotonic() - started) * 1000
-        supported = support_hit(case, evidence, documents) if case["answerable"] else None
+        witnessed = support_witness(case, evidence, documents) if case["answerable"] else []
+        supported = all(part is not None for part in witnessed) if case["answerable"] else None
         reciprocal_rank = 0
         for rank in range(1, len(evidence) + 1):
-            if case["answerable"] and support_hit(case, evidence[:rank], documents):
+            if supported and support_hit(case, evidence[:rank], documents):
                 reciprocal_rank = 1 / rank
                 break
         retrieved = retrieved_documents(evidence, documents)
@@ -180,6 +261,13 @@ async def evaluate_case(
                 "expected_facts": case["expected_facts"],
                 "support": case["support"],
                 "retrieval_support_hit": supported,
+                "evidence_coverage": (
+                    sum(part is not None for part in witnessed) / len(witnessed) if witnessed else None
+                ),
+                "document_role_coverage": (
+                    sum(any(span["document"] in retrieved for span in alternatives(item))
+                        for item in case["support"]) / len(case["support"]) if case["answerable"] else None
+                ),
                 "reciprocal_rank": reciprocal_rank,
                 "retrieval_ir": retrieval_ir,
                 "retrieved_documents": retrieved,
@@ -199,8 +287,8 @@ async def evaluate_case(
                 "fact_aliases_found": all(
                     any(normalized(alias) in normalized(answer) for alias in aliases)
                     for aliases in case["expected_facts"]
-                ),
-                "refusal_marker": "资料不足" in answer,
+                ) if case["answerable"] and not has_anchored_support and not retrieval_only and not answer_error else None,
+                "refusal_marker": None if retrieval_only or answer_error else "资料不足" in answer,
                 "answer_metrics": {"calls": calls, "elapsed_ms": answer_ms, "usage": usage},
                 "rewrite_metrics": asdict(rewritten) if rewritten and name == "rewrite" else None,
                 "shared_embedding_metrics": embedding,
@@ -385,6 +473,8 @@ def summarize(report):
                 else None,
             }
         rewrite = [row["rewrite_metrics"] for row in rows if row["rewrite_metrics"]]
+        evidence_coverage = [row["evidence_coverage"] for row in rows if row.get("evidence_coverage") is not None]
+        role_coverage = [row["document_role_coverage"] for row in rows if row.get("document_role_coverage") is not None]
         summary[strategy] = {
             "splits": splits,
             "questions": len(rows),
@@ -394,6 +484,12 @@ def summarize(report):
             "model_errors": sum(bool(row["answer_error"]) for row in rows),
             "invalid_citations": sum(not row["citation_valid"] for row in rows),
             "scope_violations": sum(not row["scope_valid"] for row in rows),
+            "mean_evidence_coverage": sum(evidence_coverage) / len(evidence_coverage) if evidence_coverage else None,
+            "mean_document_role_coverage": sum(role_coverage) / len(role_coverage) if role_coverage else None,
+            "unanswerable_cases": sum(not row["answerable"] for row in rows),
+            "refusal_markers_on_unanswerable": sum(
+                row.get("refusal_marker") is True for row in rows if not row["answerable"]
+            ),
             "mean_evidence_characters": sum(row["evidence_characters"] for row in rows) / len(rows),
             "known_answer_tokens": sum(
                 (row["answer_metrics"]["usage"] or {}).get("total_tokens", 0) for row in rows

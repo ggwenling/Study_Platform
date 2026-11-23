@@ -9,6 +9,7 @@ import shutil
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import sqlalchemy as sa
@@ -17,7 +18,8 @@ from dotenv import load_dotenv
 from sqlalchemy.engine import make_url
 
 from alembic import command
-from study_platform.core.config import get_settings
+from study_platform.cli.rag_eval_preflight import MIME_TYPES, digest, load_profile, prepare_corpus
+from study_platform.core.config import Settings, get_settings
 from study_platform.persistence.database import session_factory
 from study_platform.persistence.models import (
     ChunkEmbedding,
@@ -144,7 +146,7 @@ def render_source(material, target):
         image.save(target, format=formats[material["format"]])
 
 
-def seed_corpus(factory, materials):
+def seed_corpus(factory, materials, prepared=None):
     settings = get_settings()
     owner = uuid4()
     scopes, documents, hashes, embedding_metrics, eval_owner = {}, {}, {}, [], owner
@@ -182,13 +184,7 @@ def seed_corpus(factory, materials):
                 material_id=material.id,
                 version_no=1,
                 is_current=True,
-                source_mime={
-                    "txt": "text/plain",
-                    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    "png": "image/png",
-                    "jpeg": "image/jpeg",
-                    "pdf": "application/pdf",
-                }[item["format"]],
+                source_mime=MIME_TYPES[item["format"]],
                 source_sha256="0" * 64,
                 byte_size=1,
                 object_key=str(uuid4()),
@@ -197,21 +193,25 @@ def seed_corpus(factory, materials):
             )
             path = source_path(version.id)
             path.parent.mkdir(parents=True)
-            render_source(item, path)
+            snapshot = prepared[item["id"]] if prepared is not None else None
+            if snapshot is None:
+                render_source(item, path)
+            else:
+                shutil.copyfile(snapshot.source, path)
+                version.page_count = snapshot.page_count
             if path.stat().st_size > settings.max_upload_bytes:
                 raise ValueError("Evaluation material exceeds the existing upload limit")
-            hashes[item["id"]] = hashlib.sha256(path.read_bytes()).hexdigest()
+            hashes[item["id"]] = snapshot.sha256 if snapshot is not None else digest(path)
             version.source_sha256, version.byte_size = hashes[item["id"]], path.stat().st_size
             db.add(material)
             db.flush()
             db.add(version)
             db.flush()
-            extracted = list(ingestion.extract(version, version_dir(version.id), lambda _: None))
-            parts = [
-                (part, locator)
-                for text, locator in extracted
-                for part in chunking.semantic_chunks(text)
-            ]
+            if snapshot is None:
+                extracted = ingestion.extract(version, version_dir(version.id), lambda _: None)
+                parts = [(part, loc) for text, loc in extracted for part in chunking.semantic_chunks(text)]
+            else:
+                parts = snapshot.chunks
             if not parts:
                 raise ValueError("Evaluation source produced no text")
             vectors = []
@@ -272,7 +272,7 @@ def write_json(path, value):
         temporary.unlink(missing_ok=True)
 
 
-async def live_evaluation(args, cases, materials, output):
+async def live_evaluation(args, cases, materials, output, prepared=None):
     with isolated_database(output) as factory:
         settings = get_settings()
         report = {
@@ -286,11 +286,15 @@ async def live_evaluation(args, cases, materials, output):
             "embedding_model": settings.embedding_model,
             "dimensions": 1024,
             "top_k": settings.retrieval_top_k,
+            "candidate_k": settings.retrieval_candidate_k,
             "min_similarity": settings.retrieval_min_similarity,
+            "lexical_weight": 0.4 if args.strategy == "three_way" else settings.retrieval_lexical_weight,
+            "corpus_profile": getattr(args, "profile", None) if getattr(args, "manifest", None) else None,
+            "manifest_sha256": digest(args.manifest) if getattr(args, "manifest", None) else None,
             "cases": [],
         }
         write_json(output / "report.json", report)
-        scopes, documents, hashes, corpus_embedding, eval_owner = seed_corpus(factory, materials)
+        scopes, documents, hashes, corpus_embedding, eval_owner = seed_corpus(factory, materials, prepared)
         report.update(source_hashes=hashes, corpus_embedding=corpus_embedding)
         for number, case in enumerate(cases, 1):
             report["cases"].extend(
@@ -309,8 +313,14 @@ async def live_evaluation(args, cases, materials, output):
     report["status"] = "completed"
     write_json(output / "report.json", report)
     if not args.retrieval_only:
-        write_json(output / "review.json", review_template(report))
-        write_json(output / "gate.json", quality_gate(report))
+        if getattr(args, "manifest", None):
+            review = review_template(report)
+            review.pop("human_confirmed")
+            review.update(review_kind="ai", ai_confirmed=False)
+            write_json(output / "ai_answer_review_template.json", review)
+        else:
+            write_json(output / "review.json", review_template(report))
+            write_json(output / "gate.json", quality_gate(report))
     retrieval = summarize_retrieval(report, args.metric_k)
     if retrieval:
         write_json(output / "retrieval_metrics.json", retrieval)
@@ -327,9 +337,12 @@ async def live_evaluation(args, cases, materials, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=BACKEND / "evaluation/facts.jsonl")
+    parser.add_argument("--manifest", type=Path, help="versioned evaluation corpus and AI review receipts")
+    parser.add_argument("--profile", default="native", help="named profile in the evaluation manifest")
+    parser.add_argument("--preflight", action="store_true", help="verify the full corpus offline without model calls")
     parser.add_argument(
         "--strategy",
-        choices=("baseline", "rewrite", "compare", "hybrid", "hybrid_compare"),
+        choices=("baseline", "rewrite", "compare", "hybrid", "hybrid_compare", "three_way"),
         default="compare",
     )
     parser.add_argument("--output", type=Path)
@@ -362,6 +375,8 @@ def main():
     )
     args = parser.parse_args()
     try:
+        if args.preflight and (args.live or args.review):
+            raise ValueError("Run offline preflight separately from live evaluation or result review")
         if args.review:
             if not args.output:
                 raise ValueError(
@@ -378,15 +393,60 @@ def main():
             raise ValueError("--metric-k values must be positive integers")
         args.metric_k = sorted(set(args.metric_k))
         cases, materials = read_dataset(args.dataset)
-        if not args.live:
+        profile = None
+        ai_reviewed = False
+        if args.manifest:
+            cases, materials, profile, ai_reviewed = load_profile(
+                args.manifest, args.dataset, cases, materials, args.profile
+            )
+        if not args.live and not args.preflight:
             print(
                 f"Validated {len(cases)} questions / {len({c['fact_group'] for c in cases})} fact groups. No database or provider calls; use --live to evaluate."
             )
             return
-        load_dotenv(get_settings().model_config["env_file"])
-        output = (args.output or BACKEND.parent / ".local/rag-evaluation" / uuid4().hex).resolve()
-        output.mkdir(parents=True, exist_ok=False)
-        asyncio.run(live_evaluation(args, cases, materials, output))
+        if args.live:
+            load_dotenv(Settings.model_config["env_file"])
+            get_settings.cache_clear()
+            if args.manifest and not ai_reviewed:
+                raise ValueError("The frozen corpus needs two complete independent AI reviews")
+        settings = get_settings() if args.live else Settings(_env_file=None)
+        if args.live and args.strategy == "three_way" and (
+            settings.retrieval_candidate_k != 20 or settings.retrieval_top_k != 10
+            or settings.retrieval_min_similarity != 0.35 or not settings.retrieval_hybrid_enabled
+        ):
+            raise ValueError("Three-way comparison requires candidate 20, top 10, similarity 0.35 and hybrid enabled")
+        if profile:
+            settings = settings.model_copy(update={"max_pdf_pages": profile["max_pdf_pages"]})
+        with TemporaryDirectory(prefix="knowloop-rag-preflight-") as staging:
+            prepared, preflight = prepare_corpus(
+                materials, cases, settings, Path(staging), render_source, profile,
+            )
+            preflight.update(
+                profile=args.profile if profile else None,
+                dataset_sha256=digest(args.dataset),
+                manifest_sha256=digest(args.manifest) if args.manifest else None,
+                chunker=chunking.SEMANTIC_PROFILE,
+                max_pdf_pages=settings.max_pdf_pages,
+                ai_reviewed=ai_reviewed,
+            )
+            preflight["status"] = (
+                "READY_TO_RUN" if profile and ai_reviewed and preflight["preflight_passed"] else "BLOCKED"
+            )
+            if args.preflight:
+                if args.output:
+                    args.output.mkdir(parents=True, exist_ok=False)
+                    write_json(args.output / "preflight.json", preflight)
+                print(json.dumps(preflight, ensure_ascii=False, indent=2))
+                if not preflight["preflight_passed"]:
+                    raise SystemExit(1)
+                return
+            if preflight["failures"] or (profile and not preflight["preflight_passed"]):
+                print(json.dumps(preflight, ensure_ascii=False, indent=2))
+                raise ValueError("Offline corpus preflight failed before database or model calls")
+            output = (args.output or BACKEND.parent / ".local/rag-evaluation" / uuid4().hex).resolve()
+            output.mkdir(parents=True, exist_ok=False)
+            write_json(output / "preflight.json", preflight)
+            asyncio.run(live_evaluation(args, cases, materials, output, prepared))
     except ValueError as error:
         raise SystemExit(str(error)) from None
     except FileExistsError:
