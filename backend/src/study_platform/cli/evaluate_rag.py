@@ -9,7 +9,7 @@ import shutil
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from alembic.config import Config
@@ -29,6 +29,27 @@ from study_platform.persistence.models import (
     User,
 )
 from study_platform.services import chunking, ingestion
+from study_platform.services.eval_index_reuse import (
+    IndexReuseError,
+    assert_database_access,
+    assert_dataset_matches,
+    build_manifest,
+    code_schema_revision,
+    import_index,
+    load_index_package,
+    new_database_name,
+    read_export_records,
+    read_only_retrieval,
+    read_snapshot,
+    retained_database,
+    scopes_by_name,
+    should_drop_database,
+    test_database_url,
+    validate_records,
+    verify_index_contents,
+    verify_retained_identity,
+    write_package,
+)
 from study_platform.services.lexical import lexical_column_values
 from study_platform.services.models import embed_texts
 from study_platform.services.rag_evaluation import (
@@ -46,25 +67,10 @@ from study_platform.services.storage import source_path, version_dir
 BACKEND = Path(__file__).resolve().parents[3]
 
 
-def test_database_url(raw):
-    if not raw:
-        raise ValueError("Configure TEST_DATABASE_URL for a disposable PostgreSQL test database")
-    url = make_url(raw)
-    if (
-        url.get_backend_name() != "postgresql"
-        or not (url.database or "").endswith("_test")
-        or {"dbname", "service", "servicefile"} & set(url.query)
-    ):
-        raise ValueError(
-            "TEST_DATABASE_URL must name a PostgreSQL *_test database without target overrides"
-        )
-    return url.set(drivername="postgresql+psycopg")
-
-
 @contextmanager
-def isolated_database(output):
+def isolated_database(output, *, retain=False):
     url = test_database_url(os.getenv("TEST_DATABASE_URL"))
-    name = f"study_eval_{uuid4().hex}_test"
+    name = new_database_name()
     admin = sa.create_engine(
         url.set(database="postgres"),
         isolation_level="AUTOCOMMIT",
@@ -72,6 +78,8 @@ def isolated_database(output):
         connect_args={"connect_timeout": 5},
     )
     created, factory = False, None
+    quoted = None
+    succeeded = False
     previous = {
         key: os.environ.get(key)
         for key in ("DATABASE_URL", "MIGRATION_DATABASE_URL", "STORAGE_DIR")
@@ -98,6 +106,7 @@ def isolated_database(output):
             if db.scalar(sa.text("SELECT current_database()")) != name:
                 raise ValueError("Evaluation connection selected the wrong database")
         yield factory
+        succeeded = True
     finally:
         if factory:
             factory.kw["bind"].dispose()
@@ -108,7 +117,7 @@ def isolated_database(output):
                 os.environ[key] = value
         get_settings.cache_clear()
         try:
-            if created:
+            if should_drop_database(created=created, retain=retain, succeeded=succeeded) and quoted:
                 with admin.connect() as connection:
                     connection.exec_driver_sql(f"DROP DATABASE {quoted}")
         finally:
@@ -272,40 +281,71 @@ def write_json(path, value):
         temporary.unlink(missing_ok=True)
 
 
-async def live_evaluation(args, cases, materials, output):
-    with isolated_database(output) as factory:
-        settings = get_settings()
-        report = {
-            "dataset_sha256": hashlib.sha256(args.dataset.read_bytes()).hexdigest(),
-            "expected_case_ids": [case["id"] for case in cases],
-            "strategy": args.strategy,
-            "status": "running",
-            "retrieval_only": args.retrieval_only,
-            "metric_k": list(args.metric_k),
-            "chat_model": None if args.retrieval_only else settings.chat_model,
-            "embedding_model": settings.embedding_model,
-            "dimensions": 1024,
-            "top_k": settings.retrieval_top_k,
-            "min_similarity": settings.retrieval_min_similarity,
-            "cases": [],
-        }
-        write_json(output / "report.json", report)
-        scopes, documents, hashes, corpus_embedding, eval_owner = seed_corpus(factory, materials)
-        report.update(source_hashes=hashes, corpus_embedding=corpus_embedding)
-        for number, case in enumerate(cases, 1):
-            report["cases"].extend(
-                await evaluate_case(
-                    case,
-                    scopes[case["knowledge_base"]],
-                    documents,
-                    args.strategy,
-                    eval_owner,
-                    k_values=args.metric_k,
-                    retrieval_only=args.retrieval_only,
-                )
+def _strategy_ready(strategy):
+    if strategy in {"hybrid", "hybrid_compare"} and get_settings().retrieval_lexical_weight <= 0:
+        raise ValueError(
+            "hybrid strategies require RETRIEVAL_LEXICAL_WEIGHT > 0; "
+            "the default 0 does not add a lexical branch"
+        )
+
+
+def _application_database():
+    raw = os.environ.get("DATABASE_URL")
+    if not raw:
+        return None
+    try:
+        return make_url(raw).database
+    except Exception:
+        return None
+
+
+def _shared_test_database():
+    return test_database_url(os.getenv("TEST_DATABASE_URL")).database
+
+
+def _base_report(args, cases):
+    settings = get_settings()
+    materials_path = args.dataset.with_name("materials.json")
+    report = {
+        "dataset_sha256": hashlib.sha256(args.dataset.read_bytes()).hexdigest(),
+        "expected_case_ids": [case["id"] for case in cases],
+        "strategy": args.strategy,
+        "status": "running",
+        "retrieval_only": args.retrieval_only,
+        "metric_k": list(args.metric_k),
+        "chat_model": None if args.retrieval_only else settings.chat_model,
+        "embedding_model": settings.embedding_model,
+        "dimensions": 1024,
+        "top_k": settings.retrieval_top_k,
+        "candidate_k": settings.retrieval_candidate_k,
+        "candidate_limit": max(settings.retrieval_candidate_k, settings.retrieval_top_k),
+        "lexical_weight": settings.retrieval_lexical_weight,
+        "min_similarity": settings.retrieval_min_similarity,
+        "cases": [],
+    }
+    if materials_path.is_file():
+        report["materials_sha256"] = hashlib.sha256(materials_path.read_bytes()).hexdigest()
+    return report
+
+
+async def _run_cases(args, cases, output, report, scopes, documents, owner):
+    for number, case in enumerate(cases, 1):
+        report["cases"].extend(
+            await evaluate_case(
+                case,
+                scopes[case["knowledge_base"]],
+                documents,
+                args.strategy,
+                owner,
+                k_values=args.metric_k,
+                retrieval_only=args.retrieval_only,
             )
-            write_json(output / "report.json", report)
-            print(f"Evaluated {number}/{len(cases)}: {case['id']}", flush=True)
+        )
+        write_json(output / "report.json", report)
+        print(f"Evaluated {number}/{len(cases)}: {case['id']}", flush=True)
+
+
+def _finish(args, output, report, cleanup_message):
     report["status"] = "completed"
     write_json(output / "report.json", report)
     if not args.retrieval_only:
@@ -321,7 +361,169 @@ async def live_evaluation(args, cases, materials, output):
             print(format_retrieval_table(retrieval), flush=True)
         else:
             print(json.dumps(retrieval, ensure_ascii=False, indent=2))
-    print(f"Evaluation complete; isolated database removed. Review report: {output}")
+    print(cleanup_message, flush=True)
+
+
+def _publish_index(
+    factory, args, output, scopes, documents, hashes, *, retain, export_path, application_database, shared
+):
+    snapshot = read_snapshot(factory)
+    if snapshot["schema_revision"] != code_schema_revision():
+        raise IndexReuseError("schema revision")
+    assert_database_access(
+        snapshot, application_database=application_database, shared_test_database=shared
+    )
+    manifest = build_manifest(
+        snapshot=snapshot,
+        scopes=scopes,
+        documents=documents,
+        material_hashes=hashes,
+        dataset_sha256=hashlib.sha256(args.dataset.read_bytes()).hexdigest(),
+        materials_sha256=hashlib.sha256(args.dataset.with_name("materials.json").read_bytes()).hexdigest(),
+        embedding_model=get_settings().embedding_model,
+    )
+    if export_path:
+        records = read_export_records(factory, manifest)
+        exported = dict(manifest, binding="export")
+        validate_records(exported, records)
+        write_package(export_path, exported, records)
+    if retain:
+        write_json(output / "index_manifest.json", dict(manifest, binding="database"))
+    return snapshot["database_name"]
+
+
+async def _reuse_live(args, cases, output, reuse_path, retain, export_path):
+    manifest, records = load_index_package(reuse_path)
+    assert_dataset_matches(manifest, args.dataset)
+    settings = get_settings()
+    if manifest["schema_revision"] != code_schema_revision():
+        raise IndexReuseError("schema revision")
+    if manifest["embedding_model"] != settings.embedding_model:
+        raise IndexReuseError("embedding model")
+    if manifest["embedding_dim"] != 1024:
+        raise IndexReuseError("embedding dimension")
+    application_database = _application_database()
+    shared = _shared_test_database()
+    report = _base_report(args, cases)
+    report["corpus_embedding"] = []
+    report["index_reuse"] = {"corpus_embedding_calls": 0, "binding": manifest["binding"]}
+    write_json(output / "report.json", report)
+    if records is None:
+        with retained_database(
+            manifest, application_database=application_database, shared_test_database=shared
+        ) as factory:
+            snapshot = read_snapshot(factory)
+            assert_database_access(
+                snapshot, application_database=application_database, shared_test_database=shared
+            )
+            verify_retained_identity(manifest, snapshot)
+            verify_index_contents(
+                manifest,
+                snapshot,
+                embedding_model=settings.embedding_model,
+                schema_revision=code_schema_revision(),
+            )
+            await _run_cases(
+                args,
+                cases,
+                output,
+                report,
+                scopes_by_name(manifest["scopes"]),
+                manifest["documents"],
+                UUID(manifest["eval_owner_id"]),
+            )
+            if export_path:
+                exported_records = read_export_records(factory, manifest)
+                exported = dict(manifest, binding="export")
+                validate_records(exported, exported_records)
+                write_package(export_path, exported, exported_records)
+            report["index_reuse"]["database_name"] = snapshot["database_name"]
+        message = (
+            f"Evaluation complete; reused retained index {manifest['database_name']}. "
+            f"Corpus embedding skipped. Review report: {output}"
+        )
+    else:
+        with isolated_database(output, retain=retain) as factory:
+            import_index(factory, manifest, records)
+            snapshot = read_snapshot(factory)
+            if snapshot["schema_revision"] != code_schema_revision():
+                raise IndexReuseError("schema revision")
+            assert_database_access(
+                snapshot, application_database=application_database, shared_test_database=shared
+            )
+            verify_index_contents(
+                manifest,
+                snapshot,
+                embedding_model=settings.embedding_model,
+                schema_revision=code_schema_revision(),
+            )
+            with read_only_retrieval(os.environ["DATABASE_URL"]):
+                await _run_cases(
+                    args,
+                    cases,
+                    output,
+                    report,
+                    scopes_by_name(manifest["scopes"]),
+                    manifest["documents"],
+                    UUID(manifest["eval_owner_id"]),
+                )
+            if retain or export_path:
+                _publish_index(
+                    factory,
+                    args,
+                    output,
+                    scopes_by_name(manifest["scopes"]),
+                    manifest["documents"],
+                    manifest["material_hashes"],
+                    retain=retain,
+                    export_path=export_path,
+                    application_database=application_database,
+                    shared=shared,
+                )
+            report["index_reuse"]["database_name"] = snapshot["database_name"]
+        message = (
+            "Evaluation complete; imported index without corpus embedding"
+            + (" and retained it." if retain else "; imported database removed.")
+            + f" Review report: {output}"
+        )
+    _finish(args, output, report, message)
+
+
+async def live_evaluation(args, cases, materials, output):
+    reuse_path = getattr(args, "reuse_index", None)
+    retain = bool(getattr(args, "retain_index", False))
+    export_path = getattr(args, "export_index", None)
+    _strategy_ready(args.strategy)
+    if reuse_path:
+        await _reuse_live(args, cases, output, reuse_path, retain, export_path)
+        return
+    application_database = _application_database() if retain or export_path else None
+    shared = _shared_test_database() if retain or export_path else None
+    with isolated_database(output, retain=retain) as factory:
+        report = _base_report(args, cases)
+        write_json(output / "report.json", report)
+        scopes, documents, hashes, corpus_embedding, eval_owner = seed_corpus(factory, materials)
+        report.update(source_hashes=hashes, corpus_embedding=corpus_embedding)
+        await _run_cases(args, cases, output, report, scopes, documents, eval_owner)
+        if retain or export_path:
+            _publish_index(
+                factory,
+                args,
+                output,
+                scopes,
+                documents,
+                hashes,
+                retain=retain,
+                export_path=export_path,
+                application_database=application_database,
+                shared=shared,
+            )
+    cleanup = (
+        f"Evaluation complete; isolated database retained. Review report: {output}"
+        if retain
+        else f"Evaluation complete; isolated database removed. Review report: {output}"
+    )
+    _finish(args, output, report, cleanup)
 
 
 def main():
@@ -360,6 +562,21 @@ def main():
         type=Path,
         help="recompute the gate from an existing report and human review; no model calls",
     )
+    parser.add_argument(
+        "--retain-index",
+        action="store_true",
+        help="after a successful --live build, keep the study_eval_*_test database and write index_manifest.json",
+    )
+    parser.add_argument(
+        "--export-index",
+        type=Path,
+        help="write a portable index package so a later run can import it without embedding",
+    )
+    parser.add_argument(
+        "--reuse-index",
+        type=Path,
+        help="reuse a retained manifest or an export package; skips corpus embedding",
+    )
     args = parser.parse_args()
     try:
         if args.review:
@@ -374,6 +591,18 @@ def main():
             write_json(args.output / "summary.json", summarize(report))
             print(json.dumps(gate, ensure_ascii=False))
             return
+        if args.reuse_index and not args.live:
+            manifest, _records = load_index_package(args.reuse_index)
+            chunks = sum(row["chunk_count"] for row in manifest["indexes"])
+            print(
+                f"Validated index package {manifest['binding']} / {manifest['embedding_profile']} "
+                f"/ {chunks} chunks. No database or provider calls."
+            )
+            return
+        if (args.retain_index or args.export_index) and not args.live:
+            raise ValueError("--retain-index and --export-index require --live")
+        if args.live and args.reuse_index and not args.retrieval_only:
+            raise ValueError("Reused indexes are read-only; pass --retrieval-only")
         if any(k <= 0 for k in args.metric_k):
             raise ValueError("--metric-k values must be positive integers")
         args.metric_k = sorted(set(args.metric_k))
@@ -384,6 +613,7 @@ def main():
             )
             return
         load_dotenv(get_settings().model_config["env_file"])
+        _strategy_ready(args.strategy)
         output = (args.output or BACKEND.parent / ".local/rag-evaluation" / uuid4().hex).resolve()
         output.mkdir(parents=True, exist_ok=False)
         asyncio.run(live_evaluation(args, cases, materials, output))
