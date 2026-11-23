@@ -38,6 +38,12 @@ uv run --no-sync study-eval-rag --output ../.local/rag-eval/run-01 --review ../.
 
 输出目录必须是新目录，默认位于忽略提交的 `.local/rag-evaluation/<随机ID>`。私有问题、原始回答、片段及复核文件不要放到 Git 或公开目录。
 
+已保存的报告可以用离线 Evaluation V2 重算旧指标并增加覆盖率、可满足性和审查分类。该命令不连接数据库或模型，字段定义见 [Evaluation V2](evaluation-v2.md)。
+
+```powershell
+uv run --no-sync study-eval-report-v2 --report report.json --questions questions.jsonl --output-dir v2
+```
+
 真实评测要求显式配置的 PostgreSQL `TEST_DATABASE_URL` 指向 `_test` 库，并拒绝覆盖数据库目标的连接参数。工具使用有 CREATEDB 权限的测试操作角色，新建随机 `study_eval_*_test` 库并验证实际目标，再在新库执行迁移、准备资料。正常退出和异常收尾只删除本次成功创建的库，应用库与已有其他数据库不变。硬杀进程可能来不及清理，应核实遗留库归属后人工处理。
 
 原件保存在本次输出目录的 storage 中。私有文件仅从 `materials.json` 明确指定的本地路径复制；云端占位文件会拒绝读取，原文件不修改。普通 pytest 不发起付费模型调用。

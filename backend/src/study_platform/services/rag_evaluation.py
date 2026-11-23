@@ -23,6 +23,11 @@ def normalized(text):
     return re.sub(r"[^\w]", "", unicodedata.normalize("NFKC", text).casefold())
 
 
+def refusal_marker(answer):
+    """True when the stored answer contains the refusal substring used by reports."""
+    return "资料不足" in (answer or "")
+
+
 def supporting_quotes(support):
     value = support["quote"]
     return value if isinstance(value, list) else [value]
@@ -200,7 +205,7 @@ async def evaluate_case(
                     any(normalized(alias) in normalized(answer) for alias in aliases)
                     for aliases in case["expected_facts"]
                 ),
-                "refusal_marker": "资料不足" in answer,
+                "refusal_marker": refusal_marker(answer),
                 "answer_metrics": {"calls": calls, "elapsed_ms": answer_ms, "usage": usage},
                 "rewrite_metrics": asdict(rewritten) if rewritten and name == "rewrite" else None,
                 "shared_embedding_metrics": embedding,

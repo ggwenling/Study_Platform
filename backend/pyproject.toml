@@ -45,6 +45,7 @@ study-api = "study_platform.cli.serve:main"
 study-setup-checkpointer = "study_platform.cli.setup_checkpointer:main"
 study-worker = "study_platform.cli.worker:main"
 study-eval-rag = "study_platform.cli.evaluate_rag:main"
+study-eval-report-v2 = "study_platform.cli.evaluate_report_v2:main"
 
 [build-system]
 requires = ["hatchling>=1.26"]
