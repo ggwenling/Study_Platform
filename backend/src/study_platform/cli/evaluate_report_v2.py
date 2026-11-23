@@ -19,7 +19,7 @@ def main(argv=None):
     parser.add_argument(
         "--manifest",
         type=Path,
-        help="optional chunk manifest; complete=true is a caller assertion, not proof of the full corpus",
+        help="optional chunk manifest; only source=corpus_manifest with matching chunk_count and documents is a corpus proof",
     )
     parser.add_argument("--annotations", type=Path, help="optional AI or human review annotations")
     parser.add_argument("--output-dir", type=Path, required=True)

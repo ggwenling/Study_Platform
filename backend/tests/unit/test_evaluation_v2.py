@@ -40,6 +40,19 @@ def _case(qid, evidence, *, strategy="baseline", answer="", stored_hit=None, ret
     return row
 
 
+def _corpus_manifest(chunks):
+    documents = sorted({row["document"] for row in chunks if row.get("document")})
+    return {
+        "source": "corpus_manifest",
+        "universe": "corpus",
+        "complete": True,
+        "candidate_complete": True,
+        "chunk_count": len(chunks),
+        "documents": documents,
+        "chunks": chunks,
+    }
+
+
 def _run(tmp_path, questions, cases, *, manifest=None, annotations=None, top_k=10):
     tmp_path.mkdir(parents=True, exist_ok=True)
     report_path = tmp_path / "report.json"
@@ -84,13 +97,12 @@ def test_cross_document_local_index_does_not_collide(tmp_path):
             ],
         )
     ]
-    manifest = {
-        "complete": True,
-        "chunks": [
+    manifest = _corpus_manifest(
+        [
             {"document": "A", "local_index": 0, "text": "alpha quote"},
             {"document": "B", "local_index": 0, "text": "beta quote"},
-        ],
-    }
+        ]
+    )
     report = _run(tmp_path, questions, [_case("Q", [])], manifest=manifest, top_k=1)
     row = report["records"][0]["satisfiability"]
     assert chunk_identity(manifest["chunks"][0]) != chunk_identity(manifest["chunks"][1])
@@ -111,10 +123,9 @@ def test_same_chunk_covers_two_quotes_once(tmp_path):
             ],
         )
     ]
-    manifest = {
-        "complete": True,
-        "chunks": [{"document": "A", "local_index": 0, "text": "alpha quote beta quote"}],
-    }
+    manifest = _corpus_manifest(
+        [{"document": "A", "local_index": 0, "text": "alpha quote beta quote"}]
+    )
     report = _run(tmp_path, questions, [_case("Q", [])], manifest=manifest, top_k=1)
     assert report["records"][0]["satisfiability"]["minimum"] == 1
     assert report["records"][0]["satisfiability"]["structural_at_k"] is True
@@ -130,14 +141,13 @@ def test_identical_text_and_duplicate_rows_keep_document_identity(tmp_path):
             ],
         )
     ]
-    manifest = {
-        "complete": True,
-        "chunks": [
+    manifest = _corpus_manifest(
+        [
             {"document": "A", "local_index": 0, "text": "same words"},
             {"document": "A", "local_index": 0, "text": "same words"},
             {"document": "B", "local_index": 0, "text": "same words"},
-        ],
-    }
+        ]
+    )
     report = _run(tmp_path, questions, [_case("Q", [])], manifest=manifest, top_k=1)
     assert report["records"][0]["satisfiability"]["minimum"] == 2
 
@@ -151,11 +161,18 @@ def test_missing_document_identity_is_unknown_not_impossible(tmp_path):
     assert row["algorithm"] == "unknown"
     assert row["structural_at_k"] == "unknown"
     assert row["candidate_complete"] is False
-    assert row["universe"] == "incomplete_identity"
-    assert "document-bound identity" in row["validation_error"]
+    assert row["universe"] == "caller_asserted"
+    assert row["universe_trust"] == "caller_asserted"
+    assert row["corpus_verified"] is False
+    assert "caller assertion" in row["validation_error"]
 
     mixed = {
+        "source": "corpus_manifest",
+        "universe": "corpus",
         "complete": True,
+        "candidate_complete": True,
+        "chunk_count": 2,
+        "documents": ["A"],
         "chunks": [
             {"document": "A", "local_index": 0, "text": "other text"},
             {"local_index": 1, "text": "alpha quote"},
@@ -166,14 +183,17 @@ def test_missing_document_identity_is_unknown_not_impossible(tmp_path):
     assert mixed_row["structural_at_k"] == "unknown"
     assert mixed_row["minimum"] is None
     assert mixed_row["algorithm"] == "unknown"
+    assert "document-bound identity" in mixed_row["validation_error"]
 
-    identified = {
-        "complete": True,
-        "chunks": [{"document": "A", "local_index": 0, "text": "other text"}],
-    }
+    identified = _corpus_manifest(
+        [{"document": "A", "local_index": 0, "text": "other text"}]
+    )
     absent = _run(tmp_path / "identified", questions, [_case("Q", [])], manifest=identified, top_k=10)
-    assert absent["records"][0]["satisfiability"]["algorithm"] == "impossible"
-    assert absent["records"][0]["satisfiability"]["structural_at_k"] is False
+    proven = absent["records"][0]["satisfiability"]
+    assert proven["algorithm"] == "impossible"
+    assert proven["structural_at_k"] is False
+    assert proven["corpus_verified"] is True
+    assert proven["universe_trust"] == "corpus_manifest"
 
 
 def test_local_index_none_falls_back_to_ordinal():
@@ -321,7 +341,7 @@ def test_bounded_cover_keeps_lower_and_upper_apart(tmp_path):
     chunks.append({"document": "D", "local_index": 1, "text": " ".join(["QTOK00", *(f"QTOK{i:02d}" for i in range(9, 17))])})
     for index in range(1, 17):
         chunks.append({"document": "D", "local_index": index + 1, "text": f"QTOK{index:02d}"})
-    manifest = {"complete": True, "chunks": chunks}
+    manifest = _corpus_manifest(chunks)
     report = _run(tmp_path, [_question("Q", supports)], [_case("Q", [])], manifest=manifest, top_k=1)
     row = report["records"][0]["satisfiability"]
     assert row["algorithm"] == "bounded"
@@ -344,7 +364,7 @@ def test_upper_bound_can_prove_possible_and_lower_bound_impossible(tmp_path):
     ]
     for index in range(1, 17):
         chunks.append({"document": "D", "local_index": index + 1, "text": f"QTOK{index:02d}"})
-    manifest = {"complete": True, "chunks": chunks}
+    manifest = _corpus_manifest(chunks)
     possible = _run(tmp_path, [_question("Q", supports)], [_case("Q", [])], manifest=manifest, top_k=2)
     impossible = _run(
         tmp_path / "low",
@@ -368,19 +388,46 @@ def test_top_k_labeled_complete_stays_observed_and_real_manifest_still_scores(tm
     assert row["structural_at_k"] == "unknown"
     assert row["algorithm"] == "unknown"
     assert row["corpus_verified"] is False
-    assert "observed retrieval" in row["validation_error"]
+    assert row["universe_trust"] == "caller_asserted"
+    assert "caller assertion" in row["validation_error"]
 
     sourced = {"complete": True, "source": "top_k", "chunks": [{"document": "A", "local_index": 1, "text": "other text"}]}
     labeled = _run(tmp_path / "source", questions, [_case("Q", top)], manifest=sourced, top_k=1)
     assert labeled["records"][0]["satisfiability"]["structural_at_k"] == "unknown"
+    assert "observed retrieval" in labeled["records"][0]["satisfiability"]["validation_error"]
 
-    separate = {"complete": True, "chunks": [{"document": "A", "local_index": 9, "text": "other text"}]}
+    rewritten = {
+        "complete": True,
+        "chunks": [{"document": "A", "local_index": 0, "text": "other text"}],
+    }
+    rewritten_row = _run(
+        tmp_path / "rewritten", questions, [_case("Q", top)], manifest=rewritten, top_k=1
+    )["records"][0]["satisfiability"]
+    assert rewritten_row["algorithm"] == "unknown"
+    assert rewritten_row["structural_at_k"] == "unknown"
+    assert rewritten_row["universe_trust"] == "caller_asserted"
+
+    extra = {
+        "complete": True,
+        "chunks": [
+            {"id": "c1", "document": "A", "text": "other text"},
+            {"document": "A", "local_index": 9, "text": "unrelated"},
+        ],
+    }
+    extra_row = _run(
+        tmp_path / "extra", questions, [_case("Q", top)], manifest=extra, top_k=1
+    )["records"][0]["satisfiability"]
+    assert extra_row["algorithm"] == "unknown"
+    assert extra_row["structural_at_k"] == "unknown"
+    assert extra_row["corpus_verified"] is False
+
+    separate = _corpus_manifest([{"document": "A", "local_index": 9, "text": "other text"}])
     corpus = _run(tmp_path / "corpus", questions, [_case("Q", top)], manifest=separate, top_k=1)
     claimed = corpus["records"][0]["satisfiability"]
     assert claimed["algorithm"] == "impossible"
     assert claimed["structural_at_k"] is False
-    assert claimed["corpus_verified"] is False
-    assert claimed["universe_trust"] == "caller_asserted"
+    assert claimed["corpus_verified"] is True
+    assert claimed["universe_trust"] == "corpus_manifest"
 
 
 def test_partial_manifest_stays_observed(tmp_path):
@@ -531,7 +578,7 @@ def test_strategies_and_cli(tmp_path):
         ]
     )
     saved = json.loads((output / "report.json").read_text(encoding="utf-8"))
-    assert saved["schema_version"] == "evaluation-v2.2"
+    assert saved["schema_version"] == "evaluation-v2.3"
     assert set(saved["summary"]) == {"baseline", "rewrite"}
     assert saved["provenance"]["model_calls"] == 0
     assert saved["provenance"]["inputs"][0]["sha256"]

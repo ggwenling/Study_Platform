@@ -20,8 +20,9 @@ from study_platform.services.rag_evaluation import (
 )
 from study_platform.services.retrieval_metrics import evaluate_ranking
 
-SCHEMA_VERSION = "evaluation-v2.2"
+SCHEMA_VERSION = "evaluation-v2.3"
 OBSERVED_MANIFEST_SOURCES = {"observed", "saved_evidence", "top_k", "retrieval"}
+CORPUS_MANIFEST_SOURCE = "corpus_manifest"
 EXACT_ITEM_LIMIT = 16
 QUALITY_LABELS = {"answered", "partial", "refused", "unsupported", "contradictory", "unknown"}
 
@@ -31,8 +32,9 @@ LIMITATIONS = [
     "A document hit is not semantic support, and a legal citation id is not a faithful citation.",
     "Satisfiability uses the supplied chunk universe. Saved top-k evidence is an observed scope.",
     "Rows without a document-bound identity are dropped, and a complete flag does not make the rest a full universe.",
-    "complete=true is the caller's assertion. It is not proof that the chunk list is the full corpus.",
-    "A manifest whose identities are only the saved evidence, or whose source is observed retrieval, stays an observed scope.",
+    "Only a corpus_manifest whose chunk_count and documents match the rows is a corpus structural proof.",
+    "complete=true without that contract stays caller_asserted and unknown. It is not reported as impossible.",
+    "Observed, top-k, saved-evidence, and retrieval sources stay unknown.",
     "String indexes accept Unicode decimal digits only. Superscripts and circled numbers are invalid and fall back.",
     "Span macro and micro use answerable questions that have support. Empty support and unanswerable rows stay outside those denominators.",
     "Latency and cost are recorded only from stored measurements. A missing live run stays NOT_VERIFIED.",
@@ -396,14 +398,35 @@ def _manifest_source(manifest):
     return source.strip().casefold()
 
 
-def _matches_saved_evidence(chunks, evidence):
-    manifest_ids = {chunk_identity(row) for row in chunks}
-    manifest_ids.discard(None)
-    if not manifest_ids:
-        return False
-    evidence_ids = {chunk_identity(row) for row in evidence}
-    evidence_ids.discard(None)
-    return manifest_ids <= evidence_ids
+def _corpus_contract_error(manifest, chunks):
+    """Return why this manifest is not a verifiable corpus, or None when it is.
+
+    Verification checks the manifest contract. It does not read a live index.
+    """
+    if _manifest_source(manifest) != CORPUS_MANIFEST_SOURCE:
+        return "complete=true without source corpus_manifest is a caller assertion, not a corpus proof."
+    if manifest.get("universe") != "corpus":
+        return "corpus_manifest requires universe corpus."
+    if manifest.get("candidate_complete") is not True:
+        return "corpus_manifest requires candidate_complete true."
+    unidentified = sum(chunk_identity(row) is None for row in chunks)
+    if unidentified:
+        return (
+            f"{unidentified} manifest rows have no document-bound identity. "
+            "Those rows are not a proven absence."
+        )
+    declared_count = manifest.get("chunk_count")
+    if isinstance(declared_count, bool) or not isinstance(declared_count, int):
+        return "corpus_manifest chunk_count must equal the number of chunk rows."
+    if declared_count != len(chunks):
+        return "corpus_manifest chunk_count must equal the number of chunk rows."
+    declared_docs = manifest.get("documents")
+    actual_docs = {
+        str(row.get("document")) for row in chunks if row.get("document") not in (None, "")
+    }
+    if not isinstance(declared_docs, list) or {str(item) for item in declared_docs} != actual_docs:
+        return "corpus_manifest documents must match the chunk documents."
+    return None
 
 
 def _satisfiability(question, evidence, manifest, top_k):
@@ -431,38 +454,35 @@ def _satisfiability(question, evidence, manifest, top_k):
     base["observed_covered"] = all(
         any(_quote_hit(item, row) for row in evidence) for item in support
     )
-    complete = bool(manifest and manifest.get("complete") is True)
-    authorised = complete and (manifest.get("candidate_complete", True) is True)
-    if not authorised:
+    if not manifest or manifest.get("complete") is not True or manifest.get("candidate_complete") is False:
         base["note"] = "Saved evidence is the observed scope. Missing quotes are not structural."
+        base["corpus_verified"] = False
         return base
     chunks = list(manifest.get("chunks") or [])
-    unidentified = sum(chunk_identity(row) is None for row in chunks)
-    if unidentified:
-        base["candidate_complete"] = False
-        base["universe"] = "incomplete_identity"
-        base["algorithm"] = "unknown"
-        base["structural_at_k"] = "unknown"
-        base["corpus_verified"] = False
-        base["validation_error"] = (
-            f"{unidentified} manifest rows have no document-bound identity. "
-            "Those rows are not a proven absence, and complete=true does not "
-            "make the remaining rows a full universe."
-        )
-        base["note"] = base["validation_error"]
-        return base
     source = _manifest_source(manifest)
-    if source in OBSERVED_MANIFEST_SOURCES or _matches_saved_evidence(chunks, evidence):
+    if source in OBSERVED_MANIFEST_SOURCES:
         base["candidate_complete"] = False
         base["universe"] = "observed_evidence"
         base["algorithm"] = "unknown"
         base["structural_at_k"] = "unknown"
         base["corpus_verified"] = False
+        base["universe_trust"] = "caller_asserted"
         base["validation_error"] = (
-            "This manifest is observed retrieval, not a corpus universe. "
+            "This manifest source is observed retrieval, not a corpus universe. "
             "complete=true does not promote saved top-k evidence into the full candidate set."
         )
         base["note"] = base["validation_error"]
+        return base
+    contract_error = _corpus_contract_error(manifest, chunks)
+    if contract_error:
+        base["candidate_complete"] = False
+        base["universe"] = "caller_asserted"
+        base["algorithm"] = "unknown"
+        base["structural_at_k"] = "unknown"
+        base["corpus_verified"] = False
+        base["universe_trust"] = "caller_asserted"
+        base["validation_error"] = contract_error
+        base["note"] = contract_error
         return base
     bounds = cover_bounds(_hit_sets(question, chunks))
     structural = "unknown"
@@ -478,9 +498,9 @@ def _satisfiability(question, evidence, manifest, top_k):
         structural = True
     return {
         "scope": "corpus",
-        "universe": "complete_manifest",
+        "universe": "corpus_manifest",
         "k": top_k,
-        "candidate_complete": manifest.get("candidate_complete", True) is True,
+        "candidate_complete": True,
         "algorithm": bounds["algorithm"],
         "minimum": bounds["minimum"],
         "lower": bounds["lower"],
@@ -488,11 +508,11 @@ def _satisfiability(question, evidence, manifest, top_k):
         "structural_at_k": structural,
         "observed_covered": base["observed_covered"],
         "item_count": bounds["item_count"],
-        "corpus_verified": False,
-        "universe_trust": "caller_asserted",
+        "corpus_verified": True,
+        "universe_trust": "corpus_manifest",
         "note": (
-            "Bounds use the caller-supplied chunk list. complete=true is not "
-            "proof of the full corpus."
+            "Structural bounds use a corpus_manifest whose chunk_count and documents "
+            "match the chunk rows. This check does not read a live index."
         ),
     }
 

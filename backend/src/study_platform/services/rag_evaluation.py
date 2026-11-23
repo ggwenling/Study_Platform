@@ -150,18 +150,22 @@ async def evaluate_case(
         citations, citation_valid = [], True
         if not retrieval_only:
             started = time.monotonic()
-            if not evidence:
-                answer = "当前资料不足，无法根据所选知识库回答。请补充相关资料或调整提问。"
-            else:
+            generation_scope = {
+                "intent": scope.get("intent", "qa"),
+                "answer_mode": scope.get("answer_mode", "knowledge_only"),
+                "content": case["question"],
+            }
+            try:
+                prepared = chat.prepare_generation(generation_scope, evidence, [])
+            except Exception as error:
+                prepared = None
+                answer, answer_error = "", type(error).__name__
+            if prepared and prepared["kind"] == "refusal":
+                answer = prepared["content"]
+            elif prepared and prepared["kind"] == "compose":
                 calls = 1
                 try:
-                    reply = await chat_model().ainvoke(
-                        chat.prompt(
-                            {**scope, "content": case["question"]},
-                            evidence,
-                            [],
-                        )
-                    )
+                    reply = await chat_model().ainvoke(prepared["messages"])
                     answer, usage = reply.content, reply.usage_metadata
                     if not isinstance(answer, str):
                         raise ValueError("Non-text answer")

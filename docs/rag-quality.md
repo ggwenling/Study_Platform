@@ -38,6 +38,8 @@ uv run --no-sync study-eval-rag --output ../.local/rag-eval/run-01 --review ../.
 
 输出目录必须是新目录，默认位于忽略提交的 `.local/rag-evaluation/<随机ID>`。私有问题、原始回答、片段及复核文件不要放到 Git 或公开目录。
 
+在线 `evaluate_case` 的回答分支使用产品侧 `prepare_generation`。`knowledge_only` 下，原始证据全是空白时打包结果为空，本地返回资料不足，不调用回答模型。检索命中、文档 IR 和证据字符数仍按原始证据列表计算。
+
 已保存的报告可以用离线 Evaluation V2 重算旧指标并增加覆盖率、可满足性和审查分类。该命令不连接数据库或模型，字段定义见 [Evaluation V2](evaluation-v2.md)。
 
 ```powershell

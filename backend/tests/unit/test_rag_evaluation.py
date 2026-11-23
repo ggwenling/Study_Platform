@@ -291,6 +291,80 @@ def test_retrieval_summary_from_mock_report():
     assert "overall" in table and "R@1" in table
 
 
+def test_blank_evidence_uses_product_pack_and_does_not_call_the_model(monkeypatch):
+    from study_platform.services import chat
+    from study_platform.services.rag_evaluation import evaluate_case
+
+    calls = {"model": 0}
+
+    def embed(queries, diagnostics=None):
+        if diagnostics is not None:
+            diagnostics["calls"] = 1
+            diagnostics["input_count"] = len(queries)
+        return [[0.0]]
+
+    def retrieve(_scope, _vectors, _owner):
+        return [
+            {
+                "id": "blank",
+                "text": " \n\t ",
+                "material_version_id": "m",
+                "index_version_id": "idx",
+                "title": "t",
+                "locator": "L1",
+            }
+        ]
+
+    class Model:
+        async def ainvoke(self, messages):
+            calls["model"] += 1
+            return SimpleNamespace(content="alpha [S1]", usage_metadata=None)
+
+    monkeypatch.setattr("study_platform.services.rag_evaluation.embed_texts", embed)
+    monkeypatch.setattr(
+        "study_platform.services.rag_evaluation.chat.retrieve_vectors", retrieve
+    )
+    monkeypatch.setattr("study_platform.services.rag_evaluation.chat_model", lambda: Model())
+    case = {
+        "id": "Q",
+        "fact_group": "g",
+        "split": "heldout",
+        "question": "问什么",
+        "knowledge_base": "kb",
+        "answerable": True,
+        "expected_facts": [["alpha"]],
+        "support": [{"document": "doc", "quote": "alpha"}],
+    }
+    scope = {"index_version_ids": ["idx"], "answer_mode": "knowledge_only", "intent": "qa"}
+    rows = asyncio.run(evaluate_case(case, scope, {"m": "doc"}, "baseline", owner="owner"))
+    assert calls["model"] == 0
+    assert rows[0]["answer_metrics"]["calls"] == 0
+    assert rows[0]["answer"] == chat.INSUFFICIENT_MATERIAL
+    assert rows[0]["evidence"][0]["text"] == " \n\t "
+    assert rows[0]["retrieval_support_hit"] is False
+    assert rows[0]["evidence_characters"] == len(" \n\t ")
+
+    def retrieve_text(_scope, _vectors, _owner):
+        return [
+            {
+                "id": "c1",
+                "text": "alpha quote",
+                "material_version_id": "m",
+                "index_version_id": "idx",
+                "title": "t",
+                "locator": "L1",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "study_platform.services.rag_evaluation.chat.retrieve_vectors", retrieve_text
+    )
+    composed = asyncio.run(evaluate_case(case, scope, {"m": "doc"}, "baseline", owner="owner"))
+    assert calls["model"] == 1
+    assert composed[0]["answer_metrics"]["calls"] == 1
+    assert composed[0]["answer"] == "alpha [S1]"
+
+
 def test_equivalent_supporting_passages_are_accepted_but_file_match_alone_is_not():
     case = {"support": [{"document": "doc", "quote": ["按学期进行范围分区", "按授课学期进行分区"]}]}
     documents = {"v": "doc"}

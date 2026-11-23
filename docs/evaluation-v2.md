@@ -1,6 +1,6 @@
 # Evaluation V2 离线报告
 
-`study-eval-report-v2` 只读取已经保存的报告、冻结题目，以及可选的块清单和审查注释。它不连接数据库、网络或模型。缺输入的字段保持 unknown，不补造。
+`study-eval-report-v2` 只读取已经保存的报告、冻结题目，以及可选的块清单和审查注释。它不连接数据库、网络或模型。缺输入的字段保持 unknown，不补造。当前 schema 是 `evaluation-v2.3`。
 
 ```powershell
 uv run --no-sync study-eval-report-v2 --report report.json --questions questions.jsonl --manifest chunks.json --annotations reviews.jsonl --output-dir v2
@@ -18,11 +18,13 @@ uv run --no-sync study-eval-report-v2 --report report.json --questions questions
 
 证据覆盖率按 support 项计。同一项里的 quote 数组是或，项与项之间是与，并且必须同一 document。`matched/total` 是命中项数和项数，`locations` 给出证据序号和块身份。文档被检索到不等于语义支撑。`citation.ids_subset_of_evidence` 只表示引用编号落在证据编号里；`citation.faithful` 固定为 unknown。
 
-可满足性在调用者声明的清单上做集合覆盖。清单必须 `complete: true`，并且没有把 `candidate_complete` 设为 false。这个布尔值只表示调用者的断言，`corpus_verified` 固定为 false，报告不能据此证明清单就是全语料。`source` 为 `observed`、`saved_evidence`、`top_k` 或 `retrieval` 时，以及清单块身份全部落在该题已保存证据里时，范围保持 observed，`structural_at_k` 为 unknown。不要把 top-k 证据复制成清单再标成 complete。另有块、且身份完整的清单仍计算 exact、bounded 或 impossible。
+可满足性只在受支持的全语料清单上做集合覆盖。清单必须同时满足：`source` 为 `corpus_manifest`，`universe` 为 `corpus`，`complete` 与 `candidate_complete` 都为 true，每一行都有文档绑定身份，`chunk_count` 等于行数，`documents` 等于这些行的 document 集合。通过这些内部检查时 `corpus_verified` 为 true，`universe_trust` 为 `corpus_manifest`。这只核对清单契约，不读取在线索引。
+
+仅有 `complete: true`、把已保存证据的 `id` 改写成 `local_index`、或额外塞入无关块，都停在 `universe_trust=caller_asserted`，`algorithm` 与 `structural_at_k` 为 unknown，不会报 impossible。`source` 为 `observed`、`saved_evidence`、`top_k` 或 `retrieval` 时同样 unknown。`chunk_count` 或 `documents` 对不上、以及清单行缺少文档绑定身份时，也是 unknown 并写入 `validation_error`，不会把其余行当成全集。契约通过且没有任何行命中时，才是 `impossible`。
 
 块身份是 `(chunk_id, document)`、`(document, local_index)` 或 `(document, ordinal)`。`local_index` 缺失、空或类型无效时才使用 `ordinal`；`0` 是合法序号。字符串只接受 Unicode 十进制数字（Nd，含 ASCII 和全角）；`isdigit` 为真但没有十进制值的字符，例如 `²`、`①` 和 `²2`，一律无效并回退，不抛异常。布尔值、小数、负数和空白字符串也无效。显式 `chunk_id` 优先。保存证据若只有 `id` 和 `document`，仍用这组身份。
 
-没有 document，且 `chunk_id`、`id`、`local_index`、`ordinal` 都不能组成文档绑定身份的行，不参与覆盖。只要完整清单里有这样的行，`algorithm` 和 `structural_at_k` 都是 unknown，并写入 `validation_error`。`complete: true` 不会把丢掉这些行之后的剩余候选当成完备全集。全部行都有身份、且没有任何行命中时，才是 `impossible`。同一 document 的同一块覆盖多条 quote 只算一块；两份 document 的相同局部序号是两块，正文相同也不合并。
+没有 document，且 `chunk_id`、`id`、`local_index`、`ordinal` 都不能组成文档绑定身份的行，不参与覆盖。契约清单里只要有这样的行，`algorithm` 和 `structural_at_k` 都是 unknown，并写入 `validation_error`。同一 document 的同一块覆盖多条 quote 只算一块；两份 document 的相同局部序号是两块，正文相同也不合并。
 
 `algorithm=exact` 时 `minimum`、`lower`、`upper` 相等。项数超过 16 且上下界没有相遇时，`algorithm=bounded`，`minimum` 为 null。`lower` 来自一组互不相交的命中集合，`upper` 是贪心覆盖的大小。贪心结果不会写入 `lower`。`lower > k` 才能判定 `structural_at_k=false`；`upper <= k` 才能判定 true；界跨过 k 时是 unknown。没有完整清单时 scope 是 `observed`，缺 quote 不代表结构上不可满足。
 
