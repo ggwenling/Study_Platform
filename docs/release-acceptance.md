@@ -309,3 +309,20 @@ pg_restore --host=127.0.0.1 --port=55432 --username=postgres \
 5. 附上 D 对同一 SHA 的 blocker 列表。非空则不能 release。
 6. 重跑第 4 节 `sha256sum`。有差异就解释，否则 G8 = FAIL。
 7. 门禁全部有证据之后，才由父主合并 PR #19、打不可移动的 tag。本文作者不执行这一步。
+
+## 9. 拣入主集成之后
+
+第 1–8 节是校验者在 `3bd2585e433105e573556add717fab22586e3f62` 上的记录。那些“不在 HEAD”的句子只描述那个快照。主集成已经拣入下面的提交，不要再执行第 2 节的 cherry-pick，也不要 merge PR #20、#21 或 #22。
+
+| 源 | 主集成 |
+| --- | --- |
+| A 语料契约与评测 `prepare_generation` | `610fe59a702a991bb66508ba6a28381251e364b7` |
+| B `44295ecd5f0f63a5cf60e1f03af7ae7eb49d0d20` | `c907a9035ab7d6b09e4f6defb0d690bed3a9a4cf` |
+| C `58dcc338b1cb08b3a19deb547e62836f4580d8a2` | `3bd2585e433105e573556add717fab22586e3f62` |
+| C 标题标记增量 `5e459a4ac32454181471873811819624b0d0cdee` | `9c7bba44f4b9e61ad68e04d133b33c189579ba1e` |
+| 隔离 Postgres 索引复用 | `9a2f9c717daf5c5447c956cc76b64b3070aeafb7` |
+| 本文第 1–8 节与示例 env | `95dabea42b1df5a540e4eab788406c72c3fd36ba` 的 cherry-pick |
+
+`610fe59` 之后 Evaluation V2 的 schema 是 `evaluation-v2.3`。第 1 节的 `evaluation-v2.2` 只属于 `3bd2585`。检索默认仍是 top_k 10、candidate 20、lexical 0、rewrite false；这次拣入没有改 `config.py`。
+
+RELEASE_READY 仍是 false。最终 SHA 的 CI、P4、D 和 UX 由父主另核。本环境没有启动 55432 上的 release 栈，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。
