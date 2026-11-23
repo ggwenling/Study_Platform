@@ -291,6 +291,21 @@ def test_retrieval_summary_from_mock_report():
     assert "overall" in table and "R@1" in table
 
 
+def test_retrieval_report_keeps_strategies_and_heldout_separate():
+    cases = []
+    for strategy, split, mrr in [("baseline", "calibration", 1), ("baseline", "heldout", 0),
+                                 ("hybrid", "heldout", 1), ("rewrite", "heldout", 0.5)]:
+        cases.append({
+            "strategy": strategy, "split": split, "knowledge_base": "A",
+            "retrieval_ir": {"skipped": False, "mrr": mrr, "recall@1": mrr, "hit@1": mrr, "ndcg@1": mrr},
+        })
+    summary = summarize_retrieval({"cases": cases}, [1])
+    assert summary["by_strategy"]["baseline"]["by_scope"]["overall"]["mrr"] == 0.5
+    assert summary["by_strategy"]["baseline"]["by_split"]["heldout"]["mrr"] == 0
+    assert summary["by_strategy"]["hybrid"]["by_split"]["heldout"]["mrr"] == 1
+    assert "rewrite/heldout | 1 | 0.5000" in format_retrieval_table(summary)
+
+
 def test_equivalent_supporting_passages_are_accepted_but_file_match_alone_is_not():
     case = {"support": [{"document": "doc", "quote": ["按学期进行范围分区", "按授课学期进行分区"]}]}
     documents = {"v": "doc"}

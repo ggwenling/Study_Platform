@@ -75,7 +75,7 @@ uv run --no-sync study-eval-rag --dataset <questions.jsonl> --manifest <evaluati
 
 - `support` 各项都是必需命题。每项的 `alternatives` 可列多个等价来源，一种来源的 `parts` 均须命中。每段记录独立的物理页或行范围。文档级指标按每项首选来源计算，另报可接受文档覆盖和完整证据命中。不可答题单独计数。版本化题集不以字面别名判断答案，拒答词也只供后续复核。
 - `READY_TO_RUN` 表示所选配置的预检通过，且两份独立 AI 复核记录覆盖整个冻结题集并绑定数据和答案散列。报告保留 AI 审定标签。现有面向产品默认策略的人工启用门禁继续使用独立的结果审核流程。
-- 正式对照经连接和预算确认后，使用隔离 PostgreSQL `*_test` 数据库，将预检参数改为 `--live --strategy three_way`。同次运行共享原问题向量及索引。候选 20、Top‑K 10、相似度阈值 0.35，混合权重 0.4。重排留作单独候选回放对照。
+- 正式对照经连接和预算确认后，使用隔离 PostgreSQL `*_test` 数据库，将预检参数改为 `--live --strategy three_way`。同次运行共享原问题向量及索引。候选 20、Top‑K 10、相似度阈值 0.35，混合权重 0.4。比较时读取 `retrieval_metrics.json` 的 `by_strategy`，其中各策略又按 Calibration 和 Heldout 汇总。重排留作单独候选回放对照。
 
 ## 单元测试基线
 

@@ -417,17 +417,41 @@ def summarize_retrieval(report, k_values=DEFAULT_METRIC_K):
         metrics = row.get("retrieval_ir")
         if metrics is None:
             continue
-        rows.append({**metrics, "knowledge_base": row["knowledge_base"]})
+        rows.append({
+            **metrics, "knowledge_base": row["knowledge_base"],
+            "strategy": row.get("strategy"), "split": row.get("split"),
+        })
     if not rows:
         return None
-    return {"k_values": list(k_values), "by_scope": aggregate_by_knowledge_base(rows, k_values)}
+    by_strategy = {}
+    for strategy in sorted({row["strategy"] for row in rows if row["strategy"]}):
+        arm = [row for row in rows if row["strategy"] == strategy]
+        by_strategy[strategy] = {
+            "by_scope": aggregate_by_knowledge_base(arm, k_values),
+            "by_split": {
+                split: aggregate_by_knowledge_base(
+                    [row for row in arm if row["split"] == split], k_values
+                )["overall"]
+                for split in sorted({row["split"] for row in arm if row["split"]})
+            },
+        }
+    return {
+        "k_values": list(k_values), "by_scope": aggregate_by_knowledge_base(rows, k_values),
+        "by_strategy": by_strategy,
+    }
 
 
 def format_retrieval_table(retrieval_summary):
     lines = ["scope | n_scored | mrr | " + " | ".join(
         f"R@{k} nDCG@{k} H@{k}" for k in retrieval_summary["k_values"]
     )]
-    for scope, values in retrieval_summary["by_scope"].items():
+    by_strategy = retrieval_summary.get("by_strategy") or {}
+    display = {
+        f"{strategy}/{split}": values
+        for strategy, arm in by_strategy.items()
+        for split, values in {"overall": arm["by_scope"]["overall"], **arm["by_split"]}.items()
+    }
+    for scope, values in (display or retrieval_summary["by_scope"]).items():
         parts = [scope, str(values["n_scored"]), _format_float(values.get("mrr"))]
         for k in retrieval_summary["k_values"]:
             parts.extend(
