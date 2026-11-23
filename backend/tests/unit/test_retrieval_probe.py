@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -80,6 +81,43 @@ def test_matching_hash_loads_text(tmp_path):
     )
     assert documents["rfc-sample"] == payload
     assert files[0]["status"] == "PASS" and files[0]["used"] is True
+
+
+def test_source_names_cannot_leave_the_sources_directory(tmp_path):
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("SECRET-OUTSIDE\n", encoding="utf-8")
+    outside = hashlib.sha256(b"SECRET-OUTSIDE\n").hexdigest()
+    nested = sources / "nested"
+    nested.mkdir()
+    (nested / "rfc-sample.txt").write_text("nested\n", encoding="utf-8")
+    (sources / "inside.txt").symlink_to(secret)
+    (sources / "sibling.txt").write_text("sibling\n", encoding="utf-8")
+    (sources / "alias.txt").symlink_to(sources / "sibling.txt")
+    names = [
+        "../secret.txt",
+        str(secret),
+        "inside.txt",
+        "alias.txt",
+        "nested/rfc-sample.txt",
+        "rfc-sample.txt/../../secret.txt",
+        "..",
+        "",
+    ]
+    manifest = {
+        "files": [
+            {"id": f"case-{index}", "filename": name, "sha256": outside}
+            for index, name in enumerate(names)
+        ]
+    }
+    documents, files = load_source_corpus(manifest, sources)
+    assert documents == {}
+    assert [row["status"] for row in files] == ["REJECTED"] * len(names)
+    assert all(row["used"] is False and "sha256" not in row for row in files)
+    rendered = json.dumps({"documents": documents, "files": files})
+    assert "SECRET-OUTSIDE" not in rendered
+    assert outside not in rendered
 
 
 def test_missing_source_is_not_run(tmp_path):

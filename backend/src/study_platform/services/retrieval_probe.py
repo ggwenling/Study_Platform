@@ -5,7 +5,12 @@ are token-overlap ranks, not production ``ts_rank`` / IDF / RRF. Vector rank,
 rerank and rewrite quality stay ``NOT_VERIFIED`` here.
 """
 
+import errno
 import hashlib
+import os
+import re
+import stat
+from pathlib import Path
 
 from study_platform.services.chunking import semantic_chunks
 from study_platform.services.lexical import lexical_index_text, lexical_query_terms
@@ -276,12 +281,60 @@ def probe_cases(cases, corpus, ks=(10, 24)):
     return results
 
 
-def file_sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+# Official source manifests name one regular file directly inside --sources.
+_SOURCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 def expected_sha256(item):
     return item.get("sha256") or item.get("sha256_expected_from_eval_report")
+
+
+def _source_name_ok(filename):
+    return isinstance(filename, str) and _SOURCE_NAME.fullmatch(filename) is not None
+
+
+def read_contained_source(sources_dir, filename):
+    """Read one regular file named directly inside ``sources_dir``.
+
+    Returns ``(kind, payload)``. ``kind`` is ``ok``, ``missing``, or ``rejected``.
+    Absolute paths, ``..``, separators and symlinks are rejected and not opened.
+    """
+    if not _source_name_ok(filename):
+        return "rejected", None
+    root = Path(sources_dir).resolve()
+    candidate = root / filename
+    if candidate.parent != root:
+        return "rejected", None
+    try:
+        listed = os.lstat(candidate)
+    except FileNotFoundError:
+        return "missing", None
+    if not stat.S_ISREG(listed.st_mode):
+        return "rejected", None
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(candidate, flags)
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.EPERM, errno.EMLINK}:
+            return "rejected", None
+        raise
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or (info.st_dev, info.st_ino) != (listed.st_dev, listed.st_ino):
+            return "rejected", None
+        if Path(os.path.realpath(candidate)).parent != root:
+            return "rejected", None
+        chunks = []
+        while True:
+            block = os.read(descriptor, 1024 * 1024)
+            if not block:
+                break
+            chunks.append(block)
+        return "ok", b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def load_source_corpus(manifest, sources_dir):
@@ -289,15 +342,18 @@ def load_source_corpus(manifest, sources_dir):
     documents = {}
     files = []
     for item in manifest["files"]:
-        expected = expected_sha256(item)
-        path = sources_dir / item["filename"]
         record = {"id": item["id"], "used": False, "status": "NOT_RUN"}
-        if not path.is_file():
+        kind, payload = read_contained_source(sources_dir, item.get("filename"))
+        if kind == "rejected":
+            record["status"] = "REJECTED"
             files.append(record)
             continue
-        digest = file_sha256(path)
+        if kind != "ok":
+            files.append(record)
+            continue
+        digest = hashlib.sha256(payload).hexdigest()
         record["sha256"] = digest
-        if digest != expected:
+        if digest != expected_sha256(item):
             record["status"] = "FAIL"
             files.append(record)
             continue
@@ -305,7 +361,7 @@ def load_source_corpus(manifest, sources_dir):
             record["status"] = "NOT_VERIFIED"
             files.append(record)
             continue
-        documents[item["id"]] = path.read_text(encoding="utf-8")
+        documents[item["id"]] = payload.decode("utf-8")
         record["status"] = "PASS"
         record["used"] = True
         files.append(record)
