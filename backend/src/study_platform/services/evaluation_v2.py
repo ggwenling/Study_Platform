@@ -19,7 +19,7 @@ from study_platform.services.rag_evaluation import (
 )
 from study_platform.services.retrieval_metrics import evaluate_ranking
 
-SCHEMA_VERSION = "evaluation-v2"
+SCHEMA_VERSION = "evaluation-v2.1"
 EXACT_ITEM_LIMIT = 16
 QUALITY_LABELS = {"answered", "partial", "refused", "unsupported", "contradictory", "unknown"}
 
@@ -28,6 +28,9 @@ LIMITATIONS = [
     "Evidence coverage is a normalized document-constrained quote match, not semantic support.",
     "A document hit is not semantic support, and a legal citation id is not a faithful citation.",
     "Satisfiability uses the supplied chunk universe. Saved top-k evidence is an observed scope.",
+    "Rows without a document-bound identity are dropped, and a complete flag does not make the rest a full universe.",
+    "Span macro and micro use answerable questions that have support. Empty support and unanswerable rows stay outside those denominators.",
+    "Latency and cost are recorded only from stored measurements. A missing live run stays NOT_VERIFIED.",
     "An exact minimum is reported only when the bounds meet or the set cover is within the exact limit.",
     "A greedy cover size is an upper bound. It is never reported as a lower bound.",
     "Necessary versus supplementary is unknown unless an annotation states that role and its source.",
@@ -40,30 +43,56 @@ def file_sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _valid_index(value):
+    """Return a non-negative index. Zero is valid. Bool, float, blank, and negative are not."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            return int(text)
+    return None
+
+
+def _index_field(row, key):
+    if key not in row:
+        return None
+    return _valid_index(row.get(key))
+
+
+def _nonempty_id(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def chunk_identity(row):
     """Return a document-bound chunk key, or None when the row cannot be identified.
 
-    A bare local index is rejected. The same local index in two documents is two
-    chunks, and identical text does not collapse them.
+    A bare local index is rejected. ``local_index=None`` falls back to a valid
+    ``ordinal``, including 0. The same local index in two documents is two chunks,
+    and identical text does not collapse them.
     """
     if not isinstance(row, dict):
         return None
     document = row.get("document")
-    if document is None or document == "":
+    if document is None or (isinstance(document, str) and document.strip() == ""):
         return None
-    chunk_id = row.get("chunk_id")
-    if chunk_id is None and row.get("local_index") is None and row.get("ordinal") is None:
-        chunk_id = row.get("id")
-    if chunk_id is not None and chunk_id != "":
-        return ("id", str(chunk_id), str(document))
-    local = row.get("local_index", row.get("ordinal"))
+    chunk_id = _nonempty_id(row.get("chunk_id"))
+    if chunk_id is not None:
+        return ("id", chunk_id, str(document))
+    local = _index_field(row, "local_index")
     if local is None:
-        return None
-    try:
-        local_index = int(local)
-    except (TypeError, ValueError):
-        return None
-    return ("loc", str(document), local_index)
+        local = _index_field(row, "ordinal")
+    if local is not None:
+        return ("loc", str(document), local)
+    evidence_id = _nonempty_id(row.get("id"))
+    if evidence_id is not None:
+        return ("id", evidence_id, str(document))
+    return None
 
 
 def packing_lower(item_sets):
@@ -316,6 +345,7 @@ def _coverage(question, evidence):
         "status": "scored",
         "matched": matched,
         "total": len(items),
+        "rate": matched / len(items),
         "and_hit": matched == len(items),
         "items": items,
         "reason": None,
@@ -365,6 +395,19 @@ def _satisfiability(question, evidence, manifest, top_k):
         base["note"] = "Saved evidence is the observed scope. Missing quotes are not structural."
         return base
     chunks = list(manifest.get("chunks") or [])
+    unidentified = sum(chunk_identity(row) is None for row in chunks)
+    if unidentified:
+        base["candidate_complete"] = False
+        base["universe"] = "incomplete_identity"
+        base["algorithm"] = "unknown"
+        base["structural_at_k"] = "unknown"
+        base["validation_error"] = (
+            f"{unidentified} manifest rows have no document-bound identity. "
+            "Those rows are not a proven absence, and complete=true does not "
+            "make the remaining rows a full universe."
+        )
+        base["note"] = base["validation_error"]
+        return base
     bounds = cover_bounds(_hit_sets(question, chunks))
     structural = "unknown"
     if bounds["algorithm"] == "impossible":
@@ -559,6 +602,11 @@ def _summary(records):
                 "legacy_support_denominator": 0,
                 "coverage_and_hit": 0,
                 "coverage_denominator": 0,
+                "span_micro_matched": 0,
+                "span_micro_total": 0,
+                "span_macro_sum": 0.0,
+                "span_macro_denominator": 0,
+                "empty_support": 0,
                 "refusal_marker": 0,
                 "legacy_drift": 0,
                 "quality_human": {},
@@ -579,9 +627,15 @@ def _summary(records):
             bucket["legacy_support_denominator"] += 1
             bucket["legacy_support_hit"] += int(bool(legacy_hit))
         coverage = row["coverage"]
-        if coverage["status"] == "scored":
+        if coverage["status"] == "scored" and coverage["total"]:
             bucket["coverage_denominator"] += 1
             bucket["coverage_and_hit"] += int(bool(coverage["and_hit"]))
+            bucket["span_micro_matched"] += coverage["matched"]
+            bucket["span_micro_total"] += coverage["total"]
+            bucket["span_macro_sum"] += coverage["matched"] / coverage["total"]
+            bucket["span_macro_denominator"] += 1
+        elif coverage["status"] == "empty_gold":
+            bucket["empty_support"] += 1
         if row["quality"]["refusal_marker"]:
             bucket["refusal_marker"] += 1
         if row["legacy_drift"]:
@@ -596,7 +650,77 @@ def _summary(records):
             bucket["structural_false"] += 1
         elif structural == "unknown":
             bucket["structural_unknown"] += 1
+    for bucket in strategies.values():
+        micro_total = bucket["span_micro_total"]
+        macro_count = bucket["span_macro_denominator"]
+        macro_sum = bucket.pop("span_macro_sum")
+        bucket["span_micro"] = (bucket["span_micro_matched"] / micro_total) if micro_total else None
+        bucket["span_macro"] = (macro_sum / macro_count) if macro_count else None
     return strategies
+
+
+def _numeric(value):
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _stored_values(cases, reader):
+    found = []
+    for case in cases:
+        value = _numeric(reader(case))
+        if value is not None:
+            found.append(value)
+    count = len(cases)
+    if not found:
+        return {"status": "NOT_VERIFIED", "value": None, "n_measured": 0, "n_records": count, "source": None}
+    status = "measured" if len(found) == count else "partial"
+    return {
+        "status": status,
+        "value": sum(found) / len(found),
+        "n_measured": len(found),
+        "n_records": count,
+        "source": "stored_report",
+    }
+
+
+def _answer_elapsed(case):
+    metrics = case.get("answer_metrics")
+    if not isinstance(metrics, dict):
+        return None
+    return metrics.get("elapsed_ms")
+
+
+def _answer_tokens(case):
+    metrics = case.get("answer_metrics")
+    if not isinstance(metrics, dict):
+        return None
+    usage = metrics.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return usage.get("total_tokens")
+
+
+def _integration_baseline(cases, summary):
+    """Offline baseline for a later retrieval/answer integration.
+
+    Quality comes from this recompute. Latency and token counts are copied only
+    when the saved report already has them. Cost is never inferred from tokens.
+    """
+    return {
+        "role": "offline_baseline",
+        "live_comparison": "NOT_VERIFIED",
+        "quality": {
+            "status": "measured",
+            "source": "saved_report_recompute",
+            "by_strategy": summary,
+        },
+        "retrieval_latency_ms": _stored_values(cases, lambda case: case.get("retrieval_ms")),
+        "answer_latency_ms": _stored_values(cases, _answer_elapsed),
+        "answer_tokens": _stored_values(cases, _answer_tokens),
+        "cost": _stored_values(cases, lambda case: case.get("cost")),
+        "note": "No paid Live call is made here. Stored figures are not a model before/after gain.",
+    }
 
 
 def build_report(report, cases, questions, *, manifest, annotations, inputs):
@@ -613,6 +737,17 @@ def build_report(report, cases, questions, *, manifest, annotations, inputs):
         )
         for case in cases
     ]
+    summary = _summary(records)
+    baseline = _integration_baseline(cases, summary)
+    report_cost = _numeric(report.get("cost"))
+    if baseline["cost"]["status"] == "NOT_VERIFIED" and report_cost is not None:
+        baseline["cost"] = {
+            "status": "measured",
+            "value": report_cost,
+            "n_measured": 1,
+            "n_records": 1,
+            "source": "stored_report",
+        }
     return {
         "schema_version": SCHEMA_VERSION,
         "provenance": {
@@ -628,7 +763,8 @@ def build_report(report, cases, questions, *, manifest, annotations, inputs):
             "pending_review": True,
             "reason": "V2 records annotations and does not release an unreviewed gate.",
         },
-        "summary": _summary(records),
+        "integration_baseline": baseline,
+        "summary": summary,
         "records": records,
     }
 
@@ -748,6 +884,46 @@ def _markdown(report):
                 unknown=row["quality_unknown"],
             )
         )
+    lines.extend(
+        [
+            "",
+            "Span coverage uses answerable questions with support. "
+            "Empty support and unanswerable rows are outside both denominators.",
+            "",
+            "| strategy | span micro | span macro | macro questions | empty support | unanswerable excluded |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for strategy, row in report["summary"].items():
+        micro = (
+            f"{row['span_micro_matched']}/{row['span_micro_total']}"
+            if row["span_micro_total"]
+            else "-"
+        )
+        macro = "-" if row["span_macro"] is None else f"{row['span_macro']:.4f}"
+        lines.append(
+            "| {strategy} | {micro} | {macro} | {macro_n} | {empty} | {unanswerable} |".format(
+                strategy=strategy,
+                micro=micro,
+                macro=macro,
+                macro_n=row["span_macro_denominator"],
+                empty=row["empty_support"],
+                unanswerable=row["unanswerable"],
+            )
+        )
+    baseline = report["integration_baseline"]
+    lines.extend(
+        [
+            "",
+            "## Integration baseline",
+            "",
+            f"Live comparison: {baseline['live_comparison']}.",
+            f"Retrieval latency: {baseline['retrieval_latency_ms']['status']}.",
+            f"Answer latency: {baseline['answer_latency_ms']['status']}.",
+            f"Cost: {baseline['cost']['status']}.",
+            "",
+        ]
+    )
     lines.extend(["", "## Limitations", ""])
     lines.extend(f"- {item}" for item in report["limitations"])
     lines.append("")

@@ -142,14 +142,56 @@ def test_identical_text_and_duplicate_rows_keep_document_identity(tmp_path):
     assert report["records"][0]["satisfiability"]["minimum"] == 2
 
 
-def test_local_index_without_document_cannot_satisfy(tmp_path):
+def test_missing_document_identity_is_unknown_not_impossible(tmp_path):
     questions = [_question("Q", [{"document": "A", "quote": "alpha quote"}])]
     manifest = {"complete": True, "chunks": [{"local_index": 0, "text": "alpha quote"}]}
     report = _run(tmp_path, questions, [_case("Q", [])], manifest=manifest, top_k=10)
     row = report["records"][0]["satisfiability"]
     assert chunk_identity(manifest["chunks"][0]) is None
-    assert row["algorithm"] == "impossible"
-    assert row["structural_at_k"] is False
+    assert row["algorithm"] == "unknown"
+    assert row["structural_at_k"] == "unknown"
+    assert row["candidate_complete"] is False
+    assert row["universe"] == "incomplete_identity"
+    assert "document-bound identity" in row["validation_error"]
+
+    mixed = {
+        "complete": True,
+        "chunks": [
+            {"document": "A", "local_index": 0, "text": "other text"},
+            {"local_index": 1, "text": "alpha quote"},
+        ],
+    }
+    withheld = _run(tmp_path / "mixed", questions, [_case("Q", [])], manifest=mixed, top_k=10)
+    mixed_row = withheld["records"][0]["satisfiability"]
+    assert mixed_row["structural_at_k"] == "unknown"
+    assert mixed_row["minimum"] is None
+    assert mixed_row["algorithm"] == "unknown"
+
+    identified = {
+        "complete": True,
+        "chunks": [{"document": "A", "local_index": 0, "text": "other text"}],
+    }
+    absent = _run(tmp_path / "identified", questions, [_case("Q", [])], manifest=identified, top_k=10)
+    assert absent["records"][0]["satisfiability"]["algorithm"] == "impossible"
+    assert absent["records"][0]["satisfiability"]["structural_at_k"] is False
+
+
+def test_local_index_none_falls_back_to_ordinal():
+    assert chunk_identity({"document": "A", "local_index": None, "ordinal": 0}) == ("loc", "A", 0)
+    assert chunk_identity({"document": "A", "ordinal": 0}) == ("loc", "A", 0)
+    assert chunk_identity({"document": "A", "local_index": 0, "ordinal": 5}) == ("loc", "A", 0)
+    assert chunk_identity({"document": "A", "local_index": "0"}) == ("loc", "A", 0)
+    assert chunk_identity({"document": "A", "local_index": "", "ordinal": 0}) == ("loc", "A", 0)
+    assert chunk_identity({"document": "A", "local_index": False, "ordinal": 2}) == ("loc", "A", 2)
+    assert chunk_identity({"document": "A", "local_index": 1.5, "ordinal": 2}) == ("loc", "A", 2)
+    assert chunk_identity({"document": "A", "local_index": -1, "ordinal": 2}) == ("loc", "A", 2)
+    assert chunk_identity({"document": "A", "local_index": None, "ordinal": None, "id": "uuid"}) == (
+        "id",
+        "uuid",
+        "A",
+    )
+    assert chunk_identity({"document": "A", "local_index": "nope"}) is None
+    assert chunk_identity({"local_index": 0, "ordinal": 0}) is None
 
 
 def test_quote_or_and_document_constraint(tmp_path):
@@ -220,8 +262,15 @@ def test_empty_gold_and_unanswerable_are_not_fake_hits(tmp_path):
     assert none["coverage"]["status"] == "not_applicable"
     assert none["legacy"]["retrieval_support_hit"] is None
     assert none["satisfiability"]["structural_at_k"] == "not_applicable"
-    assert report["summary"]["baseline"]["legacy_support_denominator"] == 1
-    assert report["summary"]["baseline"]["coverage_denominator"] == 0
+    summary = report["summary"]["baseline"]
+    assert summary["legacy_support_denominator"] == 1
+    assert summary["coverage_denominator"] == 0
+    assert summary["empty_support"] == 1
+    assert summary["unanswerable"] == 1
+    assert summary["span_micro_total"] == 0
+    assert summary["span_macro_denominator"] == 0
+    assert summary["span_micro"] is None
+    assert summary["span_macro"] is None
 
 
 def test_observed_scope_does_not_claim_structural_failure(tmp_path):
@@ -452,10 +501,84 @@ def test_strategies_and_cli(tmp_path):
         ]
     )
     saved = json.loads((output / "report.json").read_text(encoding="utf-8"))
-    assert saved["schema_version"] == "evaluation-v2"
+    assert saved["schema_version"] == "evaluation-v2.1"
     assert set(saved["summary"]) == {"baseline", "rewrite"}
     assert saved["provenance"]["model_calls"] == 0
     assert saved["provenance"]["inputs"][0]["sha256"]
     assert (output / "records.csv").exists()
     assert (output / "summary.md").exists()
     assert "eligible_for_default" in (output / "summary.md").read_text(encoding="utf-8")
+    assert saved["integration_baseline"]["live_comparison"] == "NOT_VERIFIED"
+    assert saved["integration_baseline"]["cost"]["status"] == "NOT_VERIFIED"
+    assert saved["gate"]["eligible_for_default"] is False
+
+
+def test_span_macro_and_micro_keep_separate_denominators(tmp_path):
+    questions = [
+        _question(
+            "A",
+            [
+                {"document": "A", "quote": "alpha quote"},
+                {"document": "A", "quote": "beta quote"},
+            ],
+        ),
+        _question("B", [{"document": "A", "quote": "alpha quote"}]),
+        _question("E", []),
+        _question("U", [], answerable=False),
+    ]
+    partial = [{"id": "c1", "document": "A", "text": "alpha quote"}]
+    both = [{"id": "c1", "document": "A", "text": "alpha quote beta quote"}]
+    cases = []
+    for strategy, evidence in (("baseline", partial), ("rewrite", both)):
+        cases.append(_case("A", evidence, strategy=strategy))
+        cases.append(_case("B", partial, strategy=strategy))
+        cases.append(_case("E", [], strategy=strategy))
+        cases.append(_case("U", [], strategy=strategy, answer="资料不足"))
+    report = _run(tmp_path, questions, cases)
+    baseline = report["summary"]["baseline"]
+    rewrite = report["summary"]["rewrite"]
+    assert baseline["span_micro_matched"] == 2
+    assert baseline["span_micro_total"] == 3
+    assert baseline["span_micro"] == 2 / 3
+    assert baseline["span_macro"] == (0.5 + 1) / 2
+    assert baseline["span_macro_denominator"] == 2
+    assert baseline["coverage_denominator"] == 2
+    assert baseline["empty_support"] == 1
+    assert baseline["unanswerable"] == 1
+    assert rewrite["span_micro_matched"] == 3
+    assert rewrite["span_micro_total"] == 3
+    assert rewrite["span_macro_denominator"] == 2
+    assert rewrite["empty_support"] == 1
+    assert report["records"][0]["legacy"]["retrieval_support_hit"] is False
+    assert report["records"][1]["legacy"]["retrieval_support_hit"] is True
+
+
+def test_saved_record_shape_and_stored_latency_do_not_invent_cost(tmp_path):
+    question = _question("Q", [{"document": "A", "quote": "alpha quote"}])
+    questions_path = tmp_path / "questions.jsonl"
+    report_path = tmp_path / "report.jsonl"
+    questions_path.write_text(json.dumps(question) + "\n", encoding="utf-8")
+    record = {
+        "question_id": "Q",
+        "strategy": "baseline",
+        "answer": "alpha quote",
+        "evidence": [{"id": "c1", "document": "A", "text": "alpha quote"}],
+        "citations": ["c1"],
+        "metrics": {"retrieval_support_hit": True, "refusal_marker": False},
+        "retrieval_ms": 12,
+        "answer_metrics": {"elapsed_ms": 30, "usage": {"total_tokens": 8}},
+    }
+    report_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    report = evaluate_paths(report_path, questions_path)
+    row = report["records"][0]
+    assert row["legacy"]["retrieval_support_hit"] is True
+    assert row["legacy_drift"] == []
+    assert row["quality"]["class"] == "unknown"
+    baseline = report["integration_baseline"]
+    assert baseline["retrieval_latency_ms"]["status"] == "measured"
+    assert baseline["retrieval_latency_ms"]["value"] == 12
+    assert baseline["answer_latency_ms"]["value"] == 30
+    assert baseline["answer_tokens"]["value"] == 8
+    assert baseline["cost"]["status"] == "NOT_VERIFIED"
+    assert baseline["live_comparison"] == "NOT_VERIFIED"
+    assert report["gate"]["eligible_for_default"] is False
