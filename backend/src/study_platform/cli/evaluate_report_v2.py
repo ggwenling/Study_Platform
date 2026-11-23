@@ -16,7 +16,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, required=True, help="saved report JSON or JSONL records")
     parser.add_argument("--questions", type=Path, required=True, help="frozen questions JSONL")
-    parser.add_argument("--manifest", type=Path, help="optional chunk manifest; complete=true is the full universe")
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="optional chunk manifest; complete=true is a caller assertion, not proof of the full corpus",
+    )
     parser.add_argument("--annotations", type=Path, help="optional AI or human review annotations")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)

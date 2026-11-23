@@ -18,7 +18,9 @@ uv run --no-sync study-eval-report-v2 --report report.json --questions questions
 
 证据覆盖率按 support 项计。同一项里的 quote 数组是或，项与项之间是与，并且必须同一 document。`matched/total` 是命中项数和项数，`locations` 给出证据序号和块身份。文档被检索到不等于语义支撑。`citation.ids_subset_of_evidence` 只表示引用编号落在证据编号里；`citation.faithful` 固定为 unknown。
 
-可满足性在完整清单上做集合覆盖。清单必须 `complete: true`，并且没有把 `candidate_complete` 设为 false。块身份是 `(chunk_id, document)`、`(document, local_index)` 或 `(document, ordinal)`。`local_index` 缺失、空或类型无效时才使用 `ordinal`；`0` 是合法序号。布尔值、小数、负数和空白字符串都无效。显式 `chunk_id` 优先。保存证据若只有 `id` 和 `document`，仍用这组身份。
+可满足性在调用者声明的清单上做集合覆盖。清单必须 `complete: true`，并且没有把 `candidate_complete` 设为 false。这个布尔值只表示调用者的断言，`corpus_verified` 固定为 false，报告不能据此证明清单就是全语料。`source` 为 `observed`、`saved_evidence`、`top_k` 或 `retrieval` 时，以及清单块身份全部落在该题已保存证据里时，范围保持 observed，`structural_at_k` 为 unknown。不要把 top-k 证据复制成清单再标成 complete。另有块、且身份完整的清单仍计算 exact、bounded 或 impossible。
+
+块身份是 `(chunk_id, document)`、`(document, local_index)` 或 `(document, ordinal)`。`local_index` 缺失、空或类型无效时才使用 `ordinal`；`0` 是合法序号。字符串只接受 Unicode 十进制数字（Nd，含 ASCII 和全角）；`isdigit` 为真但没有十进制值的字符，例如 `²`、`①` 和 `²2`，一律无效并回退，不抛异常。布尔值、小数、负数和空白字符串也无效。显式 `chunk_id` 优先。保存证据若只有 `id` 和 `document`，仍用这组身份。
 
 没有 document，且 `chunk_id`、`id`、`local_index`、`ordinal` 都不能组成文档绑定身份的行，不参与覆盖。只要完整清单里有这样的行，`algorithm` 和 `structural_at_k` 都是 unknown，并写入 `validation_error`。`complete: true` 不会把丢掉这些行之后的剩余候选当成完备全集。全部行都有身份、且没有任何行命中时，才是 `impossible`。同一 document 的同一块覆盖多条 quote 只算一块；两份 document 的相同局部序号是两块，正文相同也不合并。
 

@@ -8,6 +8,7 @@ Missing inputs stay unknown.
 import csv
 import hashlib
 import json
+import unicodedata
 from pathlib import Path
 
 from study_platform.services.rag_evaluation import (
@@ -19,7 +20,8 @@ from study_platform.services.rag_evaluation import (
 )
 from study_platform.services.retrieval_metrics import evaluate_ranking
 
-SCHEMA_VERSION = "evaluation-v2.1"
+SCHEMA_VERSION = "evaluation-v2.2"
+OBSERVED_MANIFEST_SOURCES = {"observed", "saved_evidence", "top_k", "retrieval"}
 EXACT_ITEM_LIMIT = 16
 QUALITY_LABELS = {"answered", "partial", "refused", "unsupported", "contradictory", "unknown"}
 
@@ -29,6 +31,9 @@ LIMITATIONS = [
     "A document hit is not semantic support, and a legal citation id is not a faithful citation.",
     "Satisfiability uses the supplied chunk universe. Saved top-k evidence is an observed scope.",
     "Rows without a document-bound identity are dropped, and a complete flag does not make the rest a full universe.",
+    "complete=true is the caller's assertion. It is not proof that the chunk list is the full corpus.",
+    "A manifest whose identities are only the saved evidence, or whose source is observed retrieval, stays an observed scope.",
+    "String indexes accept Unicode decimal digits only. Superscripts and circled numbers are invalid and fall back.",
     "Span macro and micro use answerable questions that have support. Empty support and unanswerable rows stay outside those denominators.",
     "Latency and cost are recorded only from stored measurements. A missing live run stays NOT_VERIFIED.",
     "An exact minimum is reported only when the bounds meet or the set cover is within the exact limit.",
@@ -43,16 +48,36 @@ def file_sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _decimal_index(text):
+    """Parse a decimal string without raising.
+
+    Every character must have a Unicode decimal value (category Nd), including
+    ASCII and fullwidth digits. ``isdigit`` is not enough: superscripts and
+    circled numbers are digits but not decimals, and ``int`` rejects them.
+    """
+    if not text:
+        return None
+    total = 0
+    for char in text:
+        try:
+            digit = unicodedata.decimal(char)
+        except (TypeError, ValueError):
+            return None
+        total = total * 10 + digit
+    return total
+
+
 def _valid_index(value):
     """Return a non-negative index. Zero is valid. Bool, float, blank, and negative are not."""
-    if isinstance(value, bool) or value is None:
+    try:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, str):
+            return _decimal_index(value.strip())
+    except (TypeError, ValueError):
         return None
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    if isinstance(value, str):
-        text = value.strip()
-        if text.isdigit():
-            return int(text)
     return None
 
 
@@ -364,6 +389,23 @@ def _hit_sets(question, chunks):
     return sets
 
 
+def _manifest_source(manifest):
+    source = manifest.get("source")
+    if not isinstance(source, str):
+        return None
+    return source.strip().casefold()
+
+
+def _matches_saved_evidence(chunks, evidence):
+    manifest_ids = {chunk_identity(row) for row in chunks}
+    manifest_ids.discard(None)
+    if not manifest_ids:
+        return False
+    evidence_ids = {chunk_identity(row) for row in evidence}
+    evidence_ids.discard(None)
+    return manifest_ids <= evidence_ids
+
+
 def _satisfiability(question, evidence, manifest, top_k):
     base = {
         "scope": "observed",
@@ -401,10 +443,24 @@ def _satisfiability(question, evidence, manifest, top_k):
         base["universe"] = "incomplete_identity"
         base["algorithm"] = "unknown"
         base["structural_at_k"] = "unknown"
+        base["corpus_verified"] = False
         base["validation_error"] = (
             f"{unidentified} manifest rows have no document-bound identity. "
             "Those rows are not a proven absence, and complete=true does not "
             "make the remaining rows a full universe."
+        )
+        base["note"] = base["validation_error"]
+        return base
+    source = _manifest_source(manifest)
+    if source in OBSERVED_MANIFEST_SOURCES or _matches_saved_evidence(chunks, evidence):
+        base["candidate_complete"] = False
+        base["universe"] = "observed_evidence"
+        base["algorithm"] = "unknown"
+        base["structural_at_k"] = "unknown"
+        base["corpus_verified"] = False
+        base["validation_error"] = (
+            "This manifest is observed retrieval, not a corpus universe. "
+            "complete=true does not promote saved top-k evidence into the full candidate set."
         )
         base["note"] = base["validation_error"]
         return base
@@ -432,7 +488,12 @@ def _satisfiability(question, evidence, manifest, top_k):
         "structural_at_k": structural,
         "observed_covered": base["observed_covered"],
         "item_count": bounds["item_count"],
-        "note": "Corpus bounds use document-bound chunk identities.",
+        "corpus_verified": False,
+        "universe_trust": "caller_asserted",
+        "note": (
+            "Bounds use the caller-supplied chunk list. complete=true is not "
+            "proof of the full corpus."
+        ),
     }
 
 

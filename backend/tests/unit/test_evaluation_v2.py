@@ -192,6 +192,11 @@ def test_local_index_none_falls_back_to_ordinal():
     )
     assert chunk_identity({"document": "A", "local_index": "nope"}) is None
     assert chunk_identity({"local_index": 0, "ordinal": 0}) is None
+    assert chunk_identity({"document": "A", "local_index": "²", "ordinal": 0}) == ("loc", "A", 0)
+    assert chunk_identity({"document": "A", "local_index": "①", "ordinal": 3}) == ("loc", "A", 3)
+    assert chunk_identity({"document": "A", "local_index": "²2", "ordinal": 4}) == ("loc", "A", 4)
+    assert chunk_identity({"document": "A", "local_index": "２"}) == ("loc", "A", 2)
+    assert chunk_identity({"document": "A", "local_index": "²2"}) is None
 
 
 def test_quote_or_and_document_constraint(tmp_path):
@@ -353,6 +358,31 @@ def test_upper_bound_can_prove_possible_and_lower_bound_impossible(tmp_path):
     assert possible["records"][0]["satisfiability"]["minimum"] is None
 
 
+def test_top_k_labeled_complete_stays_observed_and_real_manifest_still_scores(tmp_path):
+    questions = [_question("Q", [{"document": "A", "quote": "alpha quote"}])]
+    top = [{"id": "c1", "document": "A", "text": "other text"}]
+    copied = {"complete": True, "chunks": list(top)}
+    observed = _run(tmp_path, questions, [_case("Q", top)], manifest=copied, top_k=1)
+    row = observed["records"][0]["satisfiability"]
+    assert row["scope"] == "observed"
+    assert row["structural_at_k"] == "unknown"
+    assert row["algorithm"] == "unknown"
+    assert row["corpus_verified"] is False
+    assert "observed retrieval" in row["validation_error"]
+
+    sourced = {"complete": True, "source": "top_k", "chunks": [{"document": "A", "local_index": 1, "text": "other text"}]}
+    labeled = _run(tmp_path / "source", questions, [_case("Q", top)], manifest=sourced, top_k=1)
+    assert labeled["records"][0]["satisfiability"]["structural_at_k"] == "unknown"
+
+    separate = {"complete": True, "chunks": [{"document": "A", "local_index": 9, "text": "other text"}]}
+    corpus = _run(tmp_path / "corpus", questions, [_case("Q", top)], manifest=separate, top_k=1)
+    claimed = corpus["records"][0]["satisfiability"]
+    assert claimed["algorithm"] == "impossible"
+    assert claimed["structural_at_k"] is False
+    assert claimed["corpus_verified"] is False
+    assert claimed["universe_trust"] == "caller_asserted"
+
+
 def test_partial_manifest_stays_observed(tmp_path):
     questions = [_question("Q", [{"document": "A", "quote": "alpha quote"}])]
     manifest = {"complete": True, "candidate_complete": False, "chunks": []}
@@ -501,7 +531,7 @@ def test_strategies_and_cli(tmp_path):
         ]
     )
     saved = json.loads((output / "report.json").read_text(encoding="utf-8"))
-    assert saved["schema_version"] == "evaluation-v2.1"
+    assert saved["schema_version"] == "evaluation-v2.2"
     assert set(saved["summary"]) == {"baseline", "rewrite"}
     assert saved["provenance"]["model_calls"] == 0
     assert saved["provenance"]["inputs"][0]["sha256"]
