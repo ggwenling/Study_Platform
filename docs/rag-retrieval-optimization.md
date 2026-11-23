@@ -141,7 +141,7 @@ uv run --no-sync study-eval-rag \
 - `binding=database` 的单独清单不核对 `package.sha256`。这个哈希只在 `binding=export` 的目录包上检查。
 - 导出的 `records.jsonl` 包含块原文和向量，不只是清单。
 - 清单拒绝的是 `password`、`api_key`、`database_url`、`authorization`、`secret`、`token`、`access_key` 这些字段名。它不审查字段值里有没有秘密。
-- 离线 probe 的文件名还可以读到 sources 目录之外。该修复由检索侧另交，主集成先不改那两个文件。最终 SHA 等这个增量拣入后再冻结。
+- 离线 probe 的 `filename` 现已只读 `--sources` 里的单层常规文件。绝对路径、`..`、分隔符和符号链接拒绝且不打开、不哈希。这不是完整的提示词注入防护。D 尚未复核这一增量。
 
 离线 Evaluation V2 的全库结构结论另有契约：`source=corpus_manifest`、`universe=corpus`、`complete` 与 `candidate_complete` 都为 true，`chunk_count` 和 `documents` 与行一致。仅有 `complete: true` 不是全库证明。schema 是 `evaluation-v2.3`。
 
