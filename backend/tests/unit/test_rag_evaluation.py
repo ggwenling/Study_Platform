@@ -89,7 +89,7 @@ def test_interrupted_live_evaluation_keeps_planned_questions_and_running_status(
         metrics_format="table",
     )
     cases = [{"id": n, "knowledge_base": "kb"} for n in ("first", "second")]
-    monkeypatch.setattr(evaluate_rag, "isolated_database", lambda _: nullcontext(None))
+    monkeypatch.setattr(evaluate_rag, "isolated_database", lambda *_args, **_kwargs: nullcontext(None))
     monkeypatch.setattr(
         evaluate_rag, "seed_corpus", lambda *_: ({"kb": {}}, {}, {}, [], uuid4())
     )
