@@ -8,9 +8,13 @@
 
 - `--retain-index`：成功结束后留下该测试库，并在输出目录写 `index_manifest.json`。失败仍删除。
 - `--export-index DIR`：写出不含连接串和密钥的包（`manifest.json`、`records.jsonl`、`package.sha256`）。向量来自已经写入的行，不再次嵌入。
-- `--reuse-index PATH`：跳过语料嵌入。目录包会导入到新的 `study_eval_*_test`；单独的 manifest 会只读连回它记录的那个库。复用必须带 `--retrieval-only`。查询向量仍由既有 `evaluate_case` 在获批的 `--live` 运行里生成；本轮没有执行那一步。
+- `--reuse-index PATH`：跳过语料嵌入。目录包会导入到新的 `study_eval_*_test`；单独的 manifest 会连回它记录的那个库，连接参数带 `default_transaction_read_only=on`。复用必须带 `--retrieval-only`。查询向量仍由既有 `evaluate_case` 在获批的 `--live` 运行里生成；本轮没有执行那一步。
 
-复用前要同时满足：库名匹配 `study_eval_<32 hex>_test`；当前角色拥有该库；库名不等于应用库，也不等于 `TEST_DATABASE_URL` 指向的共享测试库；manifest 版本、schema revision、知识库、所有者、资料哈希、索引版本、embedding 模型、1024 维与库内快照一致。不一致就拒绝，不检索。导出包的哈希不符或出现凭据字段也拒绝。
+复用前要同时满足：库名匹配 `study_eval_<32 hex>_test`；当前角色拥有该库；库名不等于应用库，也不等于 `TEST_DATABASE_URL` 指向的共享测试库；manifest 版本、schema revision、知识库、所有者、资料哈希、索引版本、embedding 模型、1024 维与库内快照一致。不一致就拒绝，不检索。导出目录的 `package.sha256` 不符，或清单出现凭据字段，也拒绝。`binding=database` 的单独 manifest 没有包哈希，不核对 `package.sha256`。
+
+`default_transaction_read_only=on` 只是这次连接的会话参数，不是只读角色。库属主可以在会话里关掉它，也可以另开连接写入。它不能单独当成防篡改或硬只读。
+
+离线 probe 的 `filename` 只打开 `--sources` 里的一个常规文件。官方清单的名字是单层文件名，例如 `rfc-9110.txt`、`nist-46.pdf`。绝对路径、`..`、路径分隔符和符号链接直接拒绝，不打开、不计算哈希。索引导入不走这个函数。
 
 `--strategy hybrid` 和 `hybrid_compare` 在 `RETRIEVAL_LEXICAL_WEIGHT` 仍为 0 时直接退出，避免把纯向量结果写成混合对比。默认 `retrieval_top_k=10`、`retrieval_candidate_k=20`、`retrieval_lexical_weight=0` 没有改。`chat._candidate_limit()` 已是 `max(candidate_k, top_k)`；只把 `RETRIEVAL_TOP_K` 设为 24 时，候选池是 24。
 
@@ -73,7 +77,7 @@ uv run pytest tests/unit/test_eval_index_reuse.py \
   tests/unit/test_retrieval_metrics.py -q
 ```
 
-本轮结果：`ruff check` 通过；上述 pytest 为 `78 passed`。单测覆盖：默认仍删除；`--retain-index` 成功才保留、失败仍删除；创建权限不足不删除；复用路径不调用 `seed_corpus` 或 `embed_texts`；schema、模型、维度、资料哈希、所有者不符拒绝；库名 allowlist；应用库和共享测试库拒绝；角色不是属主拒绝；包哈希和凭据字段拒绝；只读会话恢复；权重为 0 的 hybrid 不建库。断言使用伪造连接和内存快照，没有付费构建，也没有重嵌。
+本轮结果：`ruff check` 通过；上述 pytest 为 `79 passed`。单测覆盖：默认仍删除；`--retain-index` 成功才保留、失败仍删除；创建权限不足不删除；复用路径不调用 `seed_corpus` 或 `embed_texts`；schema、模型、维度、资料哈希、所有者不符拒绝；库名 allowlist；应用库和共享测试库拒绝；角色不是属主拒绝；包哈希和凭据字段拒绝；只读会话恢复；权重为 0 的 hybrid 不建库；probe 的绝对路径、`..` 和符号链接不读取目录外文件。断言使用伪造连接和内存快照，没有付费构建，也没有重嵌。
 
 带原文的重放命令（原文留在本地，不入库）：
 
