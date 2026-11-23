@@ -271,16 +271,34 @@ def extract_pptx(path, version=None):
             yield notes, {"slide": slide_no, "notes": True}
 
 
-def extract(version, output_dir, phase):
+def extract_text(path):
+    lines = []
+    start = end = 0
+    with path.open(encoding="utf-8-sig") as stream:
+        for number, raw in enumerate(stream, 1):
+            segments = raw.rstrip("\r\n").split("\f")
+            for index, segment in enumerate(segments):
+                if segment.strip():
+                    if not lines:
+                        start = number
+                    end = number
+                    lines.append(segment)
+                if lines and (not segment.strip() or index + 1 < len(segments)):
+                    locator = {"line": start} if start == end else {"start_line": start, "end_line": end}
+                    yield "\n".join(lines).strip(), locator
+                    lines.clear()
+    if lines:
+        locator = {"line": start} if start == end else {"start_line": start, "end_line": end}
+        yield "\n".join(lines).strip(), locator
+
+
+def extract(version, output_dir, phase, *, path=None, settings=None, force_pdf_ocr=False):
     """Yield text with original page/paragraph/line locators."""
-    settings = get_settings()
-    path = source_path(version.id)
+    settings = settings if settings is not None else get_settings()
+    path = path if path is not None else source_path(version.id)
     mime = version.source_mime
     if mime == "text/plain":
-        with path.open(encoding="utf-8-sig") as f:
-            for number, line in enumerate(f, 1):
-                if line.strip():
-                    yield line.strip(), {"line": number}
+        yield from extract_text(path)
     elif mime == "text/markdown":
         yield from extract_markdown(path)
     elif mime.endswith("wordprocessingml.document"):
@@ -309,7 +327,7 @@ def extract(version, output_dir, phase):
                         finally:
                             textpage.close()
                         effective_len = effective_char_count(text)
-                        should_ocr = effective_len < settings.pdf_ocr_min_effective_chars or (
+                        should_ocr = force_pdf_ocr or effective_len < settings.pdf_ocr_min_effective_chars or (
                             effective_len < settings.pdf_ocr_image_page_max_chars
                             and _has_large_image(page, pdfium)
                         )
@@ -340,7 +358,7 @@ def extract(version, output_dir, phase):
                             ocr_text = "\n".join(line["text"] for line in lines)
                             ocr_effective_len = effective_char_count(ocr_text)
                             use_ocr = ocr_effective_len > 0 and (
-                                effective_len == 0 or ocr_effective_len
+                                force_pdf_ocr or effective_len == 0 or ocr_effective_len
                                 >= max(int(effective_len * 1.5), effective_len + 20)
                             )
                         except (LostLease, DBAPIError):

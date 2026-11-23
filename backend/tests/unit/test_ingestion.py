@@ -24,6 +24,16 @@ def test_text_line_locators_and_chunk_overlap(tmp_path, monkeypatch):
     assert parts[0][-120:] == parts[1][:120]
 
 
+def test_txt_preserves_wrapped_paragraph_indentation_and_form_feed_boundaries(tmp_path):
+    path = tmp_path / "wrapped.txt"
+    path.write_bytes(b"\xef\xbb\xbfClause starts\r\n  and continues.\r\n\r\nfirst\fsecond\r\n\r\n")
+    assert list(ingestion.extract_text(path)) == [
+        ("Clause starts\n  and continues.", {"start_line": 1, "end_line": 2}),
+        ("first", {"line": 4}),
+        ("second", {"line": 4}),
+    ]
+
+
 def test_markdown_sections_split_headings_and_ignore_code_fences(tmp_path, monkeypatch):
     path = tmp_path / "notes.md"
     path.write_text(
