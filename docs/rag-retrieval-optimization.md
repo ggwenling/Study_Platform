@@ -129,7 +129,15 @@ uv run --no-sync study-eval-rag \
 
 `--reuse-index` 指向导出目录时，会把包导入一个新的 `study_eval_*_test`，不调用嵌入 API。不带 `--retain-index` 时导入库在结束时删除。只校验包、不连库时去掉 `--live`。
 
-清单契约：`manifest_version=1`，`kind=study_eval_index`，`embedding_dim=1024`，`embedding_profile` 等于 `<embedding_model>:1024`，`pipeline_profile=semantic-v3`，`schema_revision` 等于当前 Alembic head。库内只能有一个评测用户，知识库和资料都属于该用户，资料哈希、索引版本、块数和向量维度必须与清单一致。清单和记录里不允许 `password`、`api_key`、`database_url`、`authorization`、`secret`、`token`、`access_key`。复用前数据集文件和 `materials.json` 的 SHA256 也要一致。
+清单契约：`manifest_version=1`，`kind=study_eval_index`，`embedding_dim=1024`，`embedding_profile` 等于 `<embedding_model>:1024`，`pipeline_profile=semantic-v3`，`schema_revision` 等于当前 Alembic head。库内只能有一个评测用户，知识库和资料都属于该用户，资料哈希、索引版本、块数和向量维度必须与清单一致。复用前数据集文件和 `materials.json` 的 SHA256 也要一致。导入后的 `study.alembic_version` 必须等于代码 head；不一致就拒绝检索。
+
+这些检查不是绝对安全边界：
+
+- 只读来自连接参数 `default_transaction_read_only=on`，不是专用只读角色。库属主可以在会话里执行 `SET TRANSACTION READ WRITE` 后写入。默认会话会拒绝写；关掉开关之后不再拒绝。
+- `binding=database` 的单独清单不核对 `package.sha256`。这个哈希只在 `binding=export` 的目录包上检查。
+- 导出的 `records.jsonl` 包含块原文和向量，不只是清单。
+- 清单拒绝的是 `password`、`api_key`、`database_url`、`authorization`、`secret`、`token`、`access_key` 这些字段名。它不审查字段值里有没有秘密。
+- 离线 probe 的文件名还可以读到 sources 目录之外。该修复由检索侧另交，主集成先不改那两个文件。最终 SHA 等这个增量拣入后再冻结。
 
 离线 Evaluation V2 的全库结构结论另有契约：`source=corpus_manifest`、`universe=corpus`、`complete` 与 `candidate_complete` 都为 true，`chunk_count` 和 `documents` 与行一致。仅有 `complete: true` 不是全库证明。schema 是 `evaluation-v2.3`。
 

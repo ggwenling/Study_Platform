@@ -25,6 +25,7 @@ from study_platform.services.eval_index_reuse import (
     code_schema_revision,
     import_index,
     new_database_name,
+    read_only_retrieval,
     read_snapshot,
     retained_database,
     reuse_target_url,
@@ -203,6 +204,22 @@ def _synthetic(database_name, owner_role):
     return manifest, records, vector
 
 
+def _reject_write(factory):
+    with factory() as db:
+        assert db.scalar(sa.text("SHOW default_transaction_read_only")) == "on"
+        with pytest.raises(sa.exc.InternalError, match="read-only"):
+            db.execute(sa.text("CREATE TABLE study.reuse_probe(id integer)"))
+
+
+def _owner_can_turn_read_only_off(factory):
+    """The startup GUC is not a read-only role. The database owner can disable it."""
+    with factory.begin() as db:
+        db.execute(sa.text("SET TRANSACTION READ WRITE"))
+        assert db.scalar(sa.text("SHOW transaction_read_only")) == "off"
+        db.execute(sa.text("CREATE TABLE study.owner_disabled_probe(id integer)"))
+        db.execute(sa.text("DROP TABLE study.owner_disabled_probe"))
+
+
 def test_failed_retain_drops_the_database(tmp_path):
     created = None
     with pytest.raises(RuntimeError, match="build failed"):
@@ -238,6 +255,7 @@ def test_retained_index_is_read_only_and_rejects_a_bad_revision(tmp_path, monkey
                 embedding_model="synthetic-embed",
                 schema_revision=code_schema_revision(),
             )
+            assert stored["schema_revision"] == code_schema_revision()
         assert _exists(kept)
         with retained_database(
             manifest,
@@ -253,7 +271,6 @@ def test_retained_index_is_read_only_and_rejects_a_bad_revision(tmp_path, monkey
                 schema_revision=code_schema_revision(),
             )
             with factory() as db:
-                assert db.scalar(sa.text("SHOW default_transaction_read_only")) == "on"
                 found = db.execute(
                     sa.text(
                         """
@@ -266,9 +283,12 @@ def test_retained_index_is_read_only_and_rejects_a_bad_revision(tmp_path, monkey
                 assert found[0] == "synthetic span alpha"
                 assert found[1] == EMBEDDING_DIM
                 assert found[2].startswith("[0.25")
-                with pytest.raises(sa.exc.InternalError, match="read-only"):
-                    db.execute(sa.text("CREATE TABLE study.reuse_probe(id int)"))
-                    db.commit()
+                assert snapshot["schema_revision"] == code_schema_revision()
+            _reject_write(factory)
+            with read_only_retrieval(os.environ["DATABASE_URL"]) as retrieval:
+                _reject_write(retrieval)
+                _owner_can_turn_read_only_off(retrieval)
+            _owner_can_turn_read_only_off(factory)
             mismatched = dict(snapshot, schema_revision="0000_not_a_head")
             with pytest.raises(IndexReuseError, match="schema revision"):
                 verify_index_contents(

@@ -325,4 +325,4 @@ pg_restore --host=127.0.0.1 --port=55432 --username=postgres \
 
 `610fe59` 之后 Evaluation V2 的 schema 是 `evaluation-v2.3`。第 1 节的 `evaluation-v2.2` 只属于 `3bd2585`。检索默认仍是 top_k 10、candidate 20、lexical 0、rewrite false；这次拣入没有改 `config.py`。
 
-RELEASE_READY 仍是 false。最终 SHA 的 CI、P4、D 和 UX 由父主另核。本环境没有启动 55432 上的 release 栈，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。
+RELEASE_READY 仍是 false。最终 SHA 还没冻结：离线 probe 读到 sources 目录外的修复由检索侧另交，拣入后再核数据 head 与代码 head。本环境没有启动 55432 上的 release 栈，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。复用只读也不是专用角色，库属主可以关掉会话只读。
