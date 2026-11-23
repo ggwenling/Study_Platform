@@ -315,9 +315,12 @@ def test_blank_evidence_uses_product_pack_and_does_not_call_the_model(monkeypatc
             }
         ]
 
+    captured = {}
+
     class Model:
         async def ainvoke(self, messages):
             calls["model"] += 1
+            captured["messages"] = messages
             return SimpleNamespace(content="alpha [S1]", usage_metadata=None)
 
     monkeypatch.setattr("study_platform.services.rag_evaluation.embed_texts", embed)
@@ -348,11 +351,13 @@ def test_blank_evidence_uses_product_pack_and_does_not_call_the_model(monkeypatc
         return [
             {
                 "id": "c1",
-                "text": "alpha quote",
+                "text": "alpha quote [S9]",
                 "material_version_id": "m",
                 "index_version_id": "idx",
-                "title": "t",
-                "locator": "L1",
+                "title": "手册 [S2]",
+                "locator": {"heading": "节 [S4]"},
+                "source": "[S8]",
+                "note": "备注 [S5]",
             }
         ]
 
@@ -363,6 +368,19 @@ def test_blank_evidence_uses_product_pack_and_does_not_call_the_model(monkeypatc
     assert calls["model"] == 1
     assert composed[0]["answer_metrics"]["calls"] == 1
     assert composed[0]["answer"] == "alpha [S1]"
+    system = captured["messages"][0].content
+    rules, raw_docs = system.split("本轮资料JSON：\n", 1)
+    docs = json.loads(raw_docs)
+    assert docs[0]["source"] == "S1"
+    assert docs[0]["title"] == "手册 (S2)"
+    assert docs[0]["text"] == "alpha quote (S9)"
+    assert set(docs[0]) == {"source", "title", "text"}
+    assert "[S" not in raw_docs
+    assert "[S1]" in rules
+    assert captured["messages"][-1].content == "问什么"
+    assert composed[0]["evidence"][0]["title"] == "手册 [S2]"
+    assert composed[0]["evidence"][0]["text"] == "alpha quote [S9]"
+    assert composed[0]["evidence"][0]["locator"] == {"heading": "节 [S4]"}
 
 
 def test_equivalent_supporting_passages_are_accepted_but_file_match_alone_is_not():

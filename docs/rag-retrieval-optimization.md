@@ -94,4 +94,43 @@ uv run python evaluation/offline_retrieval_probe.py \
 
 ## 给集成方
 
-未改 `evaluation_v2`、`evaluate_report_v2`、`chat.py`、prompts、citations。跨度覆盖率和 set-cover 下界若要进评测报告，属于报告层。复用检索仍调用现有 `evaluate_case`，查询向量和 `chat.retrieve_vectors` 的接口没有改。本分支不合并其他代理的提交。
+来源提交 `44295ecd` 本身没有改 `evaluation_v2`、`evaluate_report_v2`、`chat.py`。集成分支在它之外另有语料清单契约、评测 `prepare_generation`，以及标题和正文里 `[S#]` 的展示改写。复用检索仍调用现有 `evaluate_case`。查询向量在获批的 `--live` 运行里生成；语料向量不再生成。默认 `top_k` 10、`lexical_weight` 0 不改。这不是向量质量收益，也不是完整的提示词注入防护。
+
+## P4 只读复用入口
+
+在 `backend` 执行。`TEST_DATABASE_URL` 必须是 PostgreSQL，库名以 `_test` 结尾，角色有 `CREATEDB`，并且连接参数里不能带 `dbname`、`service` 或 `servicefile`。管理连接会切到名为 `postgres` 的库，只创建或删除 `study_eval_<32 位十六进制>_test`。这个名字不能等于应用库，也不能等于 `TEST_DATABASE_URL` 指向的共享测试库。不要把生产 DSN 或 API 密钥放进仓库、日志或 cloud。密钥只留在 box。
+
+第一次构建会调用语料嵌入，只在 box 里做：
+
+```bash
+uv run --no-sync study-eval-rag \
+  --dataset <facts.jsonl> \
+  --strategy compare \
+  --retrieval-only \
+  --live \
+  --retain-index \
+  --export-index <export-dir> \
+  --output <new-output-dir>
+```
+
+成功后输出目录有 `index_manifest.json`，`binding` 为 `database`。导出目录有 `manifest.json`、`records.jsonl` 和 `package.sha256`，`binding` 为 `export`。失败仍删除本次新建的库。默认不加 `--retain-index` 时，成功也会删除。
+
+之后的只读复用跳过语料嵌入。查询嵌入仍会在 `--live` 里发生。必须同时带 `--retrieval-only`。`--strategy hybrid` 或 `hybrid_compare` 在 `RETRIEVAL_LEXICAL_WEIGHT` 为 0 时直接拒绝。
+
+```bash
+uv run --no-sync study-eval-rag \
+  --dataset <同一 facts.jsonl> \
+  --strategy compare \
+  --retrieval-only \
+  --live \
+  --reuse-index <output-dir>/index_manifest.json \
+  --output <另一个新目录>
+```
+
+`--reuse-index` 指向导出目录时，会把包导入一个新的 `study_eval_*_test`，不调用嵌入 API。不带 `--retain-index` 时导入库在结束时删除。只校验包、不连库时去掉 `--live`。
+
+清单契约：`manifest_version=1`，`kind=study_eval_index`，`embedding_dim=1024`，`embedding_profile` 等于 `<embedding_model>:1024`，`pipeline_profile=semantic-v3`，`schema_revision` 等于当前 Alembic head。库内只能有一个评测用户，知识库和资料都属于该用户，资料哈希、索引版本、块数和向量维度必须与清单一致。清单和记录里不允许 `password`、`api_key`、`database_url`、`authorization`、`secret`、`token`、`access_key`。复用前数据集文件和 `materials.json` 的 SHA256 也要一致。
+
+离线 Evaluation V2 的全库结构结论另有契约：`source=corpus_manifest`、`universe=corpus`、`complete` 与 `candidate_complete` 都为 true，`chunk_count` 和 `documents` 与行一致。仅有 `complete: true` 不是全库证明。schema 是 `evaluation-v2.3`。
+
+CI 路径见 `.github/workflows/ci.yml`：Python 3.12、PostgreSQL 16、pgvector 镜像，`tests/ci_bootstrap_postgres.py` 之后跑 Ruff 和全量 Pytest。数据库集成需要 `RUN_DB_TESTS=1` 和上面的 `TEST_DATABASE_URL`。本地最小验证是 `tests/integration/test_eval_index_reuse_db.py`：保留、只读复用、schema 不符拒绝、属主和库名边界、失败后库被删除。向量是手工 1024 维，不重建 14636 块，不调用模型。
