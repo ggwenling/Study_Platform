@@ -59,6 +59,7 @@ from study_platform.services.eval_index_reuse import (
     write_package,
 )
 from study_platform.services.lexical import lexical_column_values
+from study_platform.services.model_failure import classify_local_exception, public_failure
 from study_platform.services.models import describe_model_failure, embed_texts
 from study_platform.services.rag_evaluation import (
     DEFAULT_METRIC_K,
@@ -294,6 +295,8 @@ def seed_corpus(factory, materials, *, cache_dir=None):
             documents[str(version.id)] = item["id"]
             indexed_documents.append(item["id"])
             print(f"Indexed evaluation document {item['id']}", flush=True)
+    # One transaction: a later failure rolls every document back. The print is not
+    # a retained index, and a copied source file is not an embedded batch.
     return scopes, documents, hashes, embedding_metrics, eval_owner, indexed_documents
 
 
@@ -395,12 +398,85 @@ class EvaluationFailed(Exception):
         super().__init__(evaluation_failure_text(self.failure))
 
 
-def _mark_failed(output, report, failure, *, stage):
-    from study_platform.services.model_failure import public_failure
+_REUSE_REASONS = {
+    "schema revision": "schema_revision",
+    "dataset hash": "dataset_hash",
+    "materials file hash": "materials_hash",
+    "embedding model": "embedding_model",
+    "embedding dimension": "embedding_dimension",
+}
 
+
+def _local_failure(exc):
+    """Local and verification failures stay out of the provider error mapping."""
+    if isinstance(exc, IndexReuseError):
+        return public_failure(
+            {
+                "exception_class": "IndexReuseError",
+                "error_code": _REUSE_REASONS.get(str(exc), "local_verification"),
+                "failure_kind": "local_verification",
+                "mapped_error_code": None,
+                "usage_status": "unknown",
+                "retryable": False,
+            }
+        )
+    local = classify_local_exception(exc)
+    if local is None:
+        return None
+    return public_failure(local)
+
+
+def preflight_evaluation_inputs(args, materials):
+    """Read local inputs that can fail before any corpus embedding is purchased."""
+    dataset = Path(args.dataset)
+    _read_local_file(dataset)
+    if bool(getattr(args, "retain_index", False)) or getattr(args, "export_index", None):
+        json.loads(_read_local_file(dataset.with_name("materials.json")).decode("utf-8"))
+    export_path = getattr(args, "export_index", None)
+    if export_path is not None:
+        parent = Path(export_path).parent
+        if not parent.is_dir():
+            raise FileNotFoundError(parent)
+        if not os.access(parent, os.W_OK):
+            raise PermissionError(parent)
+    for item in materials or []:
+        raw = item.get("path") if isinstance(item, dict) else None
+        if raw:
+            _read_local_file(raw)
+
+
+def _read_local_file(path):
+    target = Path(path)
+    if not target.is_file():
+        raise FileNotFoundError(target)
+    return target.read_bytes()
+
+
+def _fail_before_database(output, args, cases, exc, stage):
+    output.mkdir(parents=True, exist_ok=True)
+    try:
+        report = _base_report(args, cases)
+    except OSError:
+        report = {
+            "status": "running",
+            "cases": [],
+            "strategy": getattr(args, "strategy", None),
+            "retrieval_only": bool(getattr(args, "retrieval_only", False)),
+            "metric_k": list(getattr(args, "metric_k", [])),
+        }
+    report["corpus_embedding"] = []
+    report["indexed_documents"] = []
+    report["index_retained"] = False
+    failure = _local_failure(exc) or describe_model_failure(exc)
+    _mark_failed(output, report, failure, stage=stage)
+    raise EvaluationFailed(report["failure"]) from None
+
+
+def _mark_failed(output, report, failure, *, stage):
     body = dict(failure) if isinstance(failure, dict) else {}
     body["stage"] = stage
     report["status"] = "failed"
+    report["index_retained"] = False
     report["failure"] = public_failure(body)
     report["corpus_usage"] = summarize_corpus_usage(report.get("corpus_embedding") or [])
     write_json(output / "report.json", report)
@@ -455,15 +531,21 @@ def _publish_index(
 
 
 async def _reuse_live(args, cases, output, reuse_path, retain, export_path):
-    manifest, records = load_index_package(reuse_path)
-    assert_dataset_matches(manifest, args.dataset)
+    try:
+        preflight_evaluation_inputs(args, [])
+        manifest, records = load_index_package(reuse_path)
+        assert_dataset_matches(manifest, args.dataset)
+        if manifest["schema_revision"] != code_schema_revision():
+            raise IndexReuseError("schema revision")
+        if manifest["embedding_model"] != get_settings().embedding_model:
+            raise IndexReuseError("embedding model")
+        if manifest["embedding_dim"] != 1024:
+            raise IndexReuseError("embedding dimension")
+    except EvaluationFailed:
+        raise
+    except Exception as exc:
+        _fail_before_database(output, args, cases, exc, "local_input")
     settings = get_settings()
-    if manifest["schema_revision"] != code_schema_revision():
-        raise IndexReuseError("schema revision")
-    if manifest["embedding_model"] != settings.embedding_model:
-        raise IndexReuseError("embedding model")
-    if manifest["embedding_dim"] != 1024:
-        raise IndexReuseError("embedding dimension")
     application_database = _application_database()
     shared = _shared_test_database()
     report = _base_report(args, cases)
@@ -551,14 +633,19 @@ async def _reuse_live(args, cases, output, reuse_path, retain, export_path):
                 + f" Review report: {output}"
             )
         report["indexed_documents"] = []
+        report["index_retained"] = False
         report["query_costs"] = query_costs(report["cases"])
         report["corpus_usage"] = summarize_corpus_usage(report.get("corpus_embedding") or [])
         _finish(args, output, report, message)
     except EvaluationFailed:
         raise
     except Exception as exc:
-        failure = exc.failure if isinstance(exc, CorpusEmbedError) else describe_model_failure(exc)
-        _mark_failed(output, report, failure, stage="reuse")
+        local = _local_failure(exc)
+        failure = local or (exc.failure if isinstance(exc, CorpusEmbedError) else describe_model_failure(exc))
+        report["indexed_documents"] = []
+        report["index_retained"] = False
+        stage = "local_input" if local else "reuse"
+        _mark_failed(output, report, failure, stage=stage)
         raise EvaluationFailed(report["failure"]) from None
 
 
@@ -571,6 +658,10 @@ async def live_evaluation(args, cases, materials, output):
     if reuse_path:
         await _reuse_live(args, cases, output, reuse_path, retain, export_path)
         return
+    try:
+        preflight_evaluation_inputs(args, materials)
+    except Exception as exc:
+        _fail_before_database(output, args, cases, exc, "local_input")
     if cache_dir is not None:
         try:
             prepare_embedding_cache(cache_dir)
@@ -578,6 +669,7 @@ async def live_evaluation(args, cases, materials, output):
             report = _base_report(args, cases)
             report["corpus_embedding"] = []
             report["indexed_documents"] = []
+            report["index_retained"] = False
             _mark_failed(output, report, exc.failure, stage="embedding_cache")
             raise EvaluationFailed(report["failure"]) from None
     application_database = _application_database() if retain or export_path else None
@@ -614,12 +706,24 @@ async def live_evaluation(args, cases, materials, output):
             raise
         except CorpusEmbedError as exc:
             report["corpus_embedding"] = list(exc.metrics)
-            report["indexed_documents"] = list(exc.indexed_documents)
+            # The seed transaction rolls back, so these documents are not a retained index.
+            report["indexed_documents"] = []
+            report["index_retained"] = False
             _mark_failed(output, report, exc.failure, stage="corpus_embedding")
             raise EvaluationFailed(report["failure"]) from None
         except Exception as exc:
-            _mark_failed(output, report, describe_model_failure(exc), stage="evaluation")
+            local = _local_failure(exc)
+            report["indexed_documents"] = []
+            report["index_retained"] = False
+            if local:
+                stage = "index_publish" if report.get("corpus_embedding") else "local_input"
+                failure = local
+            else:
+                stage = "evaluation"
+                failure = describe_model_failure(exc)
+            _mark_failed(output, report, failure, stage=stage)
             raise EvaluationFailed(report["failure"]) from None
+    report["index_retained"] = bool(retain)
     report["query_costs"] = query_costs(report["cases"])
     report["corpus_usage"] = summarize_corpus_usage(report.get("corpus_embedding") or [])
     cleanup = (

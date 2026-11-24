@@ -196,11 +196,18 @@ def store_cached_batch(directory, key, identity, vectors, usage, usage_status, e
 
 
 def _delay(failure, retry_index):
-    if failure.get("retry_after_unparsed"):
+    """Wait only for a header that was already accepted as a 0–30 second delay."""
+    if (
+        failure.get("retry_after_state") == "stop"
+        or failure.get("retry_after_exceeds")
+        or failure.get("retry_after_unparsed")
+    ):
         return None
-    seconds = failure.get("retry_after_seconds")
-    if seconds is not None:
-        return None if seconds > MAX_RETRY_AFTER_SECONDS else seconds
+    if failure.get("retry_after_state") == "wait":
+        seconds = failure.get("retry_after_seconds")
+        if type(seconds) is int and not isinstance(seconds, bool) and 0 <= seconds <= MAX_RETRY_AFTER_SECONDS:
+            return seconds
+        return None
     return min(2 ** (retry_index - 1), 4)
 
 

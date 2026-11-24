@@ -3,6 +3,8 @@ import hashlib
 import json
 import stat
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 import httpx
 import pytest
@@ -24,7 +26,8 @@ from study_platform.services.models import describe_model_failure, embed_texts, 
 
 SECRET = "sk-SUPERSECRETVALUE"
 BODY_TEXT = "Bearer super-token and the full provider body"
-REQUEST_ID = "req-12345678"
+REQUEST_ID = "11111111-1111-4111-8111-111111111111"
+AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 
 
 def _vector(text, dim=1024):
@@ -81,6 +84,7 @@ def test_provider_failures_keep_codes_and_drop_body_text():
     assert rate["provider_code"] == "Throttling.RateQuota"
     assert rate["mapped_error_code"] == "model_quota_unavailable"
     assert rate["request_id"] == REQUEST_ID and rate["retry_after_seconds"] == 2
+    assert rate["retry_after_state"] == "wait" and rate["retry_after_present"] is True
     assert allocation["provider_code"] == "Throttling.AllocationQuota"
     assert allocation["retryable"] is False
     assert allocation["mapped_error_code"] == "model_quota_unavailable"
@@ -101,10 +105,134 @@ def test_unparsed_retry_after_and_secret_request_id_are_not_copied():
     long_wait = describe_model_failure(
         _status(503, provider_code=None, retry_after="31", request_id="req-12345678")
     )
-    assert dirty["request_id"] is None and dirty["retry_after_unparsed"] is True
-    assert dirty["retryable"] is False and dirty["retry_after_seconds"] is None
-    assert long_wait["retry_after_seconds"] == 31 and long_wait["retryable"] is False
-    assert SECRET not in json.dumps(dirty)
+    assert dirty["request_id"] == "unknown" and dirty["retry_after_unparsed"] is True
+    assert dirty["retry_after_state"] == "stop" and dirty["retryable"] is False
+    assert dirty["retry_after_seconds"] is None
+    assert long_wait["retry_after_seconds"] is None and long_wait["retry_after_exceeds"] is True
+    assert long_wait["retry_after_state"] == "stop" and long_wait["retryable"] is False
+    assert long_wait["request_id"] == "unknown"
+    assert SECRET not in json.dumps(dirty) and "req-12345678" not in json.dumps(long_wait)
+
+
+def _failure_for_retry_after(raw, *, request_id=REQUEST_ID):
+    return describe_model_failure(
+        _status(429, provider_code="Throttling.RateQuota", retry_after=raw, request_id=request_id)
+    )
+
+
+def test_retry_after_stop_is_not_treated_as_a_missing_header():
+    now = datetime.now(timezone.utc)
+    oversized = _failure_for_retry_after("86401")
+    huge = _failure_for_retry_after("9" * 40)
+    http_date = describe_model_failure(
+        _status(
+            429,
+            provider_code="Throttling.RateQuota",
+            retry_after=format_datetime(now + timedelta(seconds=120), usegmt=True),
+        )
+    )
+    within = describe_model_failure(
+        _status(
+            429,
+            provider_code="Throttling.RateQuota",
+            retry_after=format_datetime(now + timedelta(seconds=5), usegmt=True),
+        )
+    )
+    boundary = _failure_for_retry_after("30")
+    over_budget = _failure_for_retry_after("31")
+    invalid = _failure_for_retry_after("soon")
+    missing = describe_model_failure(
+        _status(429, provider_code="Throttling.RateQuota", retry_after=None)
+    )
+    clamped = public_failure(
+        {
+            "failure_kind": "http_429",
+            "retry_after_seconds": 86401,
+            "retryable": True,
+            "request_id": AWS_KEY,
+            "provider_code": AWS_KEY,
+        }
+    )
+    for failure in (oversized, huge, http_date, over_budget, invalid, clamped):
+        assert failure["retryable"] is False
+        assert failure["retry_after_state"] == "stop"
+        assert failure["retry_after_present"] is True
+    assert oversized["retry_after_exceeds"] is True and oversized["retry_after_unparsed"] is False
+    assert huge["retry_after_exceeds"] is True
+    assert http_date["retry_after_exceeds"] is True
+    assert invalid["retry_after_unparsed"] is True and invalid["retry_after_exceeds"] is False
+    assert boundary["retry_after_state"] == "wait" and boundary["retry_after_seconds"] == 30
+    assert boundary["retryable"] is True
+    assert missing["retry_after_present"] is False and missing["retry_after_state"] == "absent"
+    assert missing["retryable"] is True
+    assert within["retry_after_state"] == "wait" and within["retryable"] is True
+    assert 0 <= within["retry_after_seconds"] <= 30
+    rendered = json.dumps(
+        [oversized, huge, http_date, within, boundary, over_budget, invalid, missing, clamped]
+    )
+    assert AWS_KEY not in rendered and SECRET not in rendered
+    assert clamped["request_id"] == "unknown" and clamped["provider_code"] is None
+
+
+def test_over_budget_retry_after_does_not_retry(tmp_path):
+    attempts = {"count": 0}
+
+    def limited(batch, diagnostics=None, context=None):
+        attempts["count"] += 1
+        raise _status(429, provider_code="Throttling.RateQuota", retry_after="86401")
+
+    with pytest.raises(CorpusEmbedError) as caught:
+        embed_document_batches(
+            ["gamma"],
+            source_sha256="ab" * 32,
+            pipeline_profile=SEMANTIC_PROFILE,
+            document_id="doc",
+            cache_dir=None,
+            embedding_model="model-a",
+            embedding_base_url="https://example.test/v1",
+            embedding_dim=1024,
+            pause=lambda _seconds: (_ for _ in ()).throw(AssertionError("slept")),
+            embed=limited,
+        )
+    assert attempts["count"] == 1
+    assert caught.value.failure["attempts"] == 1
+    assert caught.value.failure["retry_after_state"] == "stop"
+    assert caught.value.failure["retryable"] is False
+
+
+def test_local_input_errors_are_not_provider_failures(tmp_path, monkeypatch):
+    dataset = tmp_path / "facts.jsonl"
+    dataset.write_text("{}\n", encoding="utf-8")
+    output = tmp_path / "out"
+    output.mkdir()
+    args = _args(tmp_path, retrieval_only=True)
+    args.retain_index = True
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("database")
+
+    monkeypatch.setattr(evaluate_rag, "isolated_database", forbidden)
+    monkeypatch.setattr(
+        evaluate_rag,
+        "embed_texts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("embed")),
+    )
+    with pytest.raises(evaluate_rag.EvaluationFailed):
+        asyncio.run(evaluate_rag.live_evaluation(args, [], [], output))
+    report = json.loads((output / "report.json").read_text(encoding="utf-8"))
+    assert report["failure"]["stage"] == "local_input"
+    assert report["failure"]["failure_kind"] == "local_missing"
+    assert report["failure"]["exception_class"] == "FileNotFoundError"
+    assert report["failure"]["mapped_error_code"] is None
+    assert report["index_retained"] is False
+    assert report["indexed_documents"] == []
+    dataset.with_name("materials.json").write_text("{", encoding="utf-8")
+    with pytest.raises(evaluate_rag.EvaluationFailed):
+        asyncio.run(evaluate_rag.live_evaluation(args, [], [], output))
+    parsed_report = json.loads((output / "report.json").read_text(encoding="utf-8"))
+    assert parsed_report["failure"]["failure_kind"] == "local_parse"
+    assert parsed_report["failure"]["mapped_error_code"] is None
+    assert "model_response_invalid" not in json.dumps(parsed_report["failure"])
 
 
 def test_embedding_validation_kinds_are_distinct(monkeypatch):
@@ -575,7 +703,7 @@ def test_failed_report_is_failed_and_reuse_can_answer_without_corpus_embed(tmp_p
     assert "http_status=503" in text and "mapped_error_code=model_service_error" in text
     assert "exception_class=APIStatusError" in text
     assert SECRET not in rendered and BODY_TEXT not in rendered
-    assert public_failure({"failure_kind": "http_429", "request_id": SECRET})["request_id"] is None
+    assert public_failure({"failure_kind": "http_429", "request_id": SECRET})["request_id"] == "unknown"
 
     calls = []
 

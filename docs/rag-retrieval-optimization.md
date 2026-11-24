@@ -162,7 +162,15 @@ CI 路径见 `.github/workflows/ci.yml`：Python 3.12、PostgreSQL 16、pgvector
 - 错误码指引区分 `Throttling.RateQuota` 和 `Throttling.AllocationQuota`，并建议降频、有界退避，同时看 HTTP、code、RequestID。所读错误页没有 Retry-After。响应里如果带了可解析的秒数且不超过 30 秒，才按它等待；解析不了或更长就停止，不把原始 header 写进日志。
 - 官方 RPM/TPM 不是本账号已经保证的额度。`Throttling.AllocationQuota` 不重试。
 
-失败报告是 `status=failed`。`failure` 只含阶段、异常类名、本库错误码、映射码、可校验的 provider code、HTTP 状态、失败种类、用量是否已知、是否可重试、Retry-After 秒数、至多 64 字符的请求 ID 和尝试次数。进程退出文本带上异常类名，这样非模型异常不会只剩下映射码。不写 provider 自由文本、响应 body 或 header。请求 ID 必须匹配 `[A-Za-z0-9-]{8,64}`，并且不像密钥；否则记空。失败批次的 `usage_status` 为 `unknown` 时，费用就是 unknown，不能写成 0。`currency_total` 保持 `unknown`。探测账本里的小数不能当成这两次语料嵌入的总费用。
+失败报告是 `status=failed`。`failure` 只含阶段、异常类名、本库错误码、映射码、可校验的 provider code、HTTP 状态、失败种类、用量是否已知、是否可重试、Retry-After 是否存在、状态是 `absent` / `wait` / `stop`、0–30 秒的等待值、至多一个 UUID 请求 ID 和尝试次数。进程退出文本带上异常类名。文件缺失、权限、IO、JSON/编码解析和索引校验是 `local_missing` / `local_permission` / `local_io` / `local_parse` / `local_verification`，`mapped_error_code` 为空，不用 `provider_error` 收成模型错误。缺文件或坏的 `materials.json` 在创建库和语料嵌入之前就失败。
+
+请求 ID 只保留标准 UUID。其他形状，包括凭证形文本，写成 `unknown`，不截断、不按少量前缀黑名单放行。provider code 若像常见凭证也不保留。不写自由文本、body 或 header。
+
+Retry-After 在缩短字段之前决定。没有 header 的瞬时错误才按有界退避再试，最多再 2 次。可解析且不超过 30 秒才等待。大于 30 秒、未来 HTTP 日期超过 30 秒、过长整数、NaN/Inf、或 header 存在但无法解析，都是 `stop`，不能当成没有 header 立刻重试。官方 RPM/TPM 不是本账号额度。
+
+`seed_corpus` 把一次构建放在同一个事务里。`Indexed` 只是该篇的向量和行已经放进事务，不是可复用索引的提交点。后面的失败会整笔回滚，报告里 `indexed_documents` 为空、`index_retained` 为 false；已校验的批次只留在显式缓存的 journal 里。缓存或源文件副本不能当成完整索引。显式 `--retain-index` 要等发布校验通过才把 `succeeded` 设为 true 并留下库；没通过就删除本次新建的库，不泄漏未验证库。默认失败清理不变。只读会话参数和旧 manifest 可伪造 `corpus_verified` 仍是未关闭的边界，这次不宣称已经解决。
+
+失败批次的 `usage_status` 为 `unknown` 时，费用就是 unknown，不能写成 0。`currency_total` 保持 `unknown`。探测账本里的小数不能当成这两次语料嵌入的总费用。
 
 `--embedding-cache DIR` 是显式开关，默认关闭。目录必须是当前用户的 `0700` 目录，不能是符号链接。每个批次文件是 `0600`，原子替换。键绑定源文件 SHA256、`semantic-v3`、供应商 URL 指纹、模型、`<model>:1024`、维度和这 20 条输入的 SHA256。不匹配、损坏、`complete` 不是 true、或权限过宽的文件不当作命中，重新计算。缓存里是原文的向量，只留在本机。命中批次 `outcome=cached`、`calls=0`、`new_corpus_charge=false`，不记成这次的新语料费用。失败仍然只删除这次自己创建的库，不靠留下未验证的共享库。
 
@@ -195,14 +203,16 @@ uv run --no-sync study-eval-rag \
 ```json
 {
   "status": "failed",
-  "indexed_documents": ["nist-186-5"],
+  "indexed_documents": [],
+  "index_retained": false,
   "failure": {
     "stage": "corpus_embedding",
     "failure_kind": "http_429",
     "http_status": 429,
     "provider_code": "Throttling.RateQuota",
     "mapped_error_code": "model_quota_unavailable",
-    "request_id": "req-12345678",
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "retry_after_state": "wait",
     "usage_status": "unknown",
     "attempts": 3
   },
@@ -217,4 +227,6 @@ uv run --no-sync study-eval-rag \
 }
 ```
 
-未验证：真实 provider 上这两次 `ApiError` 的 HTTP 状态和错误码；Retry-After 是否出现；请求 ID 的实际形状；top_k=24 的向量名次；复用答题的查询嵌入和生成费用；缓存恢复一次完整 14636 块索引。这些都要等 D 复核之后，由父进程在 box 上做有限实测。本增量没有批准那次实测。
+本地 PostgreSQL 16.15 与 pgvector 0.6 上，手工向量已经核对：25 条可区分向量在显式 `top_k=24`、`candidate_k=48` 下返回前 24 名且顺序正确，默认仍是 10/20。复用答题走真实检索、改写和生成代码，只替换 HTTP transport；回答非空，`[S1]` 绑定第一条证据，查询嵌入、改写和生成的调用与 usage 都在，语料没有再次嵌入，索引行数不变。这不是真实 provider 的名次或费用。
+
+未验证：真实 provider 上这两次 `ApiError` 的 HTTP 状态和错误码；真实响应里有没有 Retry-After；请求 ID 的实际形状是否就是 UUID；真实向量的 top_k=24 名次；复用答题的真实查询/生成费用；缓存恢复一次完整 14636 块索引。这些都要等 D 再次复核之后，由父进程在 box 上做有限实测。本增量没有批准那次实测。

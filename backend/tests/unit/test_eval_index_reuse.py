@@ -565,8 +565,11 @@ def test_reuse_does_not_seed_or_embed_and_rejects_a_stale_revision(tmp_path, mon
         evaluate_rag, "isolated_database", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("db"))
     )
     args.reuse_index = stale_dir
-    with pytest.raises(IndexReuseError, match="schema revision"):
+    with pytest.raises(evaluate_rag.EvaluationFailed) as stale_failure:
         asyncio.run(evaluate_rag.live_evaluation(args, [{"id": "q", "knowledge_base": "kb"}], [], tmp_path / "out2"))
+    assert stale_failure.value.failure["failure_kind"] == "local_verification"
+    assert stale_failure.value.failure["error_code"] == "schema_revision"
+    assert stale_failure.value.failure["mapped_error_code"] is None
 
 
 def test_reuse_rejects_a_different_dataset_before_opening_a_database(tmp_path, monkeypatch):
@@ -592,8 +595,12 @@ def test_reuse_rejects_a_different_dataset_before_opening_a_database(tmp_path, m
         retain_index=False,
         export_index=None,
     )
-    with pytest.raises(IndexReuseError, match="dataset hash"):
+    with pytest.raises(evaluate_rag.EvaluationFailed) as mismatch:
         asyncio.run(evaluate_rag.live_evaluation(args, [], [], tmp_path / "out"))
+    assert mismatch.value.failure["failure_kind"] == "local_verification"
+    assert mismatch.value.failure["error_code"] == "dataset_hash"
+    assert mismatch.value.failure["mapped_error_code"] is None
+    assert mismatch.value.failure["stage"] == "local_input"
 
 
 def test_dry_package_validation_makes_no_provider_call(tmp_path, monkeypatch, capsys):
