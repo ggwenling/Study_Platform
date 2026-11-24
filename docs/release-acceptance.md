@@ -347,7 +347,8 @@ uv run python ../infra/release/drill_isolated_env.py
 | 隔离 Postgres 索引复用 | `9a2f9c717daf5c5447c956cc76b64b3070aeafb7` |
 | B sources 路径增量 `dfc0d1c1633c4088e19f302ee47ee895cff8f8b0` | `78edfbe`，只拣这一笔，不合并 PR #21 |
 | 本文第 1–8 节与示例 env | `95dabea42b1df5a540e4eab788406c72c3fd36ba` 的 cherry-pick |
+| 隔离演练脚本与证据 `6fa31bf4b4d04395121224b4aebeb30588f91f10` | `daf8a9b`，只拣这一笔，不合并 PR #22 |
 
 `610fe59` 之后 Evaluation V2 的 schema 是 `evaluation-v2.3`。第 1 节的 `evaluation-v2.2` 只属于 `3bd2585`。检索默认仍是 top_k 10、candidate 20、lexical 0、rewrite false；这次拣入没有改 `config.py`。
 
-RELEASE_READY 仍是 false。sources 目录外读取的修复已经在 `78edfbe`。验收候选是包含该提交的当前头，不是合并、tag 或部署许可。本环境没有启动 55432 上的 release 栈，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。复用只读也不是专用角色，库属主可以关掉会话只读。`binding=database` 不核对 `package.sha256`。
+RELEASE_READY 仍是 false。sources 目录外读取的修复已经在 `78edfbe`。第 7 节和 `infra/release/drill-evidence.json` 记录的是产品快照 `3bd2585` 上的演练，不是本候选的复跑。本环境的 `16/main` 正在监听，没有启动 55432。验收候选包含这些脚本，但不是 merge、tag 或部署许可，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。复用只读也不是专用角色，库属主可以关掉会话只读。`binding=database` 不核对 `package.sha256`。
