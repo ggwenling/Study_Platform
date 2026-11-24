@@ -1,0 +1,211 @@
+{
+  "release_ready": false,
+  "drill": "pass",
+  "captured_at": "2026-11-24T05:45:53.962765+00:00",
+  "product_snapshot": "3bd2585e433105e573556add717fab22586e3f62",
+  "postgres": {
+    "host": "127.0.0.1",
+    "port": 55432,
+    "listen": "127.0.0.1",
+    "cluster": "16/releasegate",
+    "default_5432": "down"
+  },
+  "migration_roundtrip_empty_db": {
+    "upgraded": "0016_rerank_and_kb_retrieval",
+    "downgraded": null,
+    "restored": "0016_rerank_and_kb_retrieval",
+    "users": 0
+  },
+  "health_cycles": [
+    {
+      "phase": "first_start",
+      "live": {
+        "status": 200,
+        "body": "{\"status\":\"ok\"}"
+      },
+      "ready": {
+        "status": 200,
+        "body": "{\"status\":\"ready\"}"
+      }
+    },
+    {
+      "phase": "worker_stopped",
+      "app_sessions_while_running": 1
+    },
+    {
+      "phase": "restart",
+      "live": {
+        "status": 200,
+        "body": "{\"status\":\"ok\"}"
+      },
+      "ready": {
+        "status": 200,
+        "body": "{\"status\":\"ready\"}"
+      }
+    }
+  ],
+  "synthetic": {
+    "email": "release-gate-user@example.test",
+    "knowledge_base": "Release Gate Synthetic",
+    "graph_thread_id": "release-gate-synthetic",
+    "model_calls": 0
+  },
+  "source": {
+    "revision": "0016_rerank_and_kb_retrieval",
+    "extensions": {
+      "citext": "1.6",
+      "vector": "0.6.0"
+    },
+    "users": [
+      {
+        "email": "release-gate-user@example.test",
+        "display_name": "Release Gate"
+      }
+    ],
+    "knowledge_bases": [
+      "Release Gate Synthetic"
+    ],
+    "tables": [
+      "study.ai_job_attempts",
+      "study.ai_jobs",
+      "study.ai_workflow_runs",
+      "study.alembic_version",
+      "study.audit_logs",
+      "study.chunk_embeddings",
+      "study.conversations",
+      "study.courses",
+      "study.flashcard_decks",
+      "study.flashcard_reviews",
+      "study.flashcard_sources",
+      "study.flashcards",
+      "study.google_identities",
+      "study.idempotency_keys",
+      "study.index_versions",
+      "study.knowledge_bases",
+      "study.knowledge_point_sources",
+      "study.knowledge_points",
+      "study.learning_events",
+      "study.mastery_states",
+      "study.material_chunks",
+      "study.material_sections",
+      "study.material_versions",
+      "study.materials",
+      "study.message_citations",
+      "study.messages",
+      "study.model_call_records",
+      "study.model_connection_leases",
+      "study.model_connections",
+      "study.note_citations",
+      "study.notes",
+      "study.outbox_events",
+      "study.password_resets",
+      "study.quiz_attempts",
+      "study.quiz_item_sources",
+      "study.quiz_items",
+      "study.quiz_responses",
+      "study.quizzes",
+      "study.source_questions",
+      "study.study_plan_items",
+      "study.study_plans",
+      "study.user_sessions",
+      "study.users",
+      "study.wrong_questions",
+      "study_graph.checkpoint_blobs",
+      "study_graph.checkpoint_migrations",
+      "study_graph.checkpoint_writes",
+      "study_graph.checkpoints"
+    ],
+    "graph_marker_rows": 1,
+    "graph_role_can_read_marker": 1
+  },
+  "restored": {
+    "revision": "0016_rerank_and_kb_retrieval",
+    "extensions": {
+      "citext": "1.6",
+      "vector": "0.6.0"
+    },
+    "users": [
+      {
+        "email": "release-gate-user@example.test",
+        "display_name": "Release Gate"
+      }
+    ],
+    "knowledge_bases": [
+      "Release Gate Synthetic"
+    ],
+    "tables": [
+      "study.ai_job_attempts",
+      "study.ai_jobs",
+      "study.ai_workflow_runs",
+      "study.alembic_version",
+      "study.audit_logs",
+      "study.chunk_embeddings",
+      "study.conversations",
+      "study.courses",
+      "study.flashcard_decks",
+      "study.flashcard_reviews",
+      "study.flashcard_sources",
+      "study.flashcards",
+      "study.google_identities",
+      "study.idempotency_keys",
+      "study.index_versions",
+      "study.knowledge_bases",
+      "study.knowledge_point_sources",
+      "study.knowledge_points",
+      "study.learning_events",
+      "study.mastery_states",
+      "study.material_chunks",
+      "study.material_sections",
+      "study.material_versions",
+      "study.materials",
+      "study.message_citations",
+      "study.messages",
+      "study.model_call_records",
+      "study.model_connection_leases",
+      "study.model_connections",
+      "study.note_citations",
+      "study.notes",
+      "study.outbox_events",
+      "study.password_resets",
+      "study.quiz_attempts",
+      "study.quiz_item_sources",
+      "study.quiz_items",
+      "study.quiz_responses",
+      "study.quizzes",
+      "study.source_questions",
+      "study.study_plan_items",
+      "study.study_plans",
+      "study.user_sessions",
+      "study.users",
+      "study.wrong_questions",
+      "study_graph.checkpoint_blobs",
+      "study_graph.checkpoint_migrations",
+      "study_graph.checkpoint_writes",
+      "study_graph.checkpoints"
+    ],
+    "graph_marker_rows": 1,
+    "graph_role_can_read_marker": 1
+  },
+  "backup": {
+    "sha256": {
+      "study.dump": "e20860f450a4ef4c73bf0186bde497038e34a368ad0e4994d9472081c418b957",
+      "study_graph.dump": "bde7fd25d20249ec3d3d500b7a1eb9fbcdc1b3a9d744e9a64c4d1b1023a61e82",
+      "storage.tar": "d2979950d8b4045462ef60132633f31f22f18d76cd0bb2365705baf009abea1f"
+    },
+    "restored_storage_sha256": "0507d090bef861772b8bb25303edabe24481d3d45f7bf5a474cae3e9fd7e3845",
+    "storage_matches": true
+  },
+  "backup_relative_dir": ".local/release-gate/backups/20261124T054551Z",
+  "restore_health": {
+    "status": 200,
+    "body": "{\"status\":\"ready\"}"
+  },
+  "source_not_downgraded": true,
+  "not_verified": [
+    "final_integration_sha",
+    "ci_on_final_sha",
+    "real_50q",
+    "d_review",
+    "browser_ux"
+  ]
+}

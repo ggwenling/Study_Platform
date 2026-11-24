@@ -71,15 +71,15 @@ git cherry-pick 44295ecd5f0f63a5cf60e1f03af7ae7eb49d0d20
 | --- | --- | --- | --- |
 | G0 | 父主冻结一个集成 SHA，并声明 PR #20/#21 已按第 2 节处理且没有整支 merge | 父主书面给出 SHA | NOT_VERIFIED |
 | G1 | 该 SHA 上 Backend 与 Frontend 最新 check 均为 `completed/success`，且不是被取消的并发运行 | `gh run list --branch cursor/deep-testing-prep-9b8e --commit <SHA>` | 仅 `3bd2585` 有 success。最终 SHA 未核 |
-| G2 | 本地后端单测与 Ruff | 见下方命令 | NOT_VERIFIED（无 uv / venv） |
-| G3 | 独立 `*_test` 上的 DB 集成、迁移往返、契约 | 见下方命令 | NOT_VERIFIED。GitHub job 成功不等于本机复跑 |
+| G2 | 本地后端单测与 Ruff | 见下方命令 | NOT_VERIFIED。本机已有 uv 0.13.9 和 `backend/.venv`，但没有跑 `ruff` 或 `pytest` |
+| G3 | 独立 `*_test` 上的 DB 集成、迁移往返、契约 | 见下方命令 | 空库 `study_release_migrate_test` 的 Alembic `upgrade head` → `downgrade base` → `upgrade head` 已通过，结束后 0 行用户。pytest 集成与契约仍是 NOT_VERIFIED |
 | G4 | 权限隔离：角色、跨用户、认证 | 见下方命令 | NOT_VERIFIED |
 | G5 | UX：Vitest、`npm run build`，加上最终 SHA 的浏览器走查 | CI 只覆盖前两项 | 浏览器 UX NOT_VERIFIED |
 | G6 | 真实质量。P4 50Q 必须跑在最终 SHA 上，并有花费记录 | 不在本环境默认执行 | NOT_VERIFIED。禁止用 100Q dry 或 V2 离线报告代替 |
 | G7 | D `bc-5fe995c3-bdee-59df-bfa1-93264c3e2d65` 对最终 SHA 的 blocker 为 0 | 父主附上 D 的结论和 SHA | NOT_VERIFIED |
 | G8 | gold 与第 4 节哈希一致 | `sha256sum` 对照 | 本快照哈希已记录。最终 SHA 未对照 |
 | G9 | 默认 top-k 10、candidate 20、lexical 0、rewrite false | 读 `config.py` 与运行中的环境 | 源码默认已核对。运行中环境 NOT_VERIFIED |
-| G10 | 隔离库备份恢复演练 | 第 6 节，只打 `study_release_*_test` | NOT_VERIFIED |
+| G10 | 隔离库备份恢复演练 | `infra/release/drill_isolated_env.py` | 本快照演练通过，见第 7 节。这不是最终 SHA 的 release PASS |
 
 G2、G3 在 `backend` 执行。数据库 URL 必须来自第 5 节的 gitignored env，端口 55432：
 
@@ -152,7 +152,15 @@ chmod 600 .local/release-gate/env/release-gate.env
 
 ### 5.1 启动 Postgres（只绑本机 55432）
 
-在已安装 Docker 的隔离机器上。密码来自 gitignored env，不写进命令历史：
+本机演练没有使用 Docker。安装的是 Ubuntu 24.04 的 PostgreSQL 16.15 和 `postgresql-16-pgvector` 0.6.0。默认集群 `16/main` 保持 down，不监听 5432。专用集群是 `16/releasegate`，数据目录 `/var/lib/postgresql/16/releasegate`，`listen_addresses = '127.0.0.1'`，端口 55432。
+
+```bash
+bash infra/release/prepare_loopback_cluster.sh
+```
+
+脚本在 `16/main` 已经 online 时直接退出。集群已存在时只核对配置并保持运行，不重新 initdb。
+
+已有 Docker、且没有这套 apt 集群时，仍可以用下面的回环容器。密码来自 gitignored env，不写进命令历史：
 
 ```bash
 set -a
@@ -211,13 +219,13 @@ curl -fsS "http://127.0.0.1:${API_PORT}/health/ready"
 
 `/health/live` 为 `{"status":"ok"}`。`/health/ready` 为 `{"status":"ready"}` 才算数据库 head、密钥长度和存储探针同时通过。JWT 仍是 `CHANGE_ME` 时 ready 必须是 503，这是失败闭合，不是故障。
 
-停机只结束自己记下的 PID，或按容器名停止 `knowloop-release-gate`。不要 `kill` 占用 8000、5173、5432 的进程，不要 `docker rm` 其他容器。
+`uv run` 会再拉起子进程。停 API 或 worker 时结束整个进程组，不要按端口去杀 8000、5173 或 5432。Docker 形态只停名为 `knowloop-release-gate` 的容器。apt 形态停专用集群：
 
 ```bash
-docker stop knowloop-release-gate
+sudo pg_ctlcluster 16 releasegate stop
 ```
 
-本轮上述启动命令均未执行：本机没有 docker、psql、uv，目标端口是 closed。
+演练脚本会自己停掉它启动的 API 和 worker。本轮结束后 18000 已关闭，`16/releasegate` 仍 online，方便复核两份 `study_release_*_test`。
 
 ## 6. 回滚（三层，分开做）
 
@@ -246,7 +254,7 @@ head 与代码绑定。`0016` 的 downgrade 会删掉 `knowledge_bases.retrieval
 
 因此：
 
-- 空的 `study_release_migrate_test` 可以做 `upgrade head` → `downgrade base` → `upgrade head`，对应 `tests/integration/test_migration_roundtrip.py`。
+- 空的 `study_release_migrate_test` 可以做 `upgrade head` → `downgrade base` → `upgrade head`。2026-11-23 的演练已经在这个空库上走完，结束后用户行数是 0，revision 回到 `0016_rerank_and_kb_retrieval`。这没有代替 `tests/integration/test_migration_roundtrip.py`。
 - 已有业务行的库不做 schema downgrade。数据回滚走 6.3 的备份恢复。
 - `study_graph` 由 `study-setup-checkpointer` 单独管理。恢复应用数据时要同时处理这份 schema，否则会话 checkpoint 和 `study` 对不上。
 
@@ -273,32 +281,48 @@ tar -C .local/release-gate -cf "$dest/storage.tar" storage
 
 恢复先进入空的 `study_release_restore_test`，核对 `study.alembic_version` 和表数量，再决定是否切回 gate 库。切回前先对 gate 库再打一份 pre-restore 备份。`pg_restore` 失败就留下 restore 库和 pre-restore 备份，不删除源库。
 
+`--schema` 导出不含 public 里的 `citext` / `vector`。`--no-privileges` 也不会带回应用角色授权。恢复前要先装扩展，恢复后按演练脚本重新授权，再让 `study_release_graph` 读 checkpoint。缺任何一步，`/health/ready` 或图角色读取都会失败。
+
 ```bash
 createdb --host=127.0.0.1 --port=55432 --owner=postgres study_release_restore_test
+psql --host=127.0.0.1 --port=55432 --username=postgres --dbname=study_release_restore_test \
+  --command="CREATE EXTENSION IF NOT EXISTS citext" \
+  --command="CREATE EXTENSION IF NOT EXISTS vector"
 pg_restore --host=127.0.0.1 --port=55432 --username=postgres \
   --dbname=study_release_restore_test --exit-on-error "$dest/study.dump"
 pg_restore --host=127.0.0.1 --port=55432 --username=postgres \
   --dbname=study_release_restore_test --exit-on-error "$dest/study_graph.dump"
 ```
 
-存储目录用临时目录解包，核对 `SHA256SUMS` 后再替换 `.local/release-gate/storage`。不要在校验前删除现有 storage。
+存储目录解到单独目录，核对文件内容 SHA-256 后再决定是否替换 `.local/release-gate/storage`。不要在校验前删除现有 storage。tar 包本身的哈希含打包时间，内容哈希才是比对依据。可重复执行的实现是：
+
+```bash
+cd backend
+uv run python ../infra/release/drill_isolated_env.py
+```
+
+脚本拒绝仓库根目录已有 `.env`、拒绝非 `releasegate` 数据目录、拒绝 5432 被占用，并且只在 `study_release_migrate_test` 上执行 downgrade。第二次运行会登录已有合成账号，不重复插入 checkpoint。
 
 ## 7. 本轮执行记录
 
-已做：
+产品代码仍是 `3bd2585e433105e573556add717fab22586e3f62`。演练证据在 [infra/release/drill-evidence.json](../infra/release/drill-evidence.json)，`drill=pass`，`release_ready=false`。捕获时间 `2026-11-24T05:45:53Z`。没有调用模型 API。合成账号密码只写在 gitignored env，没有进入证据、日志摘要或本文。
 
-- 读取 CI workflow、健康检查、Alembic `0001`–`0016`、`config.py` 默认值、`ci_bootstrap_postgres.py` 的删库行为、`0002`/`0016` downgrade。
-- 用 GitHub Checks API 核对 `3bd2585` 的 Backend/Frontend 结论。
-- `git fetch` 三个源 SHA，计算 patch-id，并用 `git merge-tree` 模拟合并与 cherry-pick。工作区仍停在 `3bd2585`，源提交没有被应用。
-- `sha256sum` gold 六文件。
-- Python 探测六个端口均为 closed，并确认 Alembic 单一 head。
-- 静态检查示例 env：无密钥、端口 55432、库名 `study_release_*_test`、检索默认与实验关闭。脚本与结果在本轮 artifact `release/snapshot-gate.py`、`release/snapshot-verdict.json`。
+已在本机做完：
 
-未做，全部 NOT_VERIFIED：
+- `16/releasegate` 只监听 `127.0.0.1:55432`；`16/main` 为 down。扩展 `citext` 1.6、`vector` 0.6.0。
+- gate 库迁移到 `0016_rerank_and_kb_retrieval`，`study-setup-checkpointer` 建出 4 张 `study_graph` 表。`study` 与 `study_graph` 合计 48 张表。
+- API 在 18000 上 `/health/live` 与 `/health/ready` 都是 200。停掉后端口关闭、`study_release_app` 会话归零。再启动，两次仍是 200。
+- worker 单独运行时保持 1 条 `study_release_app` 会话，然后被进程组停掉。
+- 注册 `release-gate-user@example.test`，创建知识库 `Release Gate Synthetic`，写入 `synthetic-release-gate.txt`。文件内容 SHA-256 是 `0507d090bef861772b8bb25303edabe24481d3d45f7bf5a474cae3e9fd7e3845`。`study_graph.checkpoints` 有 1 行 `release-gate-synthetic`，图角色能读。
+- 停掉 API 后备份。恢复到空的 `study_release_restore_test` 之前先装扩展，恢复后再授权。源库与恢复库的 revision、用户、知识库、48 张表和 marker 行数一致。备份没有改源库。源库没有被 downgrade。
+- 把 API 指到恢复库和恢复出来的存储目录，`/health/ready` 返回 200。结束后 API 与 worker 都已退出。
+- 同一脚本再跑一遍仍然通过，用来确认已有合成数据上的登录和 marker 不会重复插入。
 
-- 最终集成 SHA 的 CI、单测、DB 集成、权限隔离、浏览器 UX、真实 50Q、D review。
-- 启动 Postgres、迁移、`/health/ready`、停机、备份恢复。
-- 任何 merge、tag、生产部署。
+仍是 NOT_VERIFIED，不能当成 release PASS：
+
+- 最终集成 SHA，以及该 SHA 的 CI、本地 `ruff` / `pytest`、权限隔离套件、浏览器 UX、真实 50Q、D review。
+- 前端 15173 没有启动。这次演练没有打开网页。
+- 没有 merge、tag 或生产部署。
 
 ## 8. 交给父主的清单
 
