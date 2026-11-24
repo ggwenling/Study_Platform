@@ -31,6 +31,7 @@ dependencies = [
     "httpcore>=1,<2",
     "python-pptx>=1.0,<2",
     "trafilatura>=2.0,<3",
+    "pywin32>=306 ; sys_platform == 'win32'",
 ]
 
 [dependency-groups]

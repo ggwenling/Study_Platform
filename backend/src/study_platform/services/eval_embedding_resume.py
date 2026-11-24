@@ -16,6 +16,9 @@ from uuid import uuid4
 from study_platform.services.model_failure import allow_usage, public_failure
 from study_platform.services.models import describe_model_failure, embed_texts
 
+if os.name == "nt":
+    from study_platform.services import _windows_cache_security
+
 BATCH_LIMIT = 20
 MAX_EXTRA_ATTEMPTS = 2
 MAX_RETRY_AFTER_SECONDS = 30
@@ -79,6 +82,12 @@ def vectors_ok(vectors, count, dim):
 
 def prepare_embedding_cache(directory):
     directory = Path(directory)
+    if os.name == "nt":
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        error = _windows_cache_security.directory_error(directory)
+        if error:
+            raise CacheError(error)
+        return directory
     if directory.exists() or directory.is_symlink():
         _require_private_dir(directory)
         return directory
@@ -98,6 +107,11 @@ def _require_private_dir(directory):
 
 def _batch_dir(directory):
     path = Path(directory) / "batches"
+    if os.name == "nt":
+        error = _windows_cache_security.directory_error(path)
+        if error:
+            raise CacheError(error)
+        return path
     if not path.exists():
         path.mkdir(mode=0o700)
         os.chmod(path, 0o700)
@@ -106,6 +120,8 @@ def _batch_dir(directory):
 
 
 def _read_private(path):
+    if os.name == "nt":
+        return _windows_cache_security.read_private(path)
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -180,9 +196,13 @@ def store_cached_batch(directory, key, identity, vectors, usage, usage_status, e
     ).encode() + b"\n"
     directory = _batch_dir(directory)
     temporary = directory / f".{key}.{uuid4().hex}.tmp"
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
+    if os.name == "nt":
+        descriptor = _windows_cache_security.open_new(temporary)
+    else:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
     try:
-        os.fchmod(descriptor, 0o600)
+        if os.name != "nt":
+            os.fchmod(descriptor, 0o600)
         os.write(descriptor, raw)
         os.fsync(descriptor)
     except Exception:
@@ -190,9 +210,11 @@ def store_cached_batch(directory, key, identity, vectors, usage, usage_status, e
         temporary.unlink(missing_ok=True)
         raise
     os.close(descriptor)
-    os.chmod(temporary, 0o600)
+    if os.name != "nt":
+        os.chmod(temporary, 0o600)
     os.replace(temporary, directory / f"{key}.json")
-    os.chmod(directory / f"{key}.json", 0o600)
+    if os.name != "nt":
+        os.chmod(directory / f"{key}.json", 0o600)
 
 
 def _delay(failure, retry_index):

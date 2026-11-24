@@ -45,11 +45,12 @@ Vision / rerank：本次 **`study-eval-rag` 路径不包含** VLM 或 rerank 直
 
 ## 解除 BLOCKED 所需配置（勿在聊天中粘贴明文密钥）
 
-1. **Cursor Cloud Agent 环境机密**（推荐）：在 Personal/Team Environment 为 **本仓库** 添加  
-   - `DEEPSEEK_API_KEY`（或你的 chat 提供商密钥）  
-   - `EMBEDDING_API_KEY`  
-   - `DEEP_TEST_ALLOW_LIVE=1`  
-   - `DEEP_TEST_SPEND_APPROVED=unlimited_finite`  
+1. **Cursor Cloud Agent 环境机密**（推荐）：在 Personal/Team Environment 为 **本仓库** 添加
+   - `DEEPSEEK_API_KEY`（或你的 chat 提供商密钥）
+   - `EMBEDDING_API_KEY`
+   - `DEEP_TEST_ALLOW_LIVE=1`
+   - `DEEP_TEST_SPEND_APPROVED=unlimited_finite`
+
    重新启动 agent 后 harness 可读；**不要**把密钥写入 PR 或聊天记录。
 
 2. **或** 仅写入 `.local/deep-test/env/deep-test.env`（已 gitignore），本地/agent 文件挂载可读。

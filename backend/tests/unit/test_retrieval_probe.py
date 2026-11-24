@@ -2,6 +2,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from study_platform.core.config import Settings, get_settings
 from study_platform.services.retrieval_probe import (
     load_source_corpus,
@@ -92,14 +94,9 @@ def test_source_names_cannot_leave_the_sources_directory(tmp_path):
     nested = sources / "nested"
     nested.mkdir()
     (nested / "rfc-sample.txt").write_text("nested\n", encoding="utf-8")
-    (sources / "inside.txt").symlink_to(secret)
-    (sources / "sibling.txt").write_text("sibling\n", encoding="utf-8")
-    (sources / "alias.txt").symlink_to(sources / "sibling.txt")
     names = [
         "../secret.txt",
         str(secret),
-        "inside.txt",
-        "alias.txt",
         "nested/rfc-sample.txt",
         "rfc-sample.txt/../../secret.txt",
         "..",
@@ -118,6 +115,22 @@ def test_source_names_cannot_leave_the_sources_directory(tmp_path):
     rendered = json.dumps({"documents": documents, "files": files})
     assert "SECRET-OUTSIDE" not in rendered
     assert outside not in rendered
+
+
+@pytest.mark.parametrize("target_inside", [False, True])
+def test_source_corpus_rejects_symlinks(tmp_path, make_symlink, target_inside):
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    target = (sources if target_inside else tmp_path) / "target.txt"
+    payload = b"SECRET-SYMLINK\n"
+    target.write_bytes(payload)
+    make_symlink(sources / "alias.txt", target)
+    digest = hashlib.sha256(payload).hexdigest()
+    documents, files = load_source_corpus(
+        {"files": [{"id": "alias", "filename": "alias.txt", "sha256": digest}]}, sources
+    )
+    assert documents == {}
+    assert files == [{"id": "alias", "used": False, "status": "REJECTED"}]
 
 
 def test_missing_source_is_not_run(tmp_path):

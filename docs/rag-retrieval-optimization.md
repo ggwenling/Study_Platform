@@ -174,7 +174,7 @@ Retry-After 在缩短字段之前决定。没有 header 的瞬时错误才按有
 
 失败批次的 `usage_status` 为 `unknown` 时，费用就是 unknown，不能写成 0。`currency_total` 保持 `unknown`。探测账本里的小数不能当成这两次语料嵌入的总费用。
 
-`--embedding-cache DIR` 是显式开关，默认关闭。目录必须是当前用户的 `0700` 目录，不能是符号链接。每个批次文件是 `0600`，原子替换。键绑定源文件 SHA256、`semantic-v3`、供应商 URL 指纹、模型、`<model>:1024`、维度和这 20 条输入的 SHA256。不匹配、损坏、`complete` 不是 true、或权限过宽的文件不当作命中，重新计算。缓存里是原文的向量，只留在本机。命中批次 `outcome=cached`、`calls=0`、`new_corpus_charge=false`，不记成这次的新语料费用。失败仍然只删除这次自己创建的库，不靠留下未验证的共享库。
+`--embedding-cache DIR` 是显式开关，默认关闭。POSIX 上由当前用户拥有的缓存目录和批次文件分别使用 `0700` 和 `0600`，并拒绝符号链接。Windows 上要求当前用户拥有目录及文件，受保护的 DACL 只允许当前用户和 LocalSystem 访问，并拒绝重解析点（包括符号链接和 junction）。批次文件原子替换。键绑定源文件 SHA256、切分 profile、供应商 URL 指纹、模型、`<model>:1024`、维度和这 20 条输入的 SHA256。不匹配、损坏、`complete` 不是 true、或权限过宽的文件不当作命中，重新计算。缓存里是原文的向量，只留在本机。命中批次 `outcome=cached`、`calls=0`、`new_corpus_charge=false`，不记成这次的新语料费用。失败仍然只删除这次自己创建的库，不靠留下未验证的共享库。
 
 同一进程里，瞬时连接、超时、HTTP 5xx 和 `Throttling.RateQuota` / 未标明的 429 最多再试 2 次，加上初次调用一共 3 次。400 一类的无效请求、维度/条数/NaN、认证失败和 `AllocationQuota` 不重试。产品客户端 `max_retries` 仍是 0。上面的次数和等待是这一层的上限，不表示全局 budget 被缩小。
 

@@ -9,7 +9,7 @@ import json
 import os
 import re
 import subprocess
-import sys
+import sysconfig
 import threading
 import time
 from datetime import UTC, datetime
@@ -32,7 +32,7 @@ from study_platform.persistence.models.operations import AiJob
 pytestmark = pytest.mark.integration
 
 BACKEND = Path(__file__).resolve().parents[2]
-WORKER = Path(sys.executable).parent / "study-worker"
+WORKER = Path(sysconfig.get_path("scripts")) / ("study-worker.exe" if os.name == "nt" else "study-worker")
 _DSN = re.compile(r"postgres(?:ql)?(?:\+\w+)?://\S+")
 
 
@@ -241,8 +241,6 @@ def test_study_worker_runs_ingest_classification_and_flashcards(tmp_path, monkey
         }
         assert any(path.endswith("/embeddings") for path in server.calls)
         assert any(path.endswith("/chat/completions") for path in server.calls)
-        kept = Path("/tmp/study-worker-cold-start.log")
-        kept.write_text(log_text, encoding="utf-8")
     finally:
         if process is not None and process.poll() is None:
             process.terminate()

@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import stat
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -443,10 +444,33 @@ def test_resume_fills_only_the_missing_batch_and_matches_a_clean_run(tmp_path):
     assert summary["currency_total"] == "unknown"
     assert summary["partial"] is True
     assert SECRET not in json.dumps(caught.value.metrics)
-    mode = (cache / "batches").stat().st_mode
-    assert mode & 0o077 == 0
     stored = next((cache / "batches").glob("*.json"))
-    assert stat.S_IMODE(stored.stat().st_mode) == 0o600
+    if os.name == "nt":
+        import win32api
+        import win32con
+        import win32security
+
+        token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+        try:
+            user = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+        finally:
+            token.Close()
+        system = win32security.CreateWellKnownSid(win32security.WinLocalSystemSid, None)
+        for path in (cache, cache / "batches", stored):
+            security = win32security.GetNamedSecurityInfo(
+                str(path), win32security.SE_FILE_OBJECT,
+                win32security.OWNER_SECURITY_INFORMATION | win32security.DACL_SECURITY_INFORMATION,
+            )
+            assert security.GetSecurityDescriptorOwner() == user
+            assert security.GetSecurityDescriptorControl()[0] & win32security.SE_DACL_PROTECTED
+            dacl = security.GetSecurityDescriptorDacl()
+            assert {str(dacl.GetAce(index)[-1]) for index in range(dacl.GetAceCount())} == {
+                str(user), str(system)
+            }
+    else:
+        mode = (cache / "batches").stat().st_mode
+        assert mode & 0o077 == 0
+        assert stat.S_IMODE(stored.stat().st_mode) == 0o600
     assert "line-0" not in stored.read_text(encoding="utf-8")
 
     calls.clear()
@@ -631,14 +655,77 @@ def test_rate_quota_retries_are_bounded_and_invalid_requests_are_not(tmp_path):
     ).code
 
 
+def _grant_everyone_access(path):
+    if os.name == "nt":
+        import ntsecuritycon
+        import win32security
+
+        security = win32security.GetNamedSecurityInfo(
+            str(path), win32security.SE_FILE_OBJECT, win32security.DACL_SECURITY_INFORMATION
+        )
+        dacl = security.GetSecurityDescriptorDacl()
+        everyone = win32security.CreateWellKnownSid(win32security.WinWorldSid, None)
+        dacl.AddAccessAllowedAce(win32security.ACL_REVISION, ntsecuritycon.FILE_GENERIC_READ, everyone)
+        win32security.SetNamedSecurityInfo(
+            str(path), win32security.SE_FILE_OBJECT,
+            win32security.DACL_SECURITY_INFORMATION | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
+            None, None, dacl, None,
+        )
+    else:
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
+
 def test_loose_cache_directory_is_refused_before_embedding(tmp_path):
     public = tmp_path / "public"
-    public.mkdir(mode=0o755)
-    with pytest.raises(resume.CacheError):
+    prepare_embedding_cache(public)
+    _grant_everyone_access(public)
+    with pytest.raises(resume.CacheError, match="cache_permissions"):
         prepare_embedding_cache(public)
+
+
+def test_loose_batch_file_is_not_reused(tmp_path):
+    cache = prepare_embedding_cache(tmp_path / "cache")
+    key, identity = resume.batch_identity(
+        source_sha256="ab" * 32, pipeline_profile=SEMANTIC_PROFILE, embedding_model="model-a",
+        embedding_base_url="https://example.test/v1", embedding_dim=1024, texts=["alpha"],
+    )
+    vectors = [_vector("alpha")]
+    resume.store_cached_batch(cache, key, identity, vectors, None, "unknown", None)
+    assert resume.load_cached_batch(cache, key, identity, 1)["vectors"] == vectors
+    _grant_everyone_access(cache / "batches" / f"{key}.json")
+    assert resume.load_cached_batch(cache, key, identity, 1) is None
+
+
+def test_symlink_cache_directory_is_refused(tmp_path, make_symlink):
+    target = prepare_embedding_cache(tmp_path / "private")
     link = tmp_path / "link"
-    link.symlink_to(tmp_path)
-    with pytest.raises(resume.CacheError):
+    make_symlink(link, target, target_is_directory=True)
+    with pytest.raises(resume.CacheError, match="cache_not_directory"):
+        prepare_embedding_cache(link)
+
+
+def test_symlink_batch_file_is_not_reused(tmp_path, make_symlink):
+    cache = prepare_embedding_cache(tmp_path / "cache")
+    key, identity = resume.batch_identity(
+        source_sha256="ab" * 32, pipeline_profile=SEMANTIC_PROFILE, embedding_model="model-a",
+        embedding_base_url="https://example.test/v1", embedding_dim=1024, texts=["alpha"],
+    )
+    resume.store_cached_batch(cache, key, identity, [_vector("alpha")], None, "unknown", None)
+    assert resume.load_cached_batch(cache, key, identity, 1) is not None
+    path = cache / "batches" / f"{key}.json"
+    target = path.rename(tmp_path / "outside.json")
+    make_symlink(path, target)
+    assert resume.load_cached_batch(cache, key, identity, 1) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NTFS directory junctions are Windows-specific")
+def test_cache_directory_rejects_windows_junction(tmp_path):
+    import _winapi
+
+    target = prepare_embedding_cache(tmp_path / "private")
+    link = tmp_path / "junction"
+    _winapi.CreateJunction(str(target), str(link))
+    with pytest.raises(resume.CacheError, match="cache_not_directory"):
         prepare_embedding_cache(link)
 
 
