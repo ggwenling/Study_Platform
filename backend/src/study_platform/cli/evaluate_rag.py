@@ -9,6 +9,7 @@ import shutil
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -17,7 +18,8 @@ from dotenv import load_dotenv
 from sqlalchemy.engine import make_url
 
 from alembic import command
-from study_platform.core.config import get_settings
+from study_platform.cli.rag_eval_preflight import MIME_TYPES, digest, load_profile, prepare_corpus
+from study_platform.core.config import Settings, get_settings
 from study_platform.persistence.database import session_factory
 from study_platform.persistence.models import (
     ChunkEmbedding,
@@ -162,7 +164,7 @@ def render_source(material, target):
         image.save(target, format=formats[material["format"]])
 
 
-def seed_corpus(factory, materials, *, cache_dir=None, pipeline_profile=None):
+def seed_corpus(factory, materials, *, cache_dir=None, pipeline_profile=None, prepared=None):
     profile = chunking.resolve_pipeline_profile(pipeline_profile)
     settings = get_settings()
     owner = uuid4()
@@ -208,13 +210,7 @@ def seed_corpus(factory, materials, *, cache_dir=None, pipeline_profile=None):
                 material_id=material.id,
                 version_no=1,
                 is_current=True,
-                source_mime={
-                    "txt": "text/plain",
-                    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    "png": "image/png",
-                    "jpeg": "image/jpeg",
-                    "pdf": "application/pdf",
-                }[item["format"]],
+                source_mime=MIME_TYPES[item["format"]],
                 source_sha256="0" * 64,
                 byte_size=1,
                 object_key=str(uuid4()),
@@ -223,23 +219,31 @@ def seed_corpus(factory, materials, *, cache_dir=None, pipeline_profile=None):
             )
             path = source_path(version.id)
             path.parent.mkdir(parents=True)
-            render_source(item, path)
+            snapshot = prepared[item["id"]] if prepared is not None else None
+            if snapshot is None:
+                render_source(item, path)
+            else:
+                shutil.copyfile(snapshot.source, path)
+                version.page_count = snapshot.page_count
             if path.stat().st_size > settings.max_upload_bytes:
                 raise ValueError("Evaluation material exceeds the existing upload limit")
-            hashes[item["id"]] = hashlib.sha256(path.read_bytes()).hexdigest()
+            hashes[item["id"]] = snapshot.sha256 if snapshot is not None else digest(path)
             version.source_sha256, version.byte_size = hashes[item["id"]], path.stat().st_size
             db.add(material)
             db.flush()
             db.add(version)
             db.flush()
-            extracted = list(
-                ingestion.extract(version, version_dir(version.id), lambda _: None, profile)
-            )
-            parts = [
-                (part, narrowed)
-                for text, locator in extracted
-                for part, narrowed in chunking.segment_unit(text, locator, profile)
-            ]
+            if snapshot is None:
+                extracted = list(
+                    ingestion.extract(version, version_dir(version.id), lambda _: None, profile)
+                )
+                parts = [
+                    (part, narrowed)
+                    for text, locator in extracted
+                    for part, narrowed in chunking.segment_unit(text, locator, profile)
+                ]
+            else:
+                parts = snapshot.chunks
             if not parts:
                 raise ValueError("Evaluation source produced no text")
             try:
@@ -313,10 +317,20 @@ def write_json(path, value):
 
 
 def _strategy_ready(strategy):
-    if strategy in {"hybrid", "hybrid_compare"} and get_settings().retrieval_lexical_weight <= 0:
+    settings = get_settings()
+    if strategy in {"hybrid", "hybrid_compare"} and settings.retrieval_lexical_weight <= 0:
         raise ValueError(
             "hybrid strategies require RETRIEVAL_LEXICAL_WEIGHT > 0; "
             "the default 0 does not add a lexical branch"
+        )
+    if strategy == "three_way" and (
+        settings.retrieval_candidate_k != 20
+        or settings.retrieval_top_k != 10
+        or settings.retrieval_min_similarity != 0.35
+        or not settings.retrieval_hybrid_enabled
+    ):
+        raise ValueError(
+            "Three-way comparison requires candidate 20, top 10, similarity 0.35 and hybrid enabled"
         )
 
 
@@ -337,6 +351,7 @@ def _shared_test_database():
 def _base_report(args, cases):
     settings = get_settings()
     materials_path = args.dataset.with_name("materials.json")
+    manifest = getattr(args, "manifest", None)
     report = {
         "dataset_sha256": hashlib.sha256(args.dataset.read_bytes()).hexdigest(),
         "expected_case_ids": [case["id"] for case in cases],
@@ -350,8 +365,10 @@ def _base_report(args, cases):
         "top_k": settings.retrieval_top_k,
         "candidate_k": settings.retrieval_candidate_k,
         "candidate_limit": max(settings.retrieval_candidate_k, settings.retrieval_top_k),
-        "lexical_weight": settings.retrieval_lexical_weight,
+        "lexical_weight": 0.4 if args.strategy == "three_way" else settings.retrieval_lexical_weight,
         "min_similarity": settings.retrieval_min_similarity,
+        "corpus_profile": getattr(args, "profile", None) if manifest else None,
+        "manifest_sha256": digest(manifest) if manifest else None,
         "cases": [],
     }
     try:
@@ -500,8 +517,14 @@ def _finish(args, output, report, cleanup_message):
     report["status"] = "completed"
     write_json(output / "report.json", report)
     if not args.retrieval_only:
-        write_json(output / "review.json", review_template(report))
-        write_json(output / "gate.json", quality_gate(report))
+        if getattr(args, "manifest", None):
+            review = review_template(report)
+            review.pop("human_confirmed")
+            review.update(review_kind="ai", ai_confirmed=False)
+            write_json(output / "ai_answer_review_template.json", review)
+        else:
+            write_json(output / "review.json", review_template(report))
+            write_json(output / "gate.json", quality_gate(report))
     retrieval = summarize_retrieval(report, args.metric_k)
     if retrieval:
         write_json(output / "retrieval_metrics.json", retrieval)
@@ -662,7 +685,7 @@ async def _reuse_live(args, cases, output, reuse_path, retain, export_path):
         raise EvaluationFailed(report["failure"]) from None
 
 
-async def live_evaluation(args, cases, materials, output):
+async def live_evaluation(args, cases, materials, output, prepared=None):
     reuse_path = getattr(args, "reuse_index", None)
     retain = bool(getattr(args, "retain_index", False))
     export_path = getattr(args, "export_index", None)
@@ -694,6 +717,7 @@ async def live_evaluation(args, cases, materials, output):
             scopes, documents, hashes, corpus_embedding, eval_owner, indexed = seed_corpus(
                 factory, materials, cache_dir=cache_dir,
                 pipeline_profile=getattr(args, "pipeline_profile", None),
+                prepared=prepared,
             )
             report.update(
                 source_hashes=hashes,
@@ -751,9 +775,12 @@ async def live_evaluation(args, cases, materials, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, default=BACKEND / "evaluation/facts.jsonl")
+    parser.add_argument("--manifest", type=Path, help="versioned evaluation corpus and AI review receipts")
+    parser.add_argument("--profile", default="native", help="named profile in the evaluation manifest")
+    parser.add_argument("--preflight", action="store_true", help="verify the full corpus offline without model calls")
     parser.add_argument(
         "--strategy",
-        choices=("baseline", "rewrite", "compare", "hybrid", "hybrid_compare"),
+        choices=("baseline", "rewrite", "compare", "hybrid", "hybrid_compare", "three_way"),
         default="compare",
     )
     parser.add_argument("--output", type=Path)
@@ -814,7 +841,9 @@ def main():
     )
     args = parser.parse_args()
     try:
-        chunking.resolve_pipeline_profile(args.pipeline_profile)
+        selected_profile = chunking.resolve_pipeline_profile(args.pipeline_profile)
+        if args.preflight and (args.live or args.review):
+            raise ValueError("Run offline preflight separately from live evaluation or result review")
         if args.review:
             if not args.output:
                 raise ValueError(
@@ -841,16 +870,63 @@ def main():
             raise ValueError("--metric-k values must be positive integers")
         args.metric_k = sorted(set(args.metric_k))
         cases, materials = read_dataset(args.dataset)
-        if not args.live:
+        profile = None
+        ai_reviewed = False
+        if args.manifest:
+            cases, materials, profile, ai_reviewed = load_profile(
+                args.manifest, args.dataset, cases, materials, args.profile
+            )
+        if not args.live and not args.preflight:
             print(
                 f"Validated {len(cases)} questions / {len({c['fact_group'] for c in cases})} fact groups. No database or provider calls; use --live to evaluate."
             )
             return
-        load_dotenv(get_settings().model_config["env_file"])
-        _strategy_ready(args.strategy)
-        output = (args.output or BACKEND.parent / ".local/rag-evaluation" / uuid4().hex).resolve()
-        output.mkdir(parents=True, exist_ok=False)
-        asyncio.run(live_evaluation(args, cases, materials, output))
+        if args.live:
+            load_dotenv(Settings.model_config["env_file"])
+            if hasattr(get_settings, "cache_clear"):
+                get_settings.cache_clear()
+            _strategy_ready(args.strategy)
+            if args.manifest and not ai_reviewed:
+                raise ValueError("The frozen corpus needs two complete independent AI reviews")
+        if args.reuse_index and args.live:
+            output = (args.output or BACKEND.parent / ".local/rag-evaluation" / uuid4().hex).resolve()
+            output.mkdir(parents=True, exist_ok=False)
+            asyncio.run(live_evaluation(args, cases, materials, output))
+            return
+        settings = get_settings() if args.live else Settings(_env_file=None)
+        if profile:
+            settings = settings.model_copy(update={"max_pdf_pages": profile["max_pdf_pages"]})
+        with TemporaryDirectory(prefix="knowloop-rag-preflight-") as staging:
+            prepared, preflight = prepare_corpus(
+                materials, cases, settings, Path(staging), render_source, profile,
+                pipeline_profile=selected_profile,
+            )
+            preflight.update(
+                profile=args.profile if profile else None,
+                dataset_sha256=digest(args.dataset),
+                manifest_sha256=digest(args.manifest) if args.manifest else None,
+                chunker=selected_profile,
+                max_pdf_pages=settings.max_pdf_pages,
+                ai_reviewed=ai_reviewed,
+            )
+            preflight["status"] = (
+                "READY_TO_RUN" if profile and ai_reviewed and preflight["preflight_passed"] else "BLOCKED"
+            )
+            if args.preflight:
+                if args.output:
+                    args.output.mkdir(parents=True, exist_ok=False)
+                    write_json(args.output / "preflight.json", preflight)
+                print(json.dumps(preflight, ensure_ascii=False, indent=2))
+                if not preflight["preflight_passed"]:
+                    raise SystemExit(1)
+                return
+            if preflight["failures"] or (profile and not preflight["preflight_passed"]):
+                print(json.dumps(preflight, ensure_ascii=False, indent=2))
+                raise ValueError("Offline corpus preflight failed before database or model calls")
+            output = (args.output or BACKEND.parent / ".local/rag-evaluation" / uuid4().hex).resolve()
+            output.mkdir(parents=True, exist_ok=False)
+            write_json(output / "preflight.json", preflight)
+            asyncio.run(live_evaluation(args, cases, materials, output, prepared))
     except ValueError as error:
         raise SystemExit(str(error)) from None
     except FileExistsError:
