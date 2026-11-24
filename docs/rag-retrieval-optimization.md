@@ -232,3 +232,17 @@ uv run --no-sync study-eval-rag \
 本地 PostgreSQL 16.15 与 pgvector 0.6 上，手工向量已经核对：25 条可区分向量在显式 `top_k=24`、`candidate_k=48` 下返回前 24 名且顺序正确，默认仍是 10/20。复用答题走真实检索、改写和生成代码，只替换 HTTP transport；回答非空，`[S1]` 绑定第一条证据，查询嵌入、改写和生成的调用与 usage 都在，语料没有再次嵌入，索引行数不变。这不是真实 provider 的名次或费用。
 
 未验证：真实 provider 上这两次 `ApiError` 的 HTTP 状态和错误码；真实响应里有没有 Retry-After；真实向量的 top_k=24 名次；复用答题的真实查询/生成费用；缓存恢复一次完整 14636 块索引。原始 request id 不再落盘，所以 ID 的真实形状不再决定记录是否安全。真实 provider 仍未调用。旧 manifest 可自填 `corpus_verified`，以及只读只是会话参数，这两项仍未关闭。
+
+## 实验切分 semantic-v4
+
+`semantic-v3` 仍是缺省。入库任务不带 `pipeline_profile`、评测不传 `--pipeline-profile` 时，路径和 locator 与原来一致。显式选择 `semantic-v4` 才会：
+
+- 把 text/plain 里被空行隔开的连续非空行收成一段，locator 用原文的 `start_line` / `end_line`。
+- 在超过 800 字、需要按句切开时，不把单个换行当成句号。`。！？!?；;` 仍是句末。句点遇到小数、字母缩写（如 `e.g.`、`U.S.`、`Dr.`）不切。
+- 块如果只是段落或页面的一部分，locator 收窄到该片段的行或 `page` + `start_char` / `end_char`。对不上原文就不写行范围。
+
+限制要一起看：一块最多 800 字（代码、表格、公式原子仍到 1600）。更长的句子会切开。有空白可锚定时，下一块最多重叠 120 字；没有空白的长句按宽度切开，不重叠。空行仍是段落边界，短段不会为了“消灭续行”被拼成更长的段。页与页不合并。块数变少只说明几何变了，不是质量结论。
+
+新 profile 只能从源文件重新抽取。对已经按行存下的 semantic-v3 section 做 rechunk，仍发布 semantic-v3，不会把相邻行拼起来冒充 v4。已经是 v4 的索引再 rechunk 仍是 v4。未知名字拒绝，不建索引。导出、导入和复用要求清单与每一条索引行的 profile 相同；旧缓存的 identity 含 profile，不能当作 v4 命中。
+
+因此换到 v4 要整份重抽、重嵌。旧库和旧向量不动。本轮没有重建，也没有接模型。REAL013 使用的 FIPS 46 与本地 `33113108…` 那份不是同一文件，合成折行只证明切分机制。

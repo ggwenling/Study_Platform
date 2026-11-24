@@ -10,7 +10,7 @@ import pytest
 
 from study_platform.cli import evaluate_rag
 from study_platform.core.config import Settings, get_settings
-from study_platform.persistence.models import ChunkEmbedding, MaterialChunk
+from study_platform.persistence.models import ChunkEmbedding, IndexVersion, MaterialChunk
 from study_platform.services import chat, eval_index_reuse
 from study_platform.services.chunking import SEMANTIC_PROFILE
 from study_platform.services.eval_index_reuse import (
@@ -26,6 +26,7 @@ from study_platform.services.eval_index_reuse import (
     retained_database,
     reuse_target_url,
     should_drop_database,
+    validate_manifest_shape,
     verify_index_contents,
     write_package,
 )
@@ -252,6 +253,102 @@ def test_manifest_roundtrip_and_mismatch_rejection():
             embedding_model=manifest["embedding_model"],
             schema_revision=manifest["schema_revision"],
         )
+
+
+def test_pipeline_profile_must_match_on_export_import_and_reuse():
+    manifest, snapshot = _manifest()
+    assert manifest["pipeline_profile"] == SEMANTIC_PROFILE
+    validate_manifest_shape(manifest)
+    verify_index_contents(
+        manifest, snapshot,
+        embedding_model=manifest["embedding_model"], schema_revision=manifest["schema_revision"],
+    )
+
+    unknown = json.loads(json.dumps(manifest))
+    unknown["pipeline_profile"] = "semantic-v5"
+    unknown["indexes"][0]["pipeline_profile"] = "semantic-v5"
+    with pytest.raises(IndexReuseError, match="pipeline profile"):
+        validate_manifest_shape(unknown)
+
+    mixed = json.loads(json.dumps(manifest))
+    mixed["indexes"][0]["pipeline_profile"] = "semantic-v4"
+    with pytest.raises(IndexReuseError, match="pipeline profile"):
+        validate_manifest_shape(mixed)
+
+    v4_snapshot = json.loads(json.dumps(snapshot))
+    v4_snapshot["indexes"][0]["pipeline_profile"] = "semantic-v4"
+    v4_manifest, _ = _manifest(v4_snapshot)
+    assert v4_manifest["pipeline_profile"] == "semantic-v4"
+    validate_manifest_shape(v4_manifest)
+    with pytest.raises(IndexReuseError, match="pipeline profile"):
+        verify_index_contents(
+            v4_manifest, snapshot,
+            embedding_model=manifest["embedding_model"], schema_revision=manifest["schema_revision"],
+        )
+    with pytest.raises(IndexReuseError, match="pipeline profile"):
+        verify_index_contents(
+            manifest, v4_snapshot,
+            embedding_model=manifest["embedding_model"], schema_revision=manifest["schema_revision"],
+        )
+    mixed_snapshot = json.loads(json.dumps(snapshot))
+    second_id = str(uuid4())
+    mixed_snapshot["indexes"].append({
+        **mixed_snapshot["indexes"][0], "id": second_id, "pipeline_profile": "semantic-v4",
+    })
+    with pytest.raises(IndexReuseError, match="pipeline profile"):
+        build_manifest(
+            snapshot=mixed_snapshot,
+            scopes={
+                "kb": {
+                    "knowledge_base_id": mixed_snapshot["knowledge_bases"][0]["id"],
+                    "index_version_ids": sorted([mixed_snapshot["indexes"][0]["id"], second_id]),
+                    "intent": "qa",
+                    "answer_mode": "knowledge_only",
+                }
+            },
+            documents={mixed_snapshot["_version"]: "doc-1"},
+            material_hashes={"doc-1": mixed_snapshot["_digest"]},
+            dataset_sha256="cd" * 32,
+            materials_sha256="ef" * 32,
+            embedding_model=mixed_snapshot["embedding_profile"].rsplit(":", 1)[0],
+        )
+
+
+def test_import_keeps_the_manifest_profile():
+    manifest, _snapshot_value = _manifest()
+    exported = dict(manifest, binding="export")
+
+    class Session:
+        def __init__(self):
+            self.added = []
+
+        def add(self, obj):
+            self.added.append(obj)
+
+        def flush(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def load(body):
+        session = Session()
+
+        class Bound:
+            def begin(self):
+                return session
+
+        import_index(Bound(), body, _records(body))
+        return [obj for obj in session.added if isinstance(obj, IndexVersion)]
+
+    assert load(exported)[0].pipeline_profile == SEMANTIC_PROFILE
+    v4 = json.loads(json.dumps(exported))
+    v4["pipeline_profile"] = "semantic-v4"
+    v4["indexes"][0]["pipeline_profile"] = "semantic-v4"
+    assert load(v4)[0].pipeline_profile == "semantic-v4"
 
 
 def test_package_hash_and_secret_fields_are_rejected(tmp_path):
