@@ -76,7 +76,7 @@ def test_incomplete_comparisons_never_pass_even_with_all_existing_rows_reviewed(
     assert not gate["complete_comparison"] and not gate["eligible_for_default"]
 
 
-def test_interrupted_live_evaluation_keeps_planned_questions_and_running_status(
+def test_interrupted_live_evaluation_keeps_planned_questions_and_marks_failed(
     tmp_path, monkeypatch
 ):
     dataset = tmp_path / "facts.jsonl"
@@ -89,22 +89,27 @@ def test_interrupted_live_evaluation_keeps_planned_questions_and_running_status(
         metrics_format="table",
     )
     cases = [{"id": n, "knowledge_base": "kb"} for n in ("first", "second")]
-    monkeypatch.setattr(evaluate_rag, "isolated_database", lambda _: nullcontext(None))
+    monkeypatch.setattr(evaluate_rag, "isolated_database", lambda *_args, **_kwargs: nullcontext(None))
     monkeypatch.setattr(
-        evaluate_rag, "seed_corpus", lambda *_: ({"kb": {}}, {}, {}, [], uuid4())
+        evaluate_rag,
+        "seed_corpus",
+        lambda *_args, **_kwargs: ({"kb": {}}, {}, {}, [], uuid4(), ["notes"]),
     )
 
     async def eval_case(case, *_args, **_kwargs):
         if case["id"] == "second":
-            raise RuntimeError("interrupted")
+            raise RuntimeError("interrupted secret sk-SUPERSECRETVALUE")
         return [{"id": "first", "strategy": name} for name in ("baseline", "rewrite")]
 
     monkeypatch.setattr(evaluate_rag, "evaluate_case", eval_case)
-    with pytest.raises(RuntimeError, match="interrupted"):
+    with pytest.raises(evaluate_rag.EvaluationFailed):
         asyncio.run(evaluate_rag.live_evaluation(args, cases, [], tmp_path))
     saved = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
-    assert saved["status"] == "running" and saved["expected_case_ids"] == ["first", "second"]
+    assert saved["status"] == "failed" and saved["expected_case_ids"] == ["first", "second"]
+    assert saved["failure"]["stage"] == "evaluation"
+    assert saved["failure"]["exception_class"] == "RuntimeError"
     assert [r["id"] for r in saved["cases"]] == ["first", "first"]
+    assert "sk-SUPERSECRETVALUE" not in json.dumps(saved) and "interrupted" not in json.dumps(saved)
 
 
 @pytest.mark.parametrize("quote", ["……", ["有效依据", "。？！"]])
@@ -289,6 +294,98 @@ def test_retrieval_summary_from_mock_report():
     assert summary["by_scope"]["A"]["mrr"] == 1.0
     table = format_retrieval_table(summary)
     assert "overall" in table and "R@1" in table
+
+
+def test_blank_evidence_uses_product_pack_and_does_not_call_the_model(monkeypatch):
+    from study_platform.services import chat
+    from study_platform.services.rag_evaluation import evaluate_case
+
+    calls = {"model": 0}
+
+    def embed(queries, diagnostics=None):
+        if diagnostics is not None:
+            diagnostics["calls"] = 1
+            diagnostics["input_count"] = len(queries)
+        return [[0.0]]
+
+    def retrieve(_scope, _vectors, _owner):
+        return [
+            {
+                "id": "blank",
+                "text": " \n\t ",
+                "material_version_id": "m",
+                "index_version_id": "idx",
+                "title": "t",
+                "locator": "L1",
+            }
+        ]
+
+    captured = {}
+
+    class Model:
+        async def ainvoke(self, messages):
+            calls["model"] += 1
+            captured["messages"] = messages
+            return SimpleNamespace(content="alpha [S1]", usage_metadata=None)
+
+    monkeypatch.setattr("study_platform.services.rag_evaluation.embed_texts", embed)
+    monkeypatch.setattr(
+        "study_platform.services.rag_evaluation.chat.retrieve_vectors", retrieve
+    )
+    monkeypatch.setattr("study_platform.services.rag_evaluation.chat_model", lambda: Model())
+    case = {
+        "id": "Q",
+        "fact_group": "g",
+        "split": "heldout",
+        "question": "问什么",
+        "knowledge_base": "kb",
+        "answerable": True,
+        "expected_facts": [["alpha"]],
+        "support": [{"document": "doc", "quote": "alpha"}],
+    }
+    scope = {"index_version_ids": ["idx"], "answer_mode": "knowledge_only", "intent": "qa"}
+    rows = asyncio.run(evaluate_case(case, scope, {"m": "doc"}, "baseline", owner="owner"))
+    assert calls["model"] == 0
+    assert rows[0]["answer_metrics"]["calls"] == 0
+    assert rows[0]["answer"] == chat.INSUFFICIENT_MATERIAL
+    assert rows[0]["evidence"][0]["text"] == " \n\t "
+    assert rows[0]["retrieval_support_hit"] is False
+    assert rows[0]["evidence_characters"] == len(" \n\t ")
+
+    def retrieve_text(_scope, _vectors, _owner):
+        return [
+            {
+                "id": "c1",
+                "text": "alpha quote [S9]",
+                "material_version_id": "m",
+                "index_version_id": "idx",
+                "title": "手册 [S2]",
+                "locator": {"heading": "节 [S4]"},
+                "source": "[S8]",
+                "note": "备注 [S5]",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "study_platform.services.rag_evaluation.chat.retrieve_vectors", retrieve_text
+    )
+    composed = asyncio.run(evaluate_case(case, scope, {"m": "doc"}, "baseline", owner="owner"))
+    assert calls["model"] == 1
+    assert composed[0]["answer_metrics"]["calls"] == 1
+    assert composed[0]["answer"] == "alpha [S1]"
+    system = captured["messages"][0].content
+    rules, raw_docs = system.split("本轮资料JSON：\n", 1)
+    docs = json.loads(raw_docs)
+    assert docs[0]["source"] == "S1"
+    assert docs[0]["title"] == "手册 (S2)"
+    assert docs[0]["text"] == "alpha quote (S9)"
+    assert set(docs[0]) == {"source", "title", "text"}
+    assert "[S" not in raw_docs
+    assert "[S1]" in rules
+    assert captured["messages"][-1].content == "问什么"
+    assert composed[0]["evidence"][0]["title"] == "手册 [S2]"
+    assert composed[0]["evidence"][0]["text"] == "alpha quote [S9]"
+    assert composed[0]["evidence"][0]["locator"] == {"heading": "节 [S4]"}
 
 
 def test_equivalent_supporting_passages_are_accepted_but_file_match_alone_is_not():

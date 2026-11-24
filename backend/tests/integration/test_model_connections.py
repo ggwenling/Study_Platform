@@ -720,14 +720,87 @@ def test_library_binding_persists_and_queued_ingestion_pins_revision(connections
         assert db.get(KnowledgeBase, UUID(old["id"])).embedding_binding["model"] == "platform-embed"
 
 
-def test_timeout_and_short_key_never_exposed(connections_env):
+def _without_public_ids(text):
+    """Drop connection id strings only. Do not remove secret values before searching."""
+    cleaned = text
+    for value in _public_ids(json.loads(text)):
+        cleaned = cleaned.replace(value, "")
+    return cleaned
+
+
+def _public_ids(node):
+    found = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "id" and isinstance(value, str):
+                found.append(value)
+            else:
+                found.extend(_public_ids(value))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_public_ids(item))
+    return found
+
+
+def test_timeout_and_short_key_never_exposed(connections_env, monkeypatch, caplog):
+    """Short key ``abc`` collides with a pinned public id and must still stay out of secret fields.
+
+    The whole-document search used to fail when a random connection id contained ``abc``
+    (observed id fragment ``19fccdfabcf5``). Removing that id is the collision control.
+    The secret itself is never stripped, so a real copy in a response, error, or log still fails.
+    """
+    short_secret = "abc"
+    long_secret = "wk-secret-prefix-Q7m4"
+    short_id = UUID("11111111-1111-4111-8111-000000abc001")
+    long_id = UUID("22222222-2222-4222-8222-000000000002")
+    assert short_secret in str(short_id)
+    assert short_secret not in str(long_id)
+    assert long_secret not in str(short_id) and long_secret[:-4] not in str(long_id)
+    planned = iter((short_id, long_id))
+    monkeypatch.setattr("study_platform.api.v1.model_connections.uuid4", lambda: next(planned))
+    caplog.set_level("DEBUG")
     state = connections_env
-    row, _ = create(state, "embedding", "timeout", key="abc")
-    assert row["key_suffix"] != "abc"
+    short_row, _ = create(state, "embedding", "timeout", key=short_secret)
+    long_row, _ = create(state, "embedding", "timeout", key=long_secret)
+    assert short_row["id"] == str(short_id) and long_row["id"] == str(long_id)
+    assert short_row["key_suffix"] == ""
+    assert long_row["key_suffix"] == long_secret[-4:]
+    assert long_secret not in json.dumps(long_row)
+    assert long_secret[:-4] not in json.dumps(long_row)
     state.settings.model_timeout_seconds = 0.02
-    result = state.client.post(f"/me/model-connections/{row['id']}/test").json()
-    assert result["error_code"] == "model_timeout"
-    assert "abc" not in state.client.get("/me/model-connections").text
+    probed = []
+    for row, secret, suffix in (
+        (short_row, short_secret, ""),
+        (long_row, long_secret, long_secret[-4:]),
+    ):
+        response = state.client.post(f"/me/model-connections/{row['id']}/test")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        probed.append(response.text)
+        assert body["error_code"] == "model_timeout"
+        assert body["key_suffix"] == suffix
+        assert secret not in body["error_code"]
+        assert secret not in body["key_suffix"]
+        hidden = _without_public_ids(response.text)
+        assert secret not in hidden
+        if len(secret) > 4:
+            assert secret[:-4] not in hidden
+    listing = state.client.get("/me/model-connections")
+    assert listing.status_code == 200, listing.text
+    raw = listing.text
+    assert str(short_id) in raw and short_secret in raw
+    assert short_secret not in _without_public_ids(raw)
+    assert long_secret not in raw and long_secret[:-4] not in raw
+    assert raw.count(long_secret[-4:]) == 1
+    for text in probed:
+        assert short_secret not in _without_public_ids(text)
+        assert long_secret not in text and long_secret[:-4] not in text
+    for record in caplog.records:
+        rendered = f"{record.name} {record.levelname} {record.getMessage()} {record.args!r}"
+        rendered = rendered.replace(str(short_id), "").replace(str(long_id), "")
+        assert short_secret not in rendered
+        assert long_secret not in rendered
+        assert long_secret[:-4] not in rendered
 
 
 @pytest.mark.parametrize("llm_model", ["llm-one", "llm-two"])
@@ -806,9 +879,48 @@ def test_end_to_end_chat_summary_learning_and_failure_preserve_indexes(connectio
         files={"file": ("more.txt", b"more facts", "text/plain")},
     ).json()
     assert ingestion.run_once()
+    with state.factory.begin() as db:
+        # Another owner's already-failed jobs must stay in the database and must not
+        # satisfy this test's classification assertion.
+        now = datetime.now(UTC)
+        for _ in range(2):
+            db.add(
+                AiJob(
+                    id=uuid4(),
+                    owner_user_id=state.outsider,
+                    job_type="classification",
+                    resource_type="material_version",
+                    resource_id=uuid4(),
+                    status="failed",
+                    progress=0,
+                    payload={},
+                    attempt_count=1,
+                    max_attempts=3,
+                    fencing=0,
+                    failure_code="model_not_configured",
+                    next_run_at=now,
+                    finished_at=now,
+                )
+            )
     with state.factory() as db:
         assert db.get(AiJob, UUID(extra["job_id"])).status == "succeeded"
         failure = db.scalar(
-            sa.select(AiJob).where(AiJob.job_type == "classification", AiJob.status == "failed")
+            sa.select(AiJob).where(
+                AiJob.owner_user_id == state.owner.id,
+                AiJob.resource_id == UUID(extra["version_id"]),
+                AiJob.job_type == "classification",
+                AiJob.status == "failed",
+            )
         )
-        assert failure.failure_code == "model_test_required"
+        assert failure is not None and failure.failure_code == "model_test_required"
+        foreign = db.scalar(
+            sa.select(sa.func.count())
+            .select_from(AiJob)
+            .where(
+                AiJob.owner_user_id == state.outsider,
+                AiJob.job_type == "classification",
+                AiJob.status == "failed",
+                AiJob.failure_code == "model_not_configured",
+            )
+        )
+        assert foreign == 2
