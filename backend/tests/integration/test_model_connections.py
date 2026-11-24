@@ -879,9 +879,48 @@ def test_end_to_end_chat_summary_learning_and_failure_preserve_indexes(connectio
         files={"file": ("more.txt", b"more facts", "text/plain")},
     ).json()
     assert ingestion.run_once()
+    with state.factory.begin() as db:
+        # Another owner's already-failed jobs must stay in the database and must not
+        # satisfy this test's classification assertion.
+        now = datetime.now(UTC)
+        for _ in range(2):
+            db.add(
+                AiJob(
+                    id=uuid4(),
+                    owner_user_id=state.outsider,
+                    job_type="classification",
+                    resource_type="material_version",
+                    resource_id=uuid4(),
+                    status="failed",
+                    progress=0,
+                    payload={},
+                    attempt_count=1,
+                    max_attempts=3,
+                    fencing=0,
+                    failure_code="model_not_configured",
+                    next_run_at=now,
+                    finished_at=now,
+                )
+            )
     with state.factory() as db:
         assert db.get(AiJob, UUID(extra["job_id"])).status == "succeeded"
         failure = db.scalar(
-            sa.select(AiJob).where(AiJob.job_type == "classification", AiJob.status == "failed")
+            sa.select(AiJob).where(
+                AiJob.owner_user_id == state.owner.id,
+                AiJob.resource_id == UUID(extra["version_id"]),
+                AiJob.job_type == "classification",
+                AiJob.status == "failed",
+            )
         )
-        assert failure.failure_code == "model_test_required"
+        assert failure is not None and failure.failure_code == "model_test_required"
+        foreign = db.scalar(
+            sa.select(sa.func.count())
+            .select_from(AiJob)
+            .where(
+                AiJob.owner_user_id == state.outsider,
+                AiJob.job_type == "classification",
+                AiJob.status == "failed",
+                AiJob.failure_code == "model_not_configured",
+            )
+        )
+        assert foreign == 2
