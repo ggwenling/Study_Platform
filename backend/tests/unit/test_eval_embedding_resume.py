@@ -83,7 +83,7 @@ def test_provider_failures_keep_codes_and_drop_body_text():
     assert rate["failure_kind"] == "http_429" and rate["retryable"] is True
     assert rate["provider_code"] == "Throttling.RateQuota"
     assert rate["mapped_error_code"] == "model_quota_unavailable"
-    assert rate["request_id"] == REQUEST_ID and rate["retry_after_seconds"] == 2
+    assert rate["request_id"] == "unknown" and rate["retry_after_seconds"] == 2
     assert rate["retry_after_state"] == "wait" and rate["retry_after_present"] is True
     assert allocation["provider_code"] == "Throttling.AllocationQuota"
     assert allocation["retryable"] is False
@@ -96,6 +96,57 @@ def test_provider_failures_keep_codes_and_drop_body_text():
         [rate, allocation, server, timeout, connection, auth], ensure_ascii=False
     )
     assert SECRET not in rendered and BODY_TEXT not in rendered and "retry-after" not in rendered
+    assert REQUEST_ID not in rendered
+
+
+def test_freeform_codes_and_request_ids_are_not_stored():
+    short = "abc"
+    letters = "onlyletterskey"
+    uuid_key = "22222222-2222-4222-8222-222222222222"
+    nested = describe_model_failure(
+        APIStatusError(
+            BODY_TEXT,
+            response=httpx.Response(
+                429,
+                headers={"x-request-id": uuid_key, "retry-after": "9"},
+                request=httpx.Request("POST", "https://example.test/v1/embeddings"),
+            ),
+            body={
+                "code": short,
+                "request_id": uuid_key,
+                "error": {
+                    "message": f"{BODY_TEXT} {short} {letters} {uuid_key}",
+                    "code": "Throttling.AllocationQuota",
+                    "request_id": letters,
+                },
+            },
+        )
+    )
+    bare = describe_model_failure(_status(429, provider_code=short, retry_after="2", request_id=uuid_key))
+    alphabetic = describe_model_failure(
+        _status(503, provider_code=letters, retry_after=None, request_id=letters)
+    )
+    uuid_code = describe_model_failure(
+        _status(401, provider_code=uuid_key, retry_after=None, request_id=uuid_key)
+    )
+    direct = public_failure(
+        {
+            "failure_kind": "http_429",
+            "provider_code": short,
+            "request_id": uuid_key,
+            "error_code": "model_quota_unavailable",
+        }
+    )
+    assert nested["provider_code"] == "Throttling.AllocationQuota"
+    assert nested["retryable"] is False and nested["retry_after_seconds"] == 9
+    assert bare["provider_code"] == "unknown" and bare["retryable"] is True
+    assert alphabetic["provider_code"] == "unknown" and alphabetic["failure_kind"] == "http_5xx"
+    assert uuid_code["provider_code"] == "unknown" and uuid_code["failure_kind"] == "auth"
+    assert direct["provider_code"] == "unknown"
+    rendered = json.dumps([nested, bare, alphabetic, uuid_code, direct])
+    for secret in (short, letters, uuid_key, SECRET, BODY_TEXT):
+        assert secret not in rendered
+    assert all(item["request_id"] == "unknown" for item in (nested, bare, alphabetic, uuid_code, direct))
 
 
 def test_unparsed_retry_after_and_secret_request_id_are_not_copied():
@@ -171,7 +222,7 @@ def test_retry_after_stop_is_not_treated_as_a_missing_header():
         [oversized, huge, http_date, within, boundary, over_budget, invalid, missing, clamped]
     )
     assert AWS_KEY not in rendered and SECRET not in rendered
-    assert clamped["request_id"] == "unknown" and clamped["provider_code"] is None
+    assert clamped["request_id"] == "unknown" and clamped["provider_code"] == "unknown"
 
 
 def test_over_budget_retry_after_does_not_retry(tmp_path):

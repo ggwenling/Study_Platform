@@ -11,11 +11,10 @@ from openai import APIConnectionError, APITimeoutError
 from study_platform.core.errors import ApiError
 
 _CODE = re.compile(r"[A-Za-z][A-Za-z0-9._]{0,63}")
-_REQUEST_ID = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z",
-    re.IGNORECASE,
-)
 _DELAY_DIGITS = re.compile(r"[0-9]{1,10}\Z")
+# Exact official quota codes only. A short key or a UUID is not stored because it
+# happens to match a loose pattern. Comparison with a live credential is not done.
+_SAFE_PROVIDER_CODES = frozenset({"Throttling.RateQuota", "Throttling.AllocationQuota"})
 _CREDENTIAL = re.compile(
     r"(?i)(sk-|akia[0-9a-z]{16}|asia[0-9a-z]{16}|aiza[0-9a-z\-_]{10,}|"
     r"ghp_|github_pat_|xox[baprs]-|bearer\s|-----begin )"
@@ -23,6 +22,7 @@ _CREDENTIAL = re.compile(
 _CLASS_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,80}")
 _SECRET_WORD = ("secret", "token", "bearer", "apikey", "api_key", "password")
 _MAX_RETRY_AFTER_SECONDS = 30
+_REQUEST_ID_OMITTED = "unknown"
 _USAGE_KEYS = (
     "prompt_tokens",
     "completion_tokens",
@@ -53,7 +53,6 @@ _KINDS = {
     "unknown",
 }
 _RETRYABLE_KINDS = {"timeout", "connection", "http_5xx", "http_429"}
-_REQUEST_ID_HEADERS = ("x-request-id", "x-dashscope-request-id", "x-dashscope-requestid")
 
 
 def _credential_shaped(value):
@@ -71,13 +70,13 @@ def safe_code(value):
     return value
 
 
-def safe_request_id(value):
-    """Keep a UUID request id. Anything else, including credential-shaped text, is omitted."""
-    if not isinstance(value, str) or _REQUEST_ID.fullmatch(value) is None:
+def safe_provider_code(value):
+    """Keep an official quota code. Every other provider code is unknown."""
+    if value in _SAFE_PROVIDER_CODES:
+        return value
+    if value is None:
         return None
-    if _credential_shaped(value):
-        return None
-    return value.lower()
+    return "unknown"
 
 
 def allow_usage(usage):
@@ -106,38 +105,21 @@ def _http_status(exc):
 
 
 def _provider_code(exc):
+    """Read only the code slots. An official quota code wins; other text is not copied."""
+    values = []
     body = getattr(exc, "body", None)
     if isinstance(body, dict):
-        found = safe_code(body.get("code"))
-        if found:
-            return found
+        values.append(body.get("code"))
         error = body.get("error")
         if isinstance(error, dict):
-            found = safe_code(error.get("code"))
-            if found:
-                return found
-    return safe_code(getattr(exc, "code", None))
-
-
-def _request_id(exc):
-    found = safe_request_id(getattr(exc, "request_id", None))
-    if found:
-        return found
-    response = getattr(exc, "response", None)
-    headers = getattr(response, "headers", None)
-    if headers is not None:
-        for name in _REQUEST_ID_HEADERS:
-            found = safe_request_id(headers.get(name))
-            if found:
-                return found
-    body = getattr(exc, "body", None)
-    if isinstance(body, dict):
-        found = safe_request_id(body.get("request_id"))
-        if found:
-            return found
-        error = body.get("error")
-        if isinstance(error, dict):
-            return safe_request_id(error.get("request_id"))
+            values.append(error.get("code"))
+    if not isinstance(exc, ApiError):
+        values.append(getattr(exc, "code", None))
+    for value in values:
+        if value in _SAFE_PROVIDER_CODES:
+            return value
+    if any(value is not None for value in values):
+        return "unknown"
     return None
 
 
@@ -251,7 +233,7 @@ def classify_model_exception(exc):
         "exception_class": type(exc).__name__ if _CLASS_NAME.fullmatch(type(exc).__name__) else "Exception",
         "error_code": safe_code(exc.code) if isinstance(exc, ApiError) else None,
         "mapped_error_code": None,
-        "provider_code": _provider_code(exc),
+        "provider_code": safe_provider_code(_provider_code(exc)),
         "http_status": status,
         "failure_kind": kind if kind in _KINDS else "unknown",
         "usage_status": "unknown",
@@ -261,7 +243,7 @@ def classify_model_exception(exc):
         "retry_after_seconds": decision["seconds"],
         "retry_after_exceeds": decision["exceeds"],
         "retry_after_unparsed": decision["unparsed"],
-        "request_id": _request_id(exc),
+        "request_id": _REQUEST_ID_OMITTED,
         "attempts": None,
         "stage": None,
     }
@@ -295,7 +277,7 @@ def classify_local_exception(exc):
         "retry_after_seconds": None,
         "retry_after_exceeds": False,
         "retry_after_unparsed": False,
-        "request_id": None,
+        "request_id": _REQUEST_ID_OMITTED,
         "attempts": None,
         "stage": None,
     }
@@ -329,7 +311,6 @@ def public_failure(failure):
     status = failure.get("http_status")
     attempts = failure.get("attempts")
     present, state, seconds, exceeds, unparsed = _bounded_retry_fields(failure)
-    request_id = safe_request_id(failure.get("request_id")) or "unknown"
     cleaned = {
         "stage": failure.get("stage") if isinstance(failure.get("stage"), str) else None,
         "exception_class": failure.get("exception_class")
@@ -337,7 +318,7 @@ def public_failure(failure):
         else "Exception",
         "error_code": safe_code(failure.get("error_code")),
         "mapped_error_code": safe_code(failure.get("mapped_error_code")),
-        "provider_code": safe_code(failure.get("provider_code")),
+        "provider_code": safe_provider_code(failure.get("provider_code")),
         "http_status": status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else None,
         "failure_kind": kind if kind in _KINDS else "unknown",
         "usage_status": failure.get("usage_status") if failure.get("usage_status") in {"known", "unknown"} else "unknown",
@@ -347,7 +328,7 @@ def public_failure(failure):
         "retry_after_seconds": seconds,
         "retry_after_exceeds": exceeds,
         "retry_after_unparsed": unparsed,
-        "request_id": request_id,
+        "request_id": _REQUEST_ID_OMITTED,
         "attempts": attempts if type(attempts) is int and not isinstance(attempts, bool) and attempts >= 0 else None,
     }
     cleaned["retryable"] = retryable(cleaned)

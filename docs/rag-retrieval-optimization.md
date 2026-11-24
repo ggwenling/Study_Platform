@@ -162,11 +162,13 @@ CI 路径见 `.github/workflows/ci.yml`：Python 3.12、PostgreSQL 16、pgvector
 - 错误码指引区分 `Throttling.RateQuota` 和 `Throttling.AllocationQuota`，并建议降频、有界退避，同时看 HTTP、code、RequestID。所读错误页没有 Retry-After。响应里如果带了可解析的秒数且不超过 30 秒，才按它等待；解析不了或更长就停止，不把原始 header 写进日志。
 - 官方 RPM/TPM 不是本账号已经保证的额度。`Throttling.AllocationQuota` 不重试。
 
-失败报告是 `status=failed`。`failure` 只含阶段、异常类名、本库错误码、映射码、可校验的 provider code、HTTP 状态、失败种类、用量是否已知、是否可重试、Retry-After 是否存在、状态是 `absent` / `wait` / `stop`、0–30 秒的等待值、至多一个 UUID 请求 ID 和尝试次数。进程退出文本带上异常类名。文件缺失、权限、IO、JSON/编码解析和索引校验是 `local_missing` / `local_permission` / `local_io` / `local_parse` / `local_verification`，`mapped_error_code` 为空，不用 `provider_error` 收成模型错误。缺文件或坏的 `materials.json` 在创建库和语料嵌入之前就失败。
+失败报告是 `status=failed`。`failure` 只含阶段、异常类名、本库错误码、映射码、固定的官方额度码或 `unknown`、HTTP 状态、失败种类、用量是否已知、是否可重试、Retry-After 是否存在、状态是 `absent` / `wait` / `stop`、0–30 秒的等待值和尝试次数。`request_id` 固定写成 `unknown`，不保存原始值、前缀或后缀。进程退出文本带上异常类名。文件缺失、权限、IO、JSON/编码解析和索引校验是 `local_missing` / `local_permission` / `local_io` / `local_parse` / `local_verification`，`mapped_error_code` 为空，不用 `provider_error` 收成模型错误。缺文件或坏的 `materials.json` 在创建库和语料嵌入之前就失败。
 
-请求 ID 只保留标准 UUID。其他形状，包括凭证形文本，写成 `unknown`，不截断、不按少量前缀黑名单放行。provider code 若像常见凭证也不保留。不写自由文本、body 或 header。
+`provider_code` 只保留完全相等的 `Throttling.RateQuota` 和 `Throttling.AllocationQuota`。短码、全字母密钥、UUID、以及其他自由文本都写成 `unknown`，即使它嵌在 body 或 `error.code` 里。合法 UUID 不算“不是密钥”。记录路径不读取环境里的真实凭证来做比对。不写自由文本、body 或 header。
 
-Retry-After 在缩短字段之前决定。没有 header 的瞬时错误才按有界退避再试，最多再 2 次。可解析且不超过 30 秒才等待。大于 30 秒、未来 HTTP 日期超过 30 秒、过长整数、NaN/Inf、或 header 存在但无法解析，都是 `stop`，不能当成没有 header 立刻重试。官方 RPM/TPM 不是本账号额度。
+Retry-After 在缩短字段之前决定。没有 header 的瞬时错误才按有界退避再试。可解析且不超过 30 秒才等待。大于 30 秒、未来 HTTP 日期超过 30 秒、过长整数、NaN/Inf、或 header 存在但无法解析，都是 `stop`，不能当成没有 header 立刻重试。官方 RPM/TPM 不是本账号额度。
+
+语料嵌入这一层的上限是每个批次最多 3 次调用（1 次初次加 2 次额外尝试）。两次间隔里，已接受的 Retry-After 各自不超过 30 秒，所以这一层额外等待不超过 60 秒。没有 header 时这两次间隔是 0.5 秒和 1 秒。这是这个循环自己的上限，不是缩减账号额度或其他全局 budget。
 
 `seed_corpus` 把一次构建放在同一个事务里。`Indexed` 只是该篇的向量和行已经放进事务，不是可复用索引的提交点。后面的失败会整笔回滚，报告里 `indexed_documents` 为空、`index_retained` 为 false；已校验的批次只留在显式缓存的 journal 里。缓存或源文件副本不能当成完整索引。显式 `--retain-index` 要等发布校验通过才把 `succeeded` 设为 true 并留下库；没通过就删除本次新建的库，不泄漏未验证库。默认失败清理不变。只读会话参数和旧 manifest 可伪造 `corpus_verified` 仍是未关闭的边界，这次不宣称已经解决。
 
@@ -174,7 +176,7 @@ Retry-After 在缩短字段之前决定。没有 header 的瞬时错误才按有
 
 `--embedding-cache DIR` 是显式开关，默认关闭。目录必须是当前用户的 `0700` 目录，不能是符号链接。每个批次文件是 `0600`，原子替换。键绑定源文件 SHA256、`semantic-v3`、供应商 URL 指纹、模型、`<model>:1024`、维度和这 20 条输入的 SHA256。不匹配、损坏、`complete` 不是 true、或权限过宽的文件不当作命中，重新计算。缓存里是原文的向量，只留在本机。命中批次 `outcome=cached`、`calls=0`、`new_corpus_charge=false`，不记成这次的新语料费用。失败仍然只删除这次自己创建的库，不靠留下未验证的共享库。
 
-同一进程里，瞬时连接、超时、HTTP 5xx 和 `Throttling.RateQuota` / 未标明的 429 最多再试 2 次。400 一类的无效请求、维度/条数/NaN、认证失败和 `AllocationQuota` 不重试。产品客户端 `max_retries` 仍是 0。
+同一进程里，瞬时连接、超时、HTTP 5xx 和 `Throttling.RateQuota` / 未标明的 429 最多再试 2 次，加上初次调用一共 3 次。400 一类的无效请求、维度/条数/NaN、认证失败和 `AllocationQuota` 不重试。产品客户端 `max_retries` 仍是 0。上面的次数和等待是这一层的上限，不表示全局 budget 被缩小。
 
 ```bash
 uv run --no-sync study-eval-rag \
@@ -211,7 +213,7 @@ uv run --no-sync study-eval-rag \
     "http_status": 429,
     "provider_code": "Throttling.RateQuota",
     "mapped_error_code": "model_quota_unavailable",
-    "request_id": "11111111-1111-4111-8111-111111111111",
+    "request_id": "unknown",
     "retry_after_state": "wait",
     "usage_status": "unknown",
     "attempts": 3
@@ -229,4 +231,4 @@ uv run --no-sync study-eval-rag \
 
 本地 PostgreSQL 16.15 与 pgvector 0.6 上，手工向量已经核对：25 条可区分向量在显式 `top_k=24`、`candidate_k=48` 下返回前 24 名且顺序正确，默认仍是 10/20。复用答题走真实检索、改写和生成代码，只替换 HTTP transport；回答非空，`[S1]` 绑定第一条证据，查询嵌入、改写和生成的调用与 usage 都在，语料没有再次嵌入，索引行数不变。这不是真实 provider 的名次或费用。
 
-未验证：真实 provider 上这两次 `ApiError` 的 HTTP 状态和错误码；真实响应里有没有 Retry-After；请求 ID 的实际形状是否就是 UUID；真实向量的 top_k=24 名次；复用答题的真实查询/生成费用；缓存恢复一次完整 14636 块索引。这些都要等 D 再次复核之后，由父进程在 box 上做有限实测。本增量没有批准那次实测。
+未验证：真实 provider 上这两次 `ApiError` 的 HTTP 状态和错误码；真实响应里有没有 Retry-After；真实向量的 top_k=24 名次；复用答题的真实查询/生成费用；缓存恢复一次完整 14636 块索引。原始 request id 不再落盘，所以 ID 的真实形状不再决定记录是否安全。真实 provider 仍未调用。旧 manifest 可自填 `corpus_verified`，以及只读只是会话参数，这两项仍未关闭。
