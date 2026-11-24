@@ -29,6 +29,14 @@ from study_platform.persistence.models import (
     User,
 )
 from study_platform.services import chunking, ingestion
+from study_platform.services.eval_embedding_resume import (
+    CacheError,
+    CorpusEmbedError,
+    embed_document_batches,
+    prepare_embedding_cache,
+    query_costs,
+    summarize_corpus_usage,
+)
 from study_platform.services.eval_index_reuse import (
     IndexReuseError,
     assert_database_access,
@@ -51,7 +59,7 @@ from study_platform.services.eval_index_reuse import (
     write_package,
 )
 from study_platform.services.lexical import lexical_column_values
-from study_platform.services.models import embed_texts
+from study_platform.services.models import describe_model_failure, embed_texts
 from study_platform.services.rag_evaluation import (
     DEFAULT_METRIC_K,
     evaluate_case,
@@ -153,10 +161,17 @@ def render_source(material, target):
         image.save(target, format=formats[material["format"]])
 
 
-def seed_corpus(factory, materials):
+def seed_corpus(factory, materials, *, cache_dir=None):
     settings = get_settings()
     owner = uuid4()
-    scopes, documents, hashes, embedding_metrics, eval_owner = {}, {}, {}, [], owner
+    scopes, documents, hashes, embedding_metrics, indexed_documents, eval_owner = (
+        {},
+        {},
+        {},
+        [],
+        [],
+        owner,
+    )
     with factory.begin() as db:
         db.add(
             User(
@@ -223,15 +238,24 @@ def seed_corpus(factory, materials):
             ]
             if not parts:
                 raise ValueError("Evaluation source produced no text")
-            vectors = []
-            for offset in range(0, len(parts), 20):
-                metrics = {"document": item["id"]}
-                vectors.extend(
-                    embed_texts(
-                        [text for text, _ in parts[offset : offset + 20]], diagnostics=metrics
-                    )
+            try:
+                vectors, batch_metrics = embed_document_batches(
+                    [text for text, _ in parts],
+                    source_sha256=hashes[item["id"]],
+                    pipeline_profile=chunking.SEMANTIC_PROFILE,
+                    document_id=item["id"],
+                    cache_dir=cache_dir,
+                    embedding_model=settings.embedding_model,
+                    embedding_base_url=settings.embedding_base_url,
+                    embedding_dim=1024,
+                    embed=embed_texts,
                 )
-                embedding_metrics.append(metrics)
+            except CorpusEmbedError as exc:
+                embedding_metrics.extend(exc.metrics)
+                exc.metrics = list(embedding_metrics)
+                exc.indexed_documents = list(indexed_documents)
+                raise
+            embedding_metrics.extend(batch_metrics)
             index = IndexVersion(
                 id=uuid4(),
                 material_version_id=version.id,
@@ -268,8 +292,9 @@ def seed_corpus(factory, materials):
                 )
             scopes[item["knowledge_base"]]["index_version_ids"].append(str(index.id))
             documents[str(version.id)] = item["id"]
+            indexed_documents.append(item["id"])
             print(f"Indexed evaluation document {item['id']}", flush=True)
-    return scopes, documents, hashes, embedding_metrics, eval_owner
+    return scopes, documents, hashes, embedding_metrics, eval_owner, indexed_documents
 
 
 def write_json(path, value):
@@ -345,6 +370,42 @@ async def _run_cases(args, cases, output, report, scopes, documents, owner):
         print(f"Evaluated {number}/{len(cases)}: {case['id']}", flush=True)
 
 
+def evaluation_failure_text(failure):
+    parts = ["Evaluation failed"]
+    for key in (
+        "stage",
+        "failure_kind",
+        "http_status",
+        "error_code",
+        "mapped_error_code",
+        "provider_code",
+        "request_id",
+        "attempts",
+    ):
+        value = failure.get(key) if isinstance(failure, dict) else None
+        if value is not None:
+            parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+class EvaluationFailed(Exception):
+    def __init__(self, failure):
+        self.failure = failure if isinstance(failure, dict) else {}
+        super().__init__(evaluation_failure_text(self.failure))
+
+
+def _mark_failed(output, report, failure, *, stage):
+    from study_platform.services.model_failure import public_failure
+
+    body = dict(failure) if isinstance(failure, dict) else {}
+    body["stage"] = stage
+    report["status"] = "failed"
+    report["failure"] = public_failure(body)
+    report["corpus_usage"] = summarize_corpus_usage(report.get("corpus_embedding") or [])
+    write_json(output / "report.json", report)
+    return report["failure"]
+
+
 def _finish(args, output, report, cleanup_message):
     report["status"] = "completed"
     write_json(output / "report.json", report)
@@ -406,58 +467,25 @@ async def _reuse_live(args, cases, output, reuse_path, retain, export_path):
     shared = _shared_test_database()
     report = _base_report(args, cases)
     report["corpus_embedding"] = []
+    report["indexed_documents"] = []
     report["index_reuse"] = {"corpus_embedding_calls": 0, "binding": manifest["binding"]}
     write_json(output / "report.json", report)
-    if records is None:
-        with retained_database(
-            manifest, application_database=application_database, shared_test_database=shared
-        ) as factory:
-            snapshot = read_snapshot(factory)
-            assert_database_access(
-                snapshot, application_database=application_database, shared_test_database=shared
-            )
-            verify_retained_identity(manifest, snapshot)
-            verify_index_contents(
-                manifest,
-                snapshot,
-                embedding_model=settings.embedding_model,
-                schema_revision=code_schema_revision(),
-            )
-            await _run_cases(
-                args,
-                cases,
-                output,
-                report,
-                scopes_by_name(manifest["scopes"]),
-                manifest["documents"],
-                UUID(manifest["eval_owner_id"]),
-            )
-            if export_path:
-                exported_records = read_export_records(factory, manifest)
-                exported = dict(manifest, binding="export")
-                validate_records(exported, exported_records)
-                write_package(export_path, exported, exported_records)
-            report["index_reuse"]["database_name"] = snapshot["database_name"]
-        message = (
-            f"Evaluation complete; reused retained index {manifest['database_name']}. "
-            f"Corpus embedding skipped. Review report: {output}"
-        )
-    else:
-        with isolated_database(output, retain=retain) as factory:
-            import_index(factory, manifest, records)
-            snapshot = read_snapshot(factory)
-            if snapshot["schema_revision"] != code_schema_revision():
-                raise IndexReuseError("schema revision")
-            assert_database_access(
-                snapshot, application_database=application_database, shared_test_database=shared
-            )
-            verify_index_contents(
-                manifest,
-                snapshot,
-                embedding_model=settings.embedding_model,
-                schema_revision=code_schema_revision(),
-            )
-            with read_only_retrieval(os.environ["DATABASE_URL"]):
+    try:
+        if records is None:
+            with retained_database(
+                manifest, application_database=application_database, shared_test_database=shared
+            ) as factory:
+                snapshot = read_snapshot(factory)
+                assert_database_access(
+                    snapshot, application_database=application_database, shared_test_database=shared
+                )
+                verify_retained_identity(manifest, snapshot)
+                verify_index_contents(
+                    manifest,
+                    snapshot,
+                    embedding_model=settings.embedding_model,
+                    schema_revision=code_schema_revision(),
+                )
                 await _run_cases(
                     args,
                     cases,
@@ -467,57 +495,132 @@ async def _reuse_live(args, cases, output, reuse_path, retain, export_path):
                     manifest["documents"],
                     UUID(manifest["eval_owner_id"]),
                 )
-            if retain or export_path:
-                _publish_index(
-                    factory,
-                    args,
-                    output,
-                    scopes_by_name(manifest["scopes"]),
-                    manifest["documents"],
-                    manifest["material_hashes"],
-                    retain=retain,
-                    export_path=export_path,
-                    application_database=application_database,
-                    shared=shared,
+                if export_path:
+                    exported_records = read_export_records(factory, manifest)
+                    exported = dict(manifest, binding="export")
+                    validate_records(exported, exported_records)
+                    write_package(export_path, exported, exported_records)
+                report["index_reuse"]["database_name"] = snapshot["database_name"]
+            message = (
+                f"Evaluation complete; reused retained index {manifest['database_name']}. "
+                f"Corpus embedding skipped. Review report: {output}"
+            )
+        else:
+            with isolated_database(output, retain=retain) as factory:
+                import_index(factory, manifest, records)
+                snapshot = read_snapshot(factory)
+                if snapshot["schema_revision"] != code_schema_revision():
+                    raise IndexReuseError("schema revision")
+                assert_database_access(
+                    snapshot, application_database=application_database, shared_test_database=shared
                 )
-            report["index_reuse"]["database_name"] = snapshot["database_name"]
-        message = (
-            "Evaluation complete; imported index without corpus embedding"
-            + (" and retained it." if retain else "; imported database removed.")
-            + f" Review report: {output}"
-        )
-    _finish(args, output, report, message)
+                verify_index_contents(
+                    manifest,
+                    snapshot,
+                    embedding_model=settings.embedding_model,
+                    schema_revision=code_schema_revision(),
+                )
+                with read_only_retrieval(os.environ["DATABASE_URL"]):
+                    await _run_cases(
+                        args,
+                        cases,
+                        output,
+                        report,
+                        scopes_by_name(manifest["scopes"]),
+                        manifest["documents"],
+                        UUID(manifest["eval_owner_id"]),
+                    )
+                if retain or export_path:
+                    _publish_index(
+                        factory,
+                        args,
+                        output,
+                        scopes_by_name(manifest["scopes"]),
+                        manifest["documents"],
+                        manifest["material_hashes"],
+                        retain=retain,
+                        export_path=export_path,
+                        application_database=application_database,
+                        shared=shared,
+                    )
+                report["index_reuse"]["database_name"] = snapshot["database_name"]
+            message = (
+                "Evaluation complete; imported index without corpus embedding"
+                + (" and retained it." if retain else "; imported database removed.")
+                + f" Review report: {output}"
+            )
+        report["indexed_documents"] = []
+        report["query_costs"] = query_costs(report["cases"])
+        report["corpus_usage"] = summarize_corpus_usage(report.get("corpus_embedding") or [])
+        _finish(args, output, report, message)
+    except EvaluationFailed:
+        raise
+    except Exception as exc:
+        failure = exc.failure if isinstance(exc, CorpusEmbedError) else describe_model_failure(exc)
+        _mark_failed(output, report, failure, stage="reuse")
+        raise EvaluationFailed(report["failure"]) from None
 
 
 async def live_evaluation(args, cases, materials, output):
     reuse_path = getattr(args, "reuse_index", None)
     retain = bool(getattr(args, "retain_index", False))
     export_path = getattr(args, "export_index", None)
+    cache_dir = getattr(args, "embedding_cache", None)
     _strategy_ready(args.strategy)
     if reuse_path:
         await _reuse_live(args, cases, output, reuse_path, retain, export_path)
         return
+    if cache_dir is not None:
+        try:
+            prepare_embedding_cache(cache_dir)
+        except CacheError as exc:
+            report = _base_report(args, cases)
+            report["corpus_embedding"] = []
+            report["indexed_documents"] = []
+            _mark_failed(output, report, exc.failure, stage="embedding_cache")
+            raise EvaluationFailed(report["failure"]) from None
     application_database = _application_database() if retain or export_path else None
     shared = _shared_test_database() if retain or export_path else None
     with isolated_database(output, retain=retain) as factory:
         report = _base_report(args, cases)
         write_json(output / "report.json", report)
-        scopes, documents, hashes, corpus_embedding, eval_owner = seed_corpus(factory, materials)
-        report.update(source_hashes=hashes, corpus_embedding=corpus_embedding)
-        await _run_cases(args, cases, output, report, scopes, documents, eval_owner)
-        if retain or export_path:
-            _publish_index(
-                factory,
-                args,
-                output,
-                scopes,
-                documents,
-                hashes,
-                retain=retain,
-                export_path=export_path,
-                application_database=application_database,
-                shared=shared,
+        try:
+            scopes, documents, hashes, corpus_embedding, eval_owner, indexed = seed_corpus(
+                factory, materials, cache_dir=cache_dir
             )
+            report.update(
+                source_hashes=hashes,
+                corpus_embedding=corpus_embedding,
+                indexed_documents=indexed,
+                corpus_usage=summarize_corpus_usage(corpus_embedding),
+            )
+            await _run_cases(args, cases, output, report, scopes, documents, eval_owner)
+            report["query_costs"] = query_costs(report["cases"])
+            if retain or export_path:
+                _publish_index(
+                    factory,
+                    args,
+                    output,
+                    scopes,
+                    documents,
+                    hashes,
+                    retain=retain,
+                    export_path=export_path,
+                    application_database=application_database,
+                    shared=shared,
+                )
+        except EvaluationFailed:
+            raise
+        except CorpusEmbedError as exc:
+            report["corpus_embedding"] = list(exc.metrics)
+            report["indexed_documents"] = list(exc.indexed_documents)
+            _mark_failed(output, report, exc.failure, stage="corpus_embedding")
+            raise EvaluationFailed(report["failure"]) from None
+        except Exception as exc:
+            _mark_failed(output, report, describe_model_failure(exc), stage="evaluation")
+            raise EvaluationFailed(report["failure"]) from None
+    report["query_costs"] = query_costs(report["cases"])
+    report["corpus_usage"] = summarize_corpus_usage(report.get("corpus_embedding") or [])
     cleanup = (
         f"Evaluation complete; isolated database retained. Review report: {output}"
         if retain
@@ -575,7 +678,15 @@ def main():
     parser.add_argument(
         "--reuse-index",
         type=Path,
-        help="reuse a retained manifest or an export package; skips corpus embedding",
+        help=(
+            "reuse a retained manifest or an export package; skips corpus embedding and does not "
+            "write that index. Omit --retrieval-only to generate answers"
+        ),
+    )
+    parser.add_argument(
+        "--embedding-cache",
+        type=Path,
+        help="opt-in private directory for resumable corpus batches; vectors are sensitive and local",
     )
     args = parser.parse_args()
     try:
@@ -599,10 +710,8 @@ def main():
                 f"/ {chunks} chunks. No database or provider calls."
             )
             return
-        if (args.retain_index or args.export_index) and not args.live:
-            raise ValueError("--retain-index and --export-index require --live")
-        if args.live and args.reuse_index and not args.retrieval_only:
-            raise ValueError("Reused indexes are read-only; pass --retrieval-only")
+        if (args.retain_index or args.export_index or args.embedding_cache) and not args.live:
+            raise ValueError("--retain-index, --export-index and --embedding-cache require --live")
         if any(k <= 0 for k in args.metric_k):
             raise ValueError("--metric-k values must be positive integers")
         args.metric_k = sorted(set(args.metric_k))
@@ -623,6 +732,8 @@ def main():
         raise SystemExit(
             "Choose a new --output directory; existing evaluation runs are never overwritten"
         ) from None
+    except EvaluationFailed as error:
+        raise SystemExit(evaluation_failure_text(error.failure)) from None
     except Exception as error:
         # Do not print SQL parameters, credentials, prompts or private document text.
         raise SystemExit(

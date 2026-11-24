@@ -76,7 +76,7 @@ def test_incomplete_comparisons_never_pass_even_with_all_existing_rows_reviewed(
     assert not gate["complete_comparison"] and not gate["eligible_for_default"]
 
 
-def test_interrupted_live_evaluation_keeps_planned_questions_and_running_status(
+def test_interrupted_live_evaluation_keeps_planned_questions_and_marks_failed(
     tmp_path, monkeypatch
 ):
     dataset = tmp_path / "facts.jsonl"
@@ -91,20 +91,25 @@ def test_interrupted_live_evaluation_keeps_planned_questions_and_running_status(
     cases = [{"id": n, "knowledge_base": "kb"} for n in ("first", "second")]
     monkeypatch.setattr(evaluate_rag, "isolated_database", lambda *_args, **_kwargs: nullcontext(None))
     monkeypatch.setattr(
-        evaluate_rag, "seed_corpus", lambda *_: ({"kb": {}}, {}, {}, [], uuid4())
+        evaluate_rag,
+        "seed_corpus",
+        lambda *_args, **_kwargs: ({"kb": {}}, {}, {}, [], uuid4(), ["notes"]),
     )
 
     async def eval_case(case, *_args, **_kwargs):
         if case["id"] == "second":
-            raise RuntimeError("interrupted")
+            raise RuntimeError("interrupted secret sk-SUPERSECRETVALUE")
         return [{"id": "first", "strategy": name} for name in ("baseline", "rewrite")]
 
     monkeypatch.setattr(evaluate_rag, "evaluate_case", eval_case)
-    with pytest.raises(RuntimeError, match="interrupted"):
+    with pytest.raises(evaluate_rag.EvaluationFailed):
         asyncio.run(evaluate_rag.live_evaluation(args, cases, [], tmp_path))
     saved = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
-    assert saved["status"] == "running" and saved["expected_case_ids"] == ["first", "second"]
+    assert saved["status"] == "failed" and saved["expected_case_ids"] == ["first", "second"]
+    assert saved["failure"]["stage"] == "evaluation"
+    assert saved["failure"]["exception_class"] == "RuntimeError"
     assert [r["id"] for r in saved["cases"]] == ["first", "first"]
+    assert "sk-SUPERSECRETVALUE" not in json.dumps(saved) and "interrupted" not in json.dumps(saved)
 
 
 @pytest.mark.parametrize("quote", ["……", ["有效依据", "。？！"]])

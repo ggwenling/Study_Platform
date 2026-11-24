@@ -5,16 +5,21 @@ does not read a production DSN. Set RUN_DB_TESTS=1 and point TEST_DATABASE_URL
 at a disposable PostgreSQL *_test database whose role can create databases.
 """
 
+import asyncio
 import hashlib
+import json
 import os
 import sys
+from contextlib import contextmanager
 from uuid import uuid4
 
 import dotenv
+import httpx
 import pytest
 import sqlalchemy as sa
+from openai import APIStatusError
 
-from study_platform.cli.evaluate_rag import isolated_database
+from study_platform.cli.evaluate_rag import EvaluationFailed, isolated_database, live_evaluation
 from study_platform.core.config import Settings, get_settings
 from study_platform.services.chunking import SEMANTIC_PROFILE
 from study_platform.services.eval_index_reuse import (
@@ -354,3 +359,132 @@ def test_owner_and_name_boundaries_reject_before_reuse():
     finally:
         if _exists(foreign):
             _drop(foreign)
+
+
+def _batch_vector(text):
+    digest = hashlib.sha256(text.encode()).digest()
+    return [((digest[index % len(digest)] + index) % 251) / 251 or 0.1 for index in range(1024)]
+
+
+def _embeddings(database_name):
+    _raw, url = _url()
+    engine = sa.create_engine(url.set(database=database_name), connect_args={"connect_timeout": 5})
+    try:
+        with engine.connect() as connection:
+            rows = connection.execute(
+                sa.text(
+                    "SELECT c.text_sha256, e.embedding::text "
+                    "FROM study.material_chunks AS c "
+                    "JOIN study.chunk_embeddings AS e ON e.chunk_id = c.id "
+                    "ORDER BY c.ordinal"
+                )
+            ).all()
+        return [(row[0], row[1]) for row in rows]
+    finally:
+        engine.dispose()
+
+
+def test_resume_matches_a_clean_index_and_failure_drops_only_this_database(tmp_path, monkeypatch):
+    """Deterministic vectors only. No embedding provider is contacted."""
+    secret = "sk-SUPERSECRETVALUE"
+    lines = [f"span {index} unique" for index in range(25)]
+    materials = [
+        {
+            "id": "rfc-9110",
+            "knowledge_base": "A",
+            "title": "rfc",
+            "format": "txt",
+            "sections": lines,
+        }
+    ]
+    dataset = tmp_path / "facts.jsonl"
+    dataset.write_text("{}\n", encoding="utf-8")
+    calls = []
+    fail_short = {"on": True}
+
+    def embed(texts, diagnostics=None, context=None):
+        calls.append(list(texts))
+        if fail_short["on"] and len(texts) < 20:
+            request = httpx.Request("POST", "https://example.test/v1/embeddings")
+            response = httpx.Response(429, headers={"x-request-id": "req-12345678"}, request=request)
+            raise APIStatusError(
+                secret,
+                response=response,
+                body={"error": {"message": secret, "code": "Throttling.AllocationQuota"}},
+            )
+        if diagnostics is not None:
+            diagnostics["usage"] = {"total_tokens": len(texts), "api_key": secret}
+            diagnostics["usage_status"] = "known"
+            diagnostics["elapsed_ms"] = 1
+        return [_batch_vector(text) for text in texts]
+
+    monkeypatch.setattr("study_platform.cli.evaluate_rag.embed_texts", embed)
+    seen = []
+    real = isolated_database
+
+    @contextmanager
+    def spy(output, *, retain=False):
+        with real(output, retain=retain) as factory:
+            with factory() as db:
+                seen.append(db.scalar(sa.text("SELECT current_database()")))
+            yield factory
+
+    monkeypatch.setattr("study_platform.cli.evaluate_rag.isolated_database", spy)
+    shared = _url()[1].database
+    cache = tmp_path / "cache"
+    failed_out = tmp_path / "failed"
+    failed_out.mkdir()
+    args = type(
+        "Args",
+        (),
+        {
+            "strategy": "baseline",
+            "dataset": dataset,
+            "retrieval_only": True,
+            "metric_k": [10],
+            "metrics_format": "json",
+            "reuse_index": None,
+            "retain_index": True,
+            "export_index": None,
+            "embedding_cache": cache,
+        },
+    )()
+    kept = []
+    try:
+        with pytest.raises(EvaluationFailed):
+            asyncio.run(live_evaluation(args, [], materials, failed_out))
+        assert seen and not _exists(seen[0])
+        assert _exists(shared)
+        report = json.loads((failed_out / "report.json").read_text(encoding="utf-8"))
+        assert report["status"] == "failed"
+        assert report["indexed_documents"] == []
+        assert [row["outcome"] for row in report["corpus_embedding"]] == ["embedded", "failed"]
+        assert report["corpus_usage"]["failed_cost"] == "unknown"
+        assert report["corpus_usage"]["currency_total"] == "unknown"
+        assert secret not in json.dumps(report)
+        assert calls[0] and len(calls[0]) == 20
+        fail_short["on"] = False
+        calls.clear()
+        resumed_out = tmp_path / "resumed"
+        resumed_out.mkdir()
+        asyncio.run(live_evaluation(args, [], materials, resumed_out))
+        kept.append(seen[-1])
+        assert _exists(seen[-1])
+        assert calls and calls[0] == lines[20:]
+        resumed_report = json.loads((resumed_out / "report.json").read_text(encoding="utf-8"))
+        assert resumed_report["indexed_documents"] == ["rfc-9110"]
+        assert resumed_report["corpus_embedding"][0]["new_corpus_charge"] is False
+        clean_out = tmp_path / "clean"
+        clean_out.mkdir()
+        args.embedding_cache = tmp_path / "other-cache"
+        calls.clear()
+        asyncio.run(live_evaluation(args, [], materials, clean_out))
+        kept.append(seen[-1])
+        assert _exists(kept[-1])
+        assert len(calls) == 2
+        assert _embeddings(kept[0]) == _embeddings(kept[1])
+        assert secret not in json.dumps(resumed_report)
+    finally:
+        for name in kept:
+            if _exists(name):
+                _drop(name)

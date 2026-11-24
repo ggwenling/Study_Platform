@@ -8,7 +8,7 @@
 
 - `--retain-index`：成功结束后留下该测试库，并在输出目录写 `index_manifest.json`。失败仍删除。
 - `--export-index DIR`：写出不含连接串和密钥的包（`manifest.json`、`records.jsonl`、`package.sha256`）。向量来自已经写入的行，不再次嵌入。
-- `--reuse-index PATH`：跳过语料嵌入。目录包会导入到新的 `study_eval_*_test`；单独的 manifest 会连回它记录的那个库，连接参数带 `default_transaction_read_only=on`。复用必须带 `--retrieval-only`。查询向量仍由既有 `evaluate_case` 在获批的 `--live` 运行里生成；本轮没有执行那一步。
+- `--reuse-index PATH`：跳过语料嵌入，也不写入被复用的索引库。目录包会导入到新的 `study_eval_*_test`；单独的 manifest 会连回它记录的那个库，连接参数带 `default_transaction_read_only=on`。`--live --reuse-index` 可以生成回答；加上 `--retrieval-only` 则仍然只检索。查询嵌入、改写和生成的用量记在 `query_costs`，与语料嵌入分开。本增量没有调用付费接口。
 
 复用前要同时满足：库名匹配 `study_eval_<32 hex>_test`；当前角色拥有该库；库名不等于应用库，也不等于 `TEST_DATABASE_URL` 指向的共享测试库；manifest 版本、schema revision、知识库、所有者、资料哈希、索引版本、embedding 模型、1024 维与库内快照一致。不一致就拒绝，不检索。导出目录的 `package.sha256` 不符，或清单出现凭据字段，也拒绝。`binding=database` 的单独 manifest 没有包哈希，不核对 `package.sha256`。
 
@@ -119,7 +119,7 @@ uv run --no-sync study-eval-rag \
 
 成功后输出目录有 `index_manifest.json`，`binding` 为 `database`。导出目录有 `manifest.json`、`records.jsonl` 和 `package.sha256`，`binding` 为 `export`。失败仍删除本次新建的库。默认不加 `--retain-index` 时，成功也会删除。
 
-之后的只读复用跳过语料嵌入。查询嵌入仍会在 `--live` 里发生。必须同时带 `--retrieval-only`。`--strategy hybrid` 或 `hybrid_compare` 在 `RETRIEVAL_LEXICAL_WEIGHT` 为 0 时直接拒绝。
+之后的复用跳过语料嵌入，也不往被测索引里写。查询嵌入、改写和生成仍会在不带 `--retrieval-only` 的 `--live` 里发生，用量见报告里的 `query_costs`，不是 `corpus_embedding`。`--retrieval-only` 仍然只检索。`--strategy hybrid` 或 `hybrid_compare` 在 `RETRIEVAL_LEXICAL_WEIGHT` 为 0 时直接拒绝。
 
 ```bash
 uv run --no-sync study-eval-rag \
@@ -146,3 +146,75 @@ uv run --no-sync study-eval-rag \
 离线 Evaluation V2 的全库结构结论另有契约：`source=corpus_manifest`、`universe=corpus`、`complete` 与 `candidate_complete` 都为 true，`chunk_count` 和 `documents` 与行一致。仅有 `complete: true` 不是全库证明。schema 是 `evaluation-v2.3`。
 
 CI 路径见 `.github/workflows/ci.yml`：Python 3.12、PostgreSQL 16、pgvector 镜像，`tests/ci_bootstrap_postgres.py` 之后跑 Ruff 和全量 Pytest。数据库集成需要 `RUN_DB_TESTS=1` 和上面的 `TEST_DATABASE_URL`。本地最小验证是 `tests/integration/test_eval_index_reuse_db.py`：保留、只读复用、schema 不符拒绝、属主和库名边界、失败后库被删除。向量是手工 1024 维，不重建 14636 块，不调用模型。
+
+## 评测嵌入失败与续跑
+
+候选基线是 `783e680b3682058786a4f6511ea6010b01a42584`。这次只改评测 CLI 的失败记录、显式复用答题和可选嵌入缓存。不改模型参数、检索、切块、gold、默认 top_k、词法权重、产品超时，也不改评测 V2 或生产 chat。释放门禁仍是 false。`783e680` 里的 worker / UX 修复不在这次增量里重做。
+
+`ac8d8bf` 上两次有限 50 题构建都在语料嵌入阶段以 `Evaluation failed (ApiError)` 结束。两份日志只有 955 和 907 字节，没有 HTTP 状态、错误码、Retry-After、RequestID 或批次号。`provider_error` 原本会映射 `model_auth_failed`、`model_quota_unavailable`、`model_service_error`、`model_timeout`、`model_response_invalid`，旧 CLI 把这些也吞掉，报告停在 `status=running`。这不能据此断定是超时、429 还是长文本异常。失败后的小探测 HTTP 200 也不能排除账户级间歇 429。
+
+第一次最后一行 `Indexed` 是 nist-186-5；rfc-9110 源文件已经复制（502941 字节）但没有 `Indexed`。第二次最后 `Indexed` 是 nist-202；nist-186-4 已经复制但没有 `Indexed`。复制源文件不是成功嵌入批次。只有返回并校验通过的向量批次才记入 `corpus_embedding`，整篇写完才进入 `indexed_documents`。
+
+官方材料（父进程已核对，本增量未再付费请求）：
+
+- [OpenAI 兼容 Embedding](https://help.aliyun.com/en/model-studio/embedding-interfaces-compatible-with-openai) 与 [qwen3.7-text-embedding-flash](https://help.aliyun.com/en/model-studio/qwen3-7-text-embedding-flash)：flash 单次最多 20 行，和产品批次一致，不改批次大小。
+- 上述 embedding 页没有服务端 timeout 秒数。因此不改 `model_timeout_seconds`（仍是 60），也不把 `ApiError` 归因成超时。
+- 错误码指引区分 `Throttling.RateQuota` 和 `Throttling.AllocationQuota`，并建议降频、有界退避，同时看 HTTP、code、RequestID。所读错误页没有 Retry-After。响应里如果带了可解析的秒数且不超过 30 秒，才按它等待；解析不了或更长就停止，不把原始 header 写进日志。
+- 官方 RPM/TPM 不是本账号已经保证的额度。`Throttling.AllocationQuota` 不重试。
+
+失败报告是 `status=failed`。`failure` 只含阶段、异常类名、本库错误码、映射码、可校验的 provider code、HTTP 状态、失败种类、用量是否已知、是否可重试、Retry-After 秒数、至多 64 字符的请求 ID 和尝试次数。不写 provider 自由文本、响应 body 或 header。请求 ID 必须匹配 `[A-Za-z0-9-]{8,64}`，并且不像密钥；否则记空。失败批次的 `usage_status` 为 `unknown` 时，费用就是 unknown，不能写成 0。`currency_total` 保持 `unknown`。探测账本里的小数不能当成这两次语料嵌入的总费用。
+
+`--embedding-cache DIR` 是显式开关，默认关闭。目录必须是当前用户的 `0700` 目录，不能是符号链接。每个批次文件是 `0600`，原子替换。键绑定源文件 SHA256、`semantic-v3`、供应商 URL 指纹、模型、`<model>:1024`、维度和这 20 条输入的 SHA256。不匹配、损坏、`complete` 不是 true、或权限过宽的文件不当作命中，重新计算。缓存里是原文的向量，只留在本机。命中批次 `outcome=cached`、`calls=0`、`new_corpus_charge=false`，不记成这次的新语料费用。失败仍然只删除这次自己创建的库，不靠留下未验证的共享库。
+
+同一进程里，瞬时连接、超时、HTTP 5xx 和 `Throttling.RateQuota` / 未标明的 429 最多再试 2 次。400 一类的无效请求、维度/条数/NaN、认证失败和 `AllocationQuota` 不重试。产品客户端 `max_retries` 仍是 0。
+
+```bash
+uv run --no-sync study-eval-rag \
+  --dataset <facts.jsonl> \
+  --strategy compare \
+  --live \
+  --embedding-cache <private-cache-dir> \
+  --output <new-output-dir>
+```
+
+中断后用同一个 `--embedding-cache` 再跑一次。已核对的批次不再调用嵌入；缺的批次才调用。一次成功构建并 `--retain-index` 或 `--export-index` 之后，答题复用是：
+
+```bash
+uv run --no-sync study-eval-rag \
+  --dataset <同一 facts.jsonl> \
+  --strategy compare \
+  --live \
+  --reuse-index <output-dir>/index_manifest.json \
+  --output <另一个新目录>
+```
+
+这里不要再加 `--retrieval-only`，除非这次只想检索。报告里的 `index_reuse.corpus_embedding_calls` 应为 0。
+
+费用日志示例（数字是单测夹具，不是那两次失败的真实账单）：
+
+```json
+{
+  "status": "failed",
+  "indexed_documents": ["nist-186-5"],
+  "failure": {
+    "stage": "corpus_embedding",
+    "failure_kind": "http_429",
+    "http_status": 429,
+    "provider_code": "Throttling.RateQuota",
+    "mapped_error_code": "model_quota_unavailable",
+    "request_id": "req-12345678",
+    "usage_status": "unknown",
+    "attempts": 3
+  },
+  "corpus_usage": {
+    "accepted_new_tokens": 120,
+    "accepted_new_tokens_excludes_failures": true,
+    "cached_new_corpus_charge": false,
+    "failed_cost": "unknown",
+    "currency_total": "unknown",
+    "partial": true
+  }
+}
+```
+
+未验证：真实 provider 上这两次 `ApiError` 的 HTTP 状态和错误码；Retry-After 是否出现；请求 ID 的实际形状；top_k=24 的向量名次；复用答题的查询嵌入和生成费用；缓存恢复一次完整 14636 块索引。这些都要等 D 复核之后，由父进程在 box 上做有限实测。本增量没有批准那次实测。
