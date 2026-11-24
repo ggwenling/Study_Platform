@@ -137,6 +137,110 @@ def test_worker_publishes_text_and_vector(state):
         )
 
 
+_WRAPPED = (
+    "A cache that does not have a clock available MUST NOT use stored\n"
+    "responses without revalidating them upon every use.\n"
+)
+
+
+def test_explicit_semantic_v4_keeps_a_wrapped_sentence_and_its_lines(state):
+    factory, job_id, version_id, _, _ = state
+    source_path(version_id).write_text(_WRAPPED, encoding="utf-8")
+    with factory() as db:
+        db.get(AiJob, job_id).payload = {"pipeline_profile": "semantic-v4"}
+        db.commit()
+    assert ingestion.run_once()
+    with factory() as db:
+        assert db.scalar(
+            sa.select(IndexVersion.pipeline_profile).where(
+                IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True),
+            )
+        ) == "semantic-v4"
+        section = db.scalar(
+            sa.select(MaterialSection).where(MaterialSection.material_version_id == version_id)
+        )
+        chunk = db.scalar(
+            sa.select(MaterialChunk).where(MaterialChunk.material_version_id == version_id)
+        )
+        assert section.locator == {"start_line": 1, "end_line": 2}
+        assert "MUST NOT use stored" in section.text and "revalidating" in section.text
+        assert "MUST NOT use stored" in chunk.text and "revalidating" in chunk.text
+        assert section.text[chunk.locator["start_char"]:chunk.locator["end_char"]] == chunk.text
+        assert chunk.locator["start_line"] == 1 and chunk.locator["end_line"] == 2
+
+
+def test_unknown_pipeline_profile_publishes_no_index(state):
+    factory, job_id, version_id, _, _ = state
+    with factory() as db:
+        db.get(AiJob, job_id).payload = {"pipeline_profile": "semantic-v5"}
+        db.commit()
+    assert ingestion.run_once()
+    with factory() as db:
+        job = db.get(AiJob, job_id)
+        assert job.status == "failed"
+        assert job.failure_code == "pipeline_profile_unknown"
+        assert db.scalar(
+            sa.select(IndexVersion.id).where(IndexVersion.material_version_id == version_id)
+        ) is None
+        assert db.get(MaterialVersion, version_id).parse_status == "failed"
+
+
+def test_rechunk_keeps_semantic_v3_line_sections(state, monkeypatch):
+    factory, _, version_id, _, kb_id = state
+    monkeypatch.setattr(reindex, "session_factory", lambda: factory)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **__: nullcontext())
+    monkeypatch.setattr(ingestion.classification, "enqueue", lambda *_: None)
+    monkeypatch.setattr(reindex, "embed_texts", lambda texts, **_: [[0.1] * 1024 for _ in texts])
+    source_path(version_id).write_text(_WRAPPED, encoding="utf-8")
+    assert ingestion.run_once()
+    with factory() as db:
+        assert db.scalar(sa.select(sa.func.count()).select_from(MaterialChunk).where(
+            MaterialChunk.material_version_id == version_id
+        )) == 2
+        reindex.enqueue(db, db.get(KnowledgeBase, kb_id, with_for_update=True), None, True)
+        claimed = job_queue.claim(db, ("reindex",))
+    assert claimed is not None and ingestion.run_once(claimed)
+    with factory() as db:
+        active = db.scalars(sa.select(MaterialChunk.text).join(IndexVersion).where(
+            MaterialChunk.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        ).order_by(MaterialChunk.ordinal)).all()
+        profile = db.scalar(sa.select(IndexVersion.pipeline_profile).where(
+            IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        ))
+    assert profile == "semantic-v3"
+    assert active == [
+        "A cache that does not have a clock available MUST NOT use stored",
+        "responses without revalidating them upon every use.",
+    ]
+
+
+def test_rechunk_of_semantic_v4_stays_on_that_profile(state, monkeypatch):
+    factory, job_id, version_id, _, kb_id = state
+    monkeypatch.setattr(reindex, "session_factory", lambda: factory)
+    monkeypatch.setattr(model_connections, "task", lambda *_, **__: nullcontext())
+    monkeypatch.setattr(ingestion.classification, "enqueue", lambda *_: None)
+    monkeypatch.setattr(reindex, "embed_texts", lambda texts, **_: [[0.1] * 1024 for _ in texts])
+    source_path(version_id).write_text(_WRAPPED, encoding="utf-8")
+    with factory() as db:
+        db.get(AiJob, job_id).payload = {"pipeline_profile": "semantic-v4"}
+        db.commit()
+    assert ingestion.run_once()
+    with factory() as db:
+        reindex.enqueue(db, db.get(KnowledgeBase, kb_id, with_for_update=True), None, True)
+        claimed = job_queue.claim(db, ("reindex",))
+    assert claimed is not None and ingestion.run_once(claimed)
+    with factory() as db:
+        active = db.scalars(sa.select(MaterialChunk.text).join(IndexVersion).where(
+            MaterialChunk.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        )).all()
+        profile = db.scalar(sa.select(IndexVersion.pipeline_profile).where(
+            IndexVersion.material_version_id == version_id, IndexVersion.is_active.is_(True),
+        ))
+    assert profile == "semantic-v4"
+    assert len(active) == 1
+    assert "MUST NOT use stored" in active[0] and "revalidating" in active[0]
+
+
 def test_worker_publishes_pdf_ocr_even_if_preview_cannot_be_published(state, monkeypatch):
     factory, job_id, version_id, _, _ = state
     source = source_path(version_id)

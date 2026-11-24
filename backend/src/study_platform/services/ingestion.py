@@ -271,16 +271,20 @@ def extract_pptx(path, version=None):
             yield notes, {"slide": slide_no, "notes": True}
 
 
-def extract(version, output_dir, phase):
+def extract(version, output_dir, phase, pipeline_profile=None):
     """Yield text with original page/paragraph/line locators."""
     settings = get_settings()
     path = source_path(version.id)
     mime = version.source_mime
     if mime == "text/plain":
-        with path.open(encoding="utf-8-sig") as f:
-            for number, line in enumerate(f, 1):
-                if line.strip():
-                    yield line.strip(), {"line": number}
+        profile = chunking.resolve_pipeline_profile(pipeline_profile)
+        if profile == chunking.SEMANTIC_V4_PROFILE:
+            yield from chunking.plain_text_units(path.read_text(encoding="utf-8-sig"), profile)
+        else:
+            with path.open(encoding="utf-8-sig") as f:
+                for number, line in enumerate(f, 1):
+                    if line.strip():
+                        yield line.strip(), {"line": number}
     elif mime == "text/markdown":
         yield from extract_markdown(path)
     elif mime.endswith("wordprocessingml.document"):
@@ -508,7 +512,12 @@ def run_once(claimed=None):
                     update_phase(db, job_id, fence, phase)
 
                 parser_profile = "document-v1"
-                pipeline = chunking.SEMANTIC_PROFILE
+                try:
+                    pipeline = chunking.resolve_pipeline_profile(
+                        (job.payload or {}).get("pipeline_profile")
+                    )
+                except ValueError:
+                    raise ApiError(422, "pipeline_profile_unknown", "未知的索引切分配置。") from None
                 if job.payload.get("extraction_mode") == "vlm":
                     if not vision:
                         raise ApiError(409, "vision_not_configured", "当前任务没有就绪的视觉模型连接。")
@@ -517,7 +526,7 @@ def run_once(claimed=None):
                         source_path(version.id), version.source_mime, phase_changed, owner=owner, saved=vision,
                     )
                 else:
-                    extracted = list(extract(version, staging, phase_changed))
+                    extracted = list(extract(version, staging, phase_changed, pipeline))
                     page_count = version.page_count
                 if not extracted:
                     raise ApiError(422, "no_text_extracted", "未提取到可用文字")
@@ -548,9 +557,9 @@ def run_once(claimed=None):
                 db.commit()
                 index_id = index.id
                 chunk_rows = [
-                    (part, locator, ordinal)
+                    (part, narrowed, ordinal)
                     for ordinal, (text, locator) in enumerate(extracted)
-                    for part in chunking.semantic_chunks(text)
+                    for part, narrowed in chunking.segment_unit(text, locator, pipeline)
                 ]
                 vectors = []
                 for offset in range(0, len(chunk_rows), 20):
