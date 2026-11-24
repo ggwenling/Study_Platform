@@ -421,40 +421,147 @@ def summarize_corpus_usage(rows):
     }
 
 
+def _usage_row(usage, status):
+    row_status = (usage or {}).get("cache_read_status", "unknown")
+    miss_status = (usage or {}).get("cache_miss_status", "unknown")
+    if status != "known":
+        row_status = "unknown" if status != "not_called" else "not_called"
+        miss_status = row_status
+    return row_status, miss_status
+
+
+def _rollup_numbers(rows, number_key, status_key, estimate_key=None):
+    active = [row for row in rows if row.get("usage_status") != "not_called"]
+    if not active:
+        return {status_key: "not_called"}
+    if status_key in {"cache_read_status", "cache_miss_status"} and any(
+        (row.get("usage") or {}).get("input_status") == "inconsistent" for row in active
+    ):
+        return {status_key: "inconsistent"}
+    statuses = {row.get(status_key, "unknown") for row in active}
+    if statuses != {"known"} and not (estimate_key and statuses == {"estimate"}):
+        if "inconsistent" in statuses:
+            return {status_key: "inconsistent"}
+        return {status_key: "unknown"}
+    values = []
+    source = estimate_key if estimate_key else number_key
+    for row in active:
+        usage = row.get("usage") or {}
+        if source == "cache_read":
+            details = usage.get("input_token_details")
+            value = details.get("cache_read") if isinstance(details, dict) else None
+        else:
+            value = usage.get(source)
+        if type(value) is not int:
+            return {status_key: "unknown"}
+        values.append(value)
+    label = "estimate" if estimate_key else "known"
+    reported_key = estimate_key or number_key
+    return {status_key: label, reported_key: sum(values)}
+
+
+def _token_status(rows, key):
+    active = [row for row in rows if row.get("usage_status") != "not_called"]
+    if not active:
+        return "not_called", None
+    if key == "input" and any((row.get("usage") or {}).get("input_status") == "inconsistent" for row in active):
+        return "inconsistent", None
+    if any(row.get("usage_status") != "known" for row in active):
+        return "unknown", None
+    values = []
+    for row in active:
+        usage = row.get("usage") or {}
+        if key == "input":
+            candidates = [usage[name] for name in ("input_tokens", "prompt_tokens") if name in usage]
+        else:
+            candidates = [usage[name] for name in ("output_tokens", "completion_tokens") if name in usage]
+        if len(set(candidates)) != 1:
+            return "unknown", None
+        values.append(candidates[0])
+    return "known", sum(values)
+
+
+def recorded_usage(embedding, rewrite, generation):
+    """Sum safe counts already on the rows. Unrecorded calls stay unknown, not zero."""
+    groups = {}
+    for name, rows in (("embedding", embedding), ("rewrite", rewrite), ("generation", generation)):
+        item = {
+            "rows": sum(row.get("usage_status") != "not_called" for row in rows),
+            "currency_total": "unknown",
+            "unrecorded_calls": "unknown",
+        }
+        for label, key in (("input_tokens", "input"), ("output_tokens", "output")):
+            status, total = _token_status(rows, key)
+            item[f"{label}_status"] = status
+            if status == "known":
+                item[label] = total
+        item.update(_rollup_numbers(rows, "cache_read", "cache_read_status"))
+        miss = _rollup_numbers(rows, "cache_miss", "cache_miss_status")
+        if miss.get("cache_miss_status") == "unknown":
+            estimated = _rollup_numbers(
+                rows, "cache_miss", "cache_miss_status", estimate_key="cache_miss_estimate"
+            )
+            if estimated.get("cache_miss_status") == "estimate":
+                miss = estimated
+        item.update(miss)
+        groups[name] = item
+    return {
+        "embedding": groups["embedding"],
+        "rewrite": groups["rewrite"],
+        "generation": groups["generation"],
+        "currency_total": "unknown",
+        "unrecorded_calls": "unknown",
+    }
+
+
 def query_costs(cases):
     embedding = []
-    seen = set()
+    seen = {}
     rewrite = []
     generation = []
     for row in cases:
-        if row["id"] not in seen:
-            seen.add(row["id"])
-            usage, status = allow_usage((row.get("shared_embedding_metrics") or {}).get("usage"))
-            calls = (row.get("shared_embedding_metrics") or {}).get("calls") or 0
-            embedding.append(
-                {
-                    "id": row["id"],
-                    "calls": calls,
-                    "usage": usage,
-                    "usage_status": status if calls else "not_called",
-                }
-            )
+        usage, status = allow_usage((row.get("shared_embedding_metrics") or {}).get("usage"))
+        calls = (row.get("shared_embedding_metrics") or {}).get("calls") or 0
+        cache_status, miss_status = _usage_row(usage, status if calls else "not_called")
+        item = {
+            "id": row["id"],
+            "calls": calls,
+            "usage": usage,
+            "usage_status": status if calls else "not_called",
+            "cache_read_status": cache_status,
+            "cache_miss_status": miss_status,
+        }
+        prior = seen.get(row["id"])
+        if prior is None:
+            seen[row["id"]] = item
+            embedding.append(item)
+        elif (prior["calls"], prior["usage"], prior["usage_status"]) != (calls, usage, item["usage_status"]):
+            prior["usage"] = None
+            prior["usage_status"] = "inconsistent"
+            prior["cache_read_status"] = "inconsistent"
+            prior["cache_miss_status"] = "inconsistent"
         rewrite_metrics = row.get("rewrite_metrics") or None
         if row.get("strategy") == "rewrite" and rewrite_metrics:
             usage, status = allow_usage(rewrite_metrics.get("usage"))
+            usage_status = status if rewrite_metrics.get("usage") is not None or usage else (
+                "unknown" if rewrite_metrics.get("reason") else "not_called"
+            )
+            cache_status, miss_status = _usage_row(usage, usage_status)
             rewrite.append(
                 {
                     "id": row["id"],
                     "elapsed_ms": rewrite_metrics.get("elapsed_ms"),
                     "usage": usage,
-                    "usage_status": status if rewrite_metrics.get("usage") is not None or usage else (
-                        "unknown" if rewrite_metrics.get("reason") else "not_called"
-                    ),
+                    "usage_status": usage_status,
+                    "cache_read_status": cache_status,
+                    "cache_miss_status": miss_status,
                 }
             )
         answer = row.get("answer_metrics") or {}
         calls = answer.get("calls") or 0
         usage, status = allow_usage(answer.get("usage"))
+        usage_status = status if calls else "not_called"
+        cache_status, miss_status = _usage_row(usage, usage_status)
         generation.append(
             {
                 "id": row["id"],
@@ -462,12 +569,15 @@ def query_costs(cases):
                 "calls": calls,
                 "elapsed_ms": answer.get("elapsed_ms"),
                 "usage": usage,
-                "usage_status": status if calls else "not_called",
+                "usage_status": usage_status,
+                "cache_read_status": cache_status,
+                "cache_miss_status": miss_status,
             }
         )
     return {
         "embedding": embedding,
         "rewrite": rewrite,
         "generation": generation,
+        "recorded_usage": recorded_usage(embedding, rewrite, generation),
         "currency_total": "unknown",
     }

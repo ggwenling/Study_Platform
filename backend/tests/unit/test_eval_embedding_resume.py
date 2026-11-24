@@ -331,7 +331,11 @@ def test_embedding_validation_kinds_are_distinct(monkeypatch):
     assert diagnostics["failure"]["failure_kind"] == "invalid_count"
     assert diagnostics["failure"]["http_status"] == 200
     assert diagnostics["failure"]["usage_status"] == "known"
-    assert diagnostics["usage"] == {"total_tokens": 4}
+    assert diagnostics["usage"]["total_tokens"] == 4
+    assert diagnostics["usage"]["cache_read_status"] == "unknown"
+    assert "input_token_details" not in diagnostics["usage"]
+    assert SECRET not in json.dumps(diagnostics["usage"])
+    assert BODY_TEXT not in json.dumps(diagnostics["usage"])
     assert diagnostics["failure"]["error_code"] == "embedding_invalid"
 
     class ValueClient(FakeClient):
