@@ -79,18 +79,138 @@ def safe_provider_code(value):
     return "unknown"
 
 
+def _nonnegative_int(value):
+    if type(value) is int and value >= 0:
+        return value
+    return None
+
+
+def _named_int(container, key):
+    """Return absent, invalid, or a nonnegative int. Wrong types are not coerced."""
+    if not isinstance(container, dict) or key not in container:
+        return "absent", None
+    value = _nonnegative_int(container.get(key))
+    if value is None:
+        return "invalid", None
+    return "value", value
+
+
+def _collect_ints(readings):
+    present = False
+    invalid = False
+    values = []
+    for state, value in readings:
+        if state == "absent":
+            continue
+        present = True
+        if state == "invalid":
+            invalid = True
+        else:
+            values.append(value)
+    return present, invalid, values
+
+
+def _one_input(kept, left, right):
+    values = [kept[key] for key in (left, right) if key in kept]
+    if len(set(values)) > 1:
+        return "inconsistent"
+    if not values:
+        return None
+    return values[0]
+
+
+def _cache_fields(raw, kept):
+    """Keep allowlisted cache counts. A missing count is unknown, not a miss of zero."""
+    details = raw.get("input_token_details")
+    prompt_details = raw.get("prompt_tokens_details")
+    read_present, read_invalid, read_values = _collect_ints(
+        (
+            _named_int(details, "cache_read"),
+            _named_int(prompt_details, "cached_tokens"),
+            _named_int(raw, "prompt_cache_hit_tokens"),
+        )
+    )
+    if "input_token_details" in raw and not isinstance(details, dict):
+        read_present, read_invalid = True, True
+    if "prompt_tokens_details" in raw and not isinstance(prompt_details, dict):
+        read_present, read_invalid = True, True
+    miss_present, miss_invalid, miss_values = _collect_ints(
+        (
+            _named_int(details, "cache_miss"),
+            _named_int(raw, "prompt_cache_miss_tokens"),
+        )
+    )
+    creation_state, creation = _named_int(details, "cache_creation")
+    fields = {}
+    details_out = {}
+    if creation_state == "value":
+        details_out["cache_creation"] = creation
+    agreed_read = len(set(read_values)) == 1
+    if not read_present:
+        fields["cache_read_status"] = "unknown"
+    elif read_invalid or not agreed_read:
+        fields["cache_read_status"] = "inconsistent" if read_values else "unknown"
+        if read_values:
+            fields["cache_read_observed"] = sorted(set(read_values))
+    else:
+        details_out["cache_read"] = read_values[0]
+        fields["cache_read_status"] = "known"
+    if details_out:
+        fields["input_token_details"] = details_out
+    incoming = _one_input(kept, "input_tokens", "prompt_tokens")
+    if (
+        fields.get("cache_read_status") == "known"
+        and type(incoming) is int
+        and details_out["cache_read"] > incoming
+    ):
+        fields["cache_read_status"] = "inconsistent"
+    agreed_miss = len(set(miss_values)) == 1
+    if not miss_present:
+        fields["cache_miss_status"] = "unknown"
+    elif miss_invalid or not agreed_miss:
+        fields["cache_miss_status"] = "inconsistent" if miss_values else "unknown"
+    else:
+        fields["cache_miss"] = miss_values[0]
+        fields["cache_miss_status"] = "known"
+    if (
+        fields["cache_read_status"] == "known"
+        and fields["cache_miss_status"] == "known"
+        and type(incoming) is int
+        and details_out["cache_read"] + fields["cache_miss"] != incoming
+    ):
+        fields["cache_read_status"] = "inconsistent"
+        fields["cache_miss_status"] = "inconsistent"
+    if (
+        fields["cache_miss_status"] == "unknown"
+        and fields["cache_read_status"] == "known"
+        and type(incoming) is int
+    ):
+        fields["cache_miss_status"] = "estimate"
+        fields["cache_miss_estimate"] = incoming - details_out["cache_read"]
+    return fields
+
+
 def allow_usage(usage):
-    """Token counts only. Missing or unusable usage is unknown, not zero."""
+    """Token counts and allowlisted cache counts. Missing usage is unknown, not zero.
+
+    Nested ``input_token_details.cache_read`` is kept when it is a nonnegative int.
+    DeepSeek ``prompt_cache_hit_tokens`` and OpenAI ``prompt_tokens_details.cached_tokens``
+    are the same count. A missing cache field stays unknown and is not stored as a
+    hit of zero. Text, headers, request ids, and secrets are not copied.
+    """
     raw = usage.model_dump() if hasattr(usage, "model_dump") else usage
     if not isinstance(raw, dict):
         return None, "unknown"
     kept = {}
     for key in _USAGE_KEYS:
-        value = raw.get(key)
-        if type(value) is int and value >= 0:
+        value = _nonnegative_int(raw.get(key))
+        if value is not None:
             kept[key] = value
-    if not kept:
+    cache = _cache_fields(raw, kept)
+    has_cache_number = "input_token_details" in cache or "cache_miss" in cache
+    if not kept and not has_cache_number:
         return None, "unknown"
+    kept.update(cache)
     return kept, "known"
 
 
