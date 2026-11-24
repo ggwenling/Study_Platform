@@ -10,4 +10,4 @@ frontend/e2e/run-isolated.sh
 
 脚本会拒绝覆盖一份不含 `KNOWLOOP_UX_ACCEPTANCE` 标记的根目录 `.env`。验收记录写在 `docs/ux-acceptance.md`。模型回答是固定桩文本，不能当作真实回答质量。
 
-Worker 使用 `frontend/e2e/support/run-worker.py`。直接执行 `uv run study-worker` 会在第一笔笔记、闪卡或练习任务上因循环导入退出；包装脚本只预先加载 API 包，不修改产品代码。
+Worker 使用产品入口 `uv run study-worker`，不预加载 API 包。

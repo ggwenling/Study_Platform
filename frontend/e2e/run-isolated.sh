@@ -75,9 +75,7 @@ start_tmux() {
 
 start_tmux knowloop-ux-mock "cd '${ROOT}' && UX_MOCK_PORT=${MOCK_PORT} UX_MOCK_LOG='${LOG_DIR}/mock.log' node frontend/e2e/support/mock-model.mjs"
 start_tmux knowloop-ux-api "cd '${ROOT}/backend' && uv run study-api > '${LOG_DIR}/api.log' 2>&1"
-# The product entry exits on generation jobs (circular import). The wrapper
-# only preloads the API package so this journey can continue; it is not a fix.
-start_tmux knowloop-ux-worker "cd '${ROOT}/backend' && uv run python ../frontend/e2e/support/run-worker.py > '${LOG_DIR}/worker.log' 2>&1"
+start_tmux knowloop-ux-worker "cd '${ROOT}/backend' && uv run study-worker > '${LOG_DIR}/worker.log' 2>&1"
 start_tmux knowloop-ux-web "cd '${ROOT}/frontend' && npm run dev -- --host 127.0.0.1 --port 5173 --strictPort > '${LOG_DIR}/web.log' 2>&1"
 
 wait_http() {
