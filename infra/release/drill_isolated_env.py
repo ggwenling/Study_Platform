@@ -37,6 +37,7 @@ BACKUP_ROOT = ROOT / ".local" / "release-gate" / "backups"
 RUN_DIR = ROOT / ".local" / "release-gate" / "run"
 EVIDENCE_PATH = ROOT / "infra" / "release" / "drill-evidence.json"
 UV = Path.home() / ".local" / "bin" / "uv"
+WORKER = BACKEND / ".venv" / "bin" / "study-worker"
 HOST = "127.0.0.1"
 PORT = 55432
 API_PORT = 18000
@@ -301,9 +302,21 @@ def process_env(values: dict[str, str], database: str) -> dict[str, str]:
     env["TEST_GRAPH_DATABASE_URL"] = env["GRAPH_DATABASE_URL"]
     env["PGPASSWORD"] = admin
     env["PYTHONUNBUFFERED"] = "1"
+    env.pop("PYTHONSTARTUP", None)
     env["DEEPSEEK_API_KEY"] = ""
     env["EMBEDDING_API_KEY"] = ""
     return env
+
+
+def official_worker_command() -> list[str]:
+    if not WORKER.is_file() or not os.access(WORKER, os.X_OK):
+        fail("official study-worker console script is missing")
+    text = WORKER.read_text(encoding="utf-8", errors="replace")
+    if "from study_platform.cli.worker import main" not in text:
+        fail("study-worker console script is not the packaged entry")
+    if "study_platform.api" in text or "PYTHONSTARTUP" in text:
+        fail("refusing a preload wrapper in place of study-worker")
+    return [str(WORKER)]
 
 
 def alembic(values: dict[str, str], database: str, revision: str, action: str) -> None:
@@ -593,8 +606,11 @@ def product_tree_sha() -> str:
     ).strip()
     if dirty:
         fail("refusing to drill while backend or frontend differs from HEAD")
-    if sha == "3bd2585e433105e573556add717fab22586e3f62":
-        fail("refusing to record the 3bd2585 drill as a later candidate result")
+    if sha in {
+        "3bd2585e433105e573556add717fab22586e3f62",
+        "ac8d8bf6079834c4a9d6c28e407f38a546a659fb",
+    }:
+        fail("refusing to record an earlier drill as this candidate result")
     return sha
 
 
@@ -633,15 +649,27 @@ def main() -> None:
             fail("API port stayed occupied after stop")
         if app_sessions(values) != 0:
             fail("API pool stayed connected after stop")
-        worker = start_logged([str(UV), "run", "study-worker"], gate_env, "worker.log")
+        worker_cmd = official_worker_command()
+        worker = start_logged(worker_cmd, gate_env, "worker.log")
         time.sleep(2)
         worker_sessions = app_sessions(values)
         worker_alive = worker.poll() is None
         stop_process(worker)
         worker = None
+        worker_log = (RUN_DIR / "worker.log").read_text(encoding="utf-8", errors="replace")
+        if "ImportError" in worker_log:
+            fail("official study-worker log contains ImportError")
         if not worker_alive or worker_sessions < 1:
             fail(f"worker did not stay connected (alive={worker_alive}, sessions={worker_sessions})")
-        cycles.append({"phase": "worker_stopped", "app_sessions_while_running": worker_sessions})
+        cycles.append({
+            "phase": "worker_stopped",
+            "entry": "study_platform.cli.worker:main",
+            "argv0": "study-worker",
+            "preload_wrapper": False,
+            "pythonstartup": False,
+            "app_sessions_while_running": worker_sessions,
+            "import_error": False,
+        })
         api = start_logged(
             [str(UV), "run", "uvicorn", "study_platform.main:create_app", "--factory",
              "--host", HOST, "--port", str(API_PORT)],
@@ -728,7 +756,10 @@ def main() -> None:
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "product_tree_sha": product_sha,
         "product_snapshot": product_sha,
-        "prior_drill_not_this_run": "3bd2585e433105e573556add717fab22586e3f62",
+        "prior_drills_not_this_run": [
+            "3bd2585e433105e573556add717fab22586e3f62",
+            "ac8d8bf6079834c4a9d6c28e407f38a546a659fb",
+        ],
         "postgres": {
             "host": HOST,
             "port": PORT,
@@ -751,8 +782,6 @@ def main() -> None:
         "restore_health": restore_ready,
         "source_not_downgraded": True,
         "not_verified": [
-            "final_integration_sha",
-            "ci_on_final_sha",
             "real_50q",
             "d_review",
             "browser_ux",

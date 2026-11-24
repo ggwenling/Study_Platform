@@ -1,10 +1,13 @@
 {
   "release_ready": false,
   "drill": "pass",
-  "captured_at": "2026-11-24T05:53:59.399394+00:00",
-  "product_tree_sha": "ac8d8bf6079834c4a9d6c28e407f38a546a659fb",
-  "product_snapshot": "ac8d8bf6079834c4a9d6c28e407f38a546a659fb",
-  "prior_drill_not_this_run": "3bd2585e433105e573556add717fab22586e3f62",
+  "captured_at": "2026-11-24T06:22:49.069586+00:00",
+  "product_tree_sha": "783e680b3682058786a4f6511ea6010b01a42584",
+  "product_snapshot": "783e680b3682058786a4f6511ea6010b01a42584",
+  "prior_drills_not_this_run": [
+    "3bd2585e433105e573556add717fab22586e3f62",
+    "ac8d8bf6079834c4a9d6c28e407f38a546a659fb"
+  ],
   "postgres": {
     "host": "127.0.0.1",
     "port": 55432,
@@ -32,7 +35,12 @@
     },
     {
       "phase": "worker_stopped",
-      "app_sessions_while_running": 1
+      "entry": "study_platform.cli.worker:main",
+      "argv0": "study-worker",
+      "preload_wrapper": false,
+      "pythonstartup": false,
+      "app_sessions_while_running": 1,
+      "import_error": false
     },
     {
       "phase": "restart",
@@ -190,22 +198,20 @@
   },
   "backup": {
     "sha256": {
-      "study.dump": "9628c988e45fc36ca4cda5f45764b8a39c2a7ab97b3441c8efc421dfb2345faa",
-      "study_graph.dump": "c98c0a153dd90a8cb548a2e264d7b34f582552f969d8e5e042cdc1d99f481cfb",
-      "storage.tar": "057fa3a432648a5bc6a351aa42946b1ec96cda28ba44c91ef135c2dd2cf94c1f"
+      "study.dump": "d6a348630fb1ea3550191529efe427b44ceab9194005d807996e4155363894f4",
+      "study_graph.dump": "42f2c47065cd663b7c30bfad6a6f7783dda5e7a8a6424138199ecf4cbaf91808",
+      "storage.tar": "f5313ce5f14f1a971b18637942948b8b066a23681e0064d00443a9cc9cbb73de"
     },
     "restored_storage_sha256": "0507d090bef861772b8bb25303edabe24481d3d45f7bf5a474cae3e9fd7e3845",
     "storage_matches": true
   },
-  "backup_relative_dir": ".local/release-gate/backups/20261124T055357Z",
+  "backup_relative_dir": ".local/release-gate/backups/20261124T062246Z",
   "restore_health": {
     "status": 200,
     "body": "{\"status\":\"ready\"}"
   },
   "source_not_downgraded": true,
   "not_verified": [
-    "final_integration_sha",
-    "ci_on_final_sha",
     "real_50q",
     "d_review",
     "browser_ux"

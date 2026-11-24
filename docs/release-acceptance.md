@@ -357,7 +357,7 @@ RELEASE_READY 仍是 false。sources 目录外读取的修复已经在 `78edfbe`
 
 被测产品树是 `ac8d8bf6079834c4a9d6c28e407f38a546a659fb`。证据提交是另一次提交，不移动 `cursor/deep-testing-prep-9b8e`。`backend` 与 `frontend` 相对这个产品树没有改动。演练在原有 `16/releasegate` 上执行，`listen_addresses=127.0.0.1`，端口 55432；`16/main` 保持 down。没有重建集群，也没有对已有数据的 gate 库做 downgrade。
 
-`2026-11-24T05:53:59Z` 运行 `infra/release/drill_isolated_env.py`，`drill=pass`，`release_ready=false`。当前 `infra/release/drill-evidence.json` 的 `product_tree_sha` 就是 `ac8d8bf`。`prior_drill_not_this_run` 标明 `3bd2585`。
+`2026-11-24T05:53:59Z` 运行 `infra/release/drill_isolated_env.py`，`drill=pass`，`release_ready=false`。那次 JSON 在证据提交 `a0b290c33b9e533bda8322a067eefc12ffcbfe1d`，`product_tree_sha` 是 `ac8d8bf`。它不是 `3bd2585`，也不是第 11 节的新产品候选。
 
 - 空库 `study_release_migrate_test`：`upgrade head` → `downgrade base` → `upgrade head`，用户 0 行，revision 回到 `0016_rerank_and_kb_retrieval`。
 - gate 与 restore 的 revision 都是 `0016_rerank_and_kb_retrieval`，与代码 head 一致。`study` 与 `study_graph` 各 48 张表，两边表名集合相同。
@@ -374,3 +374,31 @@ RELEASE_READY 仍是 false。sources 目录外读取的修复已经在 `78edfbe`
 | [45336071099](https://github.com/ggwenling/Study_Platform/actions/runs/45336071099) | pull_request `ac8d8bf` | success。Backend `138248337583` 05:50:10–05:51:48；Frontend `138248337889` 05:50:11–05:50:56 |
 
 这两次 CI 只说明该候选的 Backend 与 Frontend 作业通过。D review、真实 50Q 和浏览器 UX 仍是 NOT_VERIFIED。RELEASE_READY 保持 false，不代替父主放行。
+
+## 11. 候选 `783e680` 的隔离复跑
+
+被测产品树是 `783e680b3682058786a4f6511ea6010b01a42584`。证据提交是另一次提交，父级包含该产品树，但不移动 `cursor/deep-testing-prep-9b8e`。`backend` 与 `frontend` 相对这个产品树没有改动。`ac8d8bf` 上的演练仍然有效，只属于那个 SHA；不要把第 7 节的 `3bd2585` 或第 10 节的 `ac8d8bf` 写成这次结果。
+
+相对 `ac8d8bf`，产品只增加了 worker 冷导入修复和相关测试。gold、retrieval 与默认配置文件没有差异，真实 50Q 不在这个 SHA 上重建，G6 对 `783e680` 仍是 NOT_VERIFIED。
+
+`2026-11-24T06:22:49Z` 在原有 `16/releasegate` 上运行 `infra/release/drill_isolated_env.py`。`drill=pass`，`release_ready=false`。当前 `infra/release/drill-evidence.json` 的 `product_tree_sha` 是 `783e680`。没有重建集群，没有 downgrade 已有数据的 gate 库，`16/main` 保持 down，55432 只在 `127.0.0.1`。
+
+| 项 | 结果 |
+| --- | --- |
+| 空库迁移往返 | PASS。`study_release_migrate_test` 为 upgrade → downgrade base → upgrade，用户 0 行，head `0016_rerank_and_kb_retrieval` |
+| gate / restore revision | PASS。两边都是这个 head，48 张 `study`/`study_graph` 表集合一致 |
+| 合成数据 | PASS。用户、知识库、checkpoint marker 两边都在，图角色能读 marker |
+| storage | PASS。内容 SHA-256 `0507d090bef861772b8bb25303edabe24481d3d45f7bf5a474cae3e9fd7e3845` |
+| API 健康 | PASS。`127.0.0.1:18000` 启动、停止、再启动，以及指向恢复库时 `/health/ready` 都是 200 |
+| 正式 worker | PASS。直接执行 `.venv/bin/study-worker`，入口 `study_platform.cli.worker:main`，没有 `PYTHONSTARTUP`，也不是预加载 API 的 wrapper。进程保持连接并有 1 条应用会话，日志没有 ImportError |
+
+`2026-11-24T06:23:19Z` 到 `2026-11-24T06:23:26Z`，用同一产品树的正式控制台脚本再跑 `tests/unit/test_worker_cold_start.py` 和 `tests/integration/test_worker_process.py`。干净环境里 2 passed。合成任务走本地 stub，没有付费 API；临时库已删除，gate 仍是 1 个用户、revision `0016`。第一次尝试继承了演练 env 的 `ALLOWED_ORIGINS`，在启动 worker 前失败，这不是产品失败。
+
+同一次读取的候选 CI，没有循环轮询：
+
+| 运行 | 读取到的状态 |
+| --- | --- |
+| [45339464288](https://github.com/ggwenling/Study_Platform/actions/runs/45339464288) | push，completed/success。Backend `138259344583` 06:18:24–06:19:58；Frontend `138259345018` 06:18:25–06:19:02 |
+| [45339470519](https://github.com/ggwenling/Study_Platform/actions/runs/45339470519) | pull_request。运行对象当时是 in_progress。同一次作业页上 Frontend `138259366387` 与 Backend `138259366615` 都已 success，Backend 结束于 06:20:19。没有再读运行对象 |
+
+D review、真实 50Q 和浏览器 UX 仍是 NOT_VERIFIED。RELEASE_READY 保持 false，不代替父主放行。
