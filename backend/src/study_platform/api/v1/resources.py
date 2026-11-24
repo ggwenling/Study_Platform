@@ -34,7 +34,6 @@ from study_platform.persistence.models import (
 from study_platform.services.citations import citation_dto, message_dto
 from study_platform.services.learning import count_due_wrong_questions
 from study_platform.services.lexical import lexical_query_terms, plain_tsquery
-from study_platform.services.studio import count_due_flashcards
 from study_platform.services.workspace_search import (
     body_score_expression,
     body_search_expression,
@@ -719,6 +718,10 @@ def activity_days(events, today):
 
 @router.get("/dashboard/overview", response_model=DashboardDTO)
 def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Local import: services.studio loads this package, and a module-level import
+    # reads count_due_flashcards before that module finishes initializing.
+    from study_platform.services.studio import count_due_flashcards
+
     now = datetime.now(UTC)
     kb_count = db.scalar(
         sa.select(sa.func.count())
