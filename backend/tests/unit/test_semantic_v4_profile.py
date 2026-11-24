@@ -1,11 +1,16 @@
 """Opt-in semantic-v4 geometry. Counts and splits are mechanism checks, not quality claims."""
 
+import asyncio
 import hashlib
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
+from study_platform.cli import evaluate_rag
+from study_platform.core.config import Settings
+from study_platform.persistence.models import IndexVersion, MaterialChunk
 from study_platform.services.chunking import (
     SEMANTIC_PROFILE,
     SEMANTIC_V4_PROFILE,
@@ -263,3 +268,173 @@ def test_embedding_cache_rejects_a_v3_batch_presented_as_v4(tmp_path):
     os.chmod(copied, 0o600)
     assert load_cached_batch(cache, key_v4, identity_v4, 1) is None
 
+
+class _Session:
+    def __init__(self):
+        self.added = []
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    def flush(self):
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+class _Factory:
+    def __init__(self):
+        self.session = _Session()
+
+    def begin(self):
+        return self.session
+
+
+def test_seed_corpus_uses_v4_only_when_asked(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, storage_dir=tmp_path)
+    monkeypatch.setattr(evaluate_rag, "get_settings", lambda: settings)
+    monkeypatch.setattr("study_platform.services.storage.get_settings", lambda: settings)
+    monkeypatch.setattr("study_platform.services.ingestion.get_settings", lambda: settings)
+    seen = {}
+
+    def embed(texts, diagnostics=None, context=None):
+        if diagnostics is not None:
+            diagnostics["usage"] = None
+            diagnostics["usage_status"] = "unknown"
+            diagnostics["elapsed_ms"] = 1
+        return [[0.1] * 1024 for _ in texts]
+
+    real_batches = evaluate_rag.embed_document_batches
+
+    def batches(*args, **kwargs):
+        seen["profile"] = kwargs["pipeline_profile"]
+        return real_batches(*args, **kwargs)
+
+    monkeypatch.setattr(evaluate_rag, "embed_texts", embed)
+    monkeypatch.setattr(evaluate_rag, "embed_document_batches", batches)
+    wrapped = (
+        "A cache that does not have a clock available MUST NOT use stored\n"
+        "responses without revalidating them upon every use."
+    )
+    materials = [{
+        "id": "rfc-7234",
+        "knowledge_base": "A",
+        "title": "clock",
+        "format": "txt",
+        "sections": [wrapped],
+    }]
+
+    def stored(profile):
+        factory = _Factory()
+        evaluate_rag.seed_corpus(factory, materials, pipeline_profile=profile)
+        chunks = [obj for obj in factory.session.added if isinstance(obj, MaterialChunk)]
+        indexes = [obj for obj in factory.session.added if isinstance(obj, IndexVersion)]
+        return chunks, indexes
+
+    default_chunks, default_indexes = stored(None)
+    assert seen["profile"] == SEMANTIC_PROFILE
+    assert default_indexes[0].pipeline_profile == SEMANTIC_PROFILE
+    assert len(default_chunks) == 2
+    assert not any("MUST NOT use stored" in chunk.text and "revalidating" in chunk.text for chunk in default_chunks)
+
+    v4_chunks, v4_indexes = stored(SEMANTIC_V4_PROFILE)
+    assert seen["profile"] == SEMANTIC_V4_PROFILE
+    assert v4_indexes[0].pipeline_profile == SEMANTIC_V4_PROFILE
+    assert len(v4_chunks) == 1
+    assert "MUST NOT use stored" in v4_chunks[0].text and "revalidating" in v4_chunks[0].text
+    assert v4_chunks[0].locator["start_line"] == 1 and v4_chunks[0].locator["end_line"] == 2
+    with pytest.raises(ValueError, match="unknown pipeline profile"):
+        stored("semantic-v9")
+
+
+def test_cli_profile_is_explicit_and_does_not_open_a_database(tmp_path, monkeypatch):
+    opened = {"count": 0}
+
+    def refuse_database(*_args, **_kwargs):
+        opened["count"] += 1
+        raise AssertionError("database")
+
+    def stop_read(_path):
+        raise FileNotFoundError("dataset")
+
+    monkeypatch.setattr(evaluate_rag, "isolated_database", refuse_database)
+    monkeypatch.setattr(evaluate_rag, "read_dataset", stop_read)
+    monkeypatch.setattr(
+        sys, "argv", ["study-eval-rag", "--dataset", str(tmp_path / "facts.jsonl")],
+    )
+    with pytest.raises(SystemExit, match="FileNotFoundError"):
+        evaluate_rag.main()
+    monkeypatch.setattr(
+        sys, "argv",
+        ["study-eval-rag", "--dataset", str(tmp_path / "facts.jsonl"), "--pipeline-profile", SEMANTIC_V4_PROFILE],
+    )
+    with pytest.raises(SystemExit, match="FileNotFoundError"):
+        evaluate_rag.main()
+    monkeypatch.setattr(
+        sys, "argv",
+        ["study-eval-rag", "--dataset", str(tmp_path / "facts.jsonl"), "--pipeline-profile", "semantic-v9", "--live"],
+    )
+    with pytest.raises(SystemExit, match="unknown pipeline profile") as caught:
+        evaluate_rag.main()
+    assert "semantic-v9" not in str(caught.value)
+    assert opened["count"] == 0
+
+
+def test_unknown_profile_fails_before_the_evaluation_database(tmp_path, monkeypatch):
+    dataset = tmp_path / "facts.jsonl"
+    dataset.write_text('{"id":"x"}\n', encoding="utf-8")
+    args = type("Args", (), {})()
+    args.dataset = dataset
+    args.strategy = "baseline"
+    args.retrieval_only = True
+    args.metric_k = [1]
+    args.reuse_index = None
+    args.retain_index = False
+    args.export_index = None
+    args.embedding_cache = None
+    args.pipeline_profile = "semantic-v9"
+    monkeypatch.setattr(evaluate_rag, "get_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr(
+        evaluate_rag, "isolated_database", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("db")),
+    )
+    with pytest.raises(evaluate_rag.EvaluationFailed) as caught:
+        asyncio.run(evaluate_rag.live_evaluation(args, [], [], tmp_path / "out"))
+    assert caught.value.failure["failure_kind"] == "local_verification"
+    assert "semantic-v9" not in str(caught.value)
+    report = (tmp_path / "out" / "report.json").read_text(encoding="utf-8")
+    assert '"pipeline_profile": null' in report
+    assert '"status": "failed"' in report
+
+
+def test_local_rfc_text_keeps_two_spec_fragments_together():
+    """Local text copies only. Fewer chunks is recorded geometry, not a quality result."""
+    root = Path(os.environ.get("RFC_SOURCE_DIR", "/tmp/rfc-sources"))
+    if not (root / "rfc-7234.txt").is_file():
+        pytest.skip("local RFC text copies are not shipped in this repo")
+    together = {
+        "rfc-7234.txt": ("MUST NOT use stored", "without revalidating them upon every use"),
+        "rfc-9112.txt": ("present in a request", "close the connection"),
+    }
+    for name, count in RFC_V3_COUNTS.items():
+        raw = (root / name).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == RFC_SHA256[name]
+        text = raw.decode("utf-8-sig")
+        v3 = [
+            part
+            for unit, locator in plain_text_units(text, SEMANTIC_PROFILE)
+            for part, _locator in segment_unit(unit, locator, SEMANTIC_PROFILE)
+        ]
+        v4 = _v4_chunks(text)
+        assert len(v3) == count
+        assert all(len(part) <= 800 for part in v3)
+        assert all(len(part) <= 800 for part, _locator in v4)
+        if name in together:
+            left, right = together[name]
+            assert not any(left in part and right in part for part in v3)
+            assert any(left in part and right in part for part, _locator in v4)
+            match = next(locator for part, locator in v4 if left in part and right in part)
+            assert match["end_line"] >= match["start_line"]
