@@ -210,6 +210,122 @@ def test_one_missing_cache_field_makes_the_group_unknown():
     assert "cache_miss_estimate" not in group
 
 
+def _assert_unusable(group, *names):
+    for name in names:
+        assert group[f"{name}_status"] == "inconsistent"
+        assert name not in group
+        assert f"{name}_estimate" not in group
+
+
+def test_read_over_input_makes_the_explicit_miss_unusable():
+    usage, status = allow_usage(
+        {
+            "input_tokens": 10,
+            "input_token_details": {"cache_read": 11},
+            "prompt_cache_miss_tokens": 5,
+        }
+    )
+    assert status == "known"
+    assert usage["input_token_details"]["cache_read"] == 11
+    assert usage["cache_miss"] == 5
+    assert usage["cache_read_status"] == "inconsistent"
+    assert usage["cache_miss_status"] == "inconsistent"
+    assert "cache_miss_estimate" not in usage
+    legal = _generation(
+        "Q2",
+        "baseline",
+        {
+            "input_tokens": 10,
+            "input_token_details": {"cache_read": 4},
+            "prompt_cache_miss_tokens": 6,
+        },
+    )
+    illegal = _generation("Q1", "baseline", {
+        "input_tokens": 10,
+        "input_token_details": {"cache_read": 11},
+        "prompt_cache_miss_tokens": 5,
+    })
+    group = query_costs([illegal, legal])["recorded_usage"]["generation"]
+    _assert_unusable(group, "cache_read", "cache_miss")
+    assert group["input_tokens"] == 20
+
+
+def test_input_alias_conflict_blocks_cache_and_the_group_total():
+    usage, _status = allow_usage(
+        {
+            "input_tokens": 10,
+            "prompt_tokens": 100,
+            "input_token_details": {"cache_read": 50},
+        }
+    )
+    assert usage["input_tokens"] == 10
+    assert usage["prompt_tokens"] == 100
+    assert usage["input_status"] == "inconsistent"
+    assert usage["input_token_details"]["cache_read"] == 50
+    assert usage["cache_read_status"] == "inconsistent"
+    assert usage["cache_miss_status"] == "unknown"
+    assert "cache_miss_estimate" not in usage
+    legal = _generation(
+        "Q2",
+        "baseline",
+        {"input_tokens": 10, "prompt_tokens": 10, "input_token_details": {"cache_read": 4}},
+    )
+    illegal = _generation(
+        "Q1",
+        "baseline",
+        {"input_tokens": 10, "prompt_tokens": 100, "input_token_details": {"cache_read": 50}},
+    )
+    group = query_costs([illegal, legal])["recorded_usage"]["generation"]
+    assert group["input_tokens_status"] == "inconsistent"
+    assert "input_tokens" not in group
+    _assert_unusable(group, "cache_read")
+    assert group["cache_miss_status"] == "inconsistent"
+    assert "cache_miss_estimate" not in group
+
+
+def test_explicit_miss_above_input_is_unusable_without_a_read():
+    usage, _status = allow_usage({"input_tokens": 10, "prompt_cache_miss_tokens": 15})
+    assert usage["cache_miss"] == 15
+    assert usage["cache_miss_status"] == "inconsistent"
+    assert usage["cache_read_status"] == "unknown"
+    assert "input_token_details" not in usage
+    legal = _generation(
+        "Q2",
+        "baseline",
+        {
+            "input_tokens": 10,
+            "input_token_details": {"cache_read": 4},
+            "prompt_cache_miss_tokens": 6,
+        },
+    )
+    illegal = _generation("Q1", "baseline", {"input_tokens": 10, "prompt_cache_miss_tokens": 15})
+    group = query_costs([illegal, legal])["recorded_usage"]["generation"]
+    _assert_unusable(group, "cache_miss")
+    assert group["cache_read_status"] == "unknown"
+    assert "cache_read" not in group
+
+
+def test_three_agreeing_sources_stay_known():
+    usage, _status = allow_usage(
+        {
+            "input_tokens": 10,
+            "prompt_tokens": 10,
+            "input_token_details": {"cache_read": 4, "cache_creation": 1},
+            "prompt_tokens_details": {"cached_tokens": 4},
+            "prompt_cache_hit_tokens": 4,
+            "prompt_cache_miss_tokens": 6,
+            "total_tokens": 99,
+        }
+    )
+    assert usage["input_token_details"]["cache_read"] == 4
+    assert usage["input_token_details"]["cache_creation"] == 1
+    assert usage["cache_miss"] == 6
+    assert usage["cache_read_status"] == "known"
+    assert usage["cache_miss_status"] == "known"
+    assert usage["total_tokens"] == 99
+    assert "input_status" not in usage
+
+
 def test_inconsistent_shared_embedding_is_not_double_counted():
     first = _generation("Q1", "baseline", {"input_tokens": 3, "output_tokens": 1})
     second = _generation("Q1", "rewrite", {"input_tokens": 3, "output_tokens": 1})

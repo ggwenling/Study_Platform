@@ -157,13 +157,6 @@ def _cache_fields(raw, kept):
         fields["cache_read_status"] = "known"
     if details_out:
         fields["input_token_details"] = details_out
-    incoming = _one_input(kept, "input_tokens", "prompt_tokens")
-    if (
-        fields.get("cache_read_status") == "known"
-        and type(incoming) is int
-        and details_out["cache_read"] > incoming
-    ):
-        fields["cache_read_status"] = "inconsistent"
     agreed_miss = len(set(miss_values)) == 1
     if not miss_present:
         fields["cache_miss_status"] = "unknown"
@@ -172,22 +165,40 @@ def _cache_fields(raw, kept):
     else:
         fields["cache_miss"] = miss_values[0]
         fields["cache_miss_status"] = "known"
-    if (
-        fields["cache_read_status"] == "known"
-        and fields["cache_miss_status"] == "known"
-        and type(incoming) is int
-        and details_out["cache_read"] + fields["cache_miss"] != incoming
-    ):
-        fields["cache_read_status"] = "inconsistent"
-        fields["cache_miss_status"] = "inconsistent"
-    if (
-        fields["cache_miss_status"] == "unknown"
-        and fields["cache_read_status"] == "known"
-        and type(incoming) is int
-    ):
-        fields["cache_miss_status"] = "estimate"
-        fields["cache_miss_estimate"] = incoming - details_out["cache_read"]
+    _constrain_cache(fields, details_out, _one_input(kept, "input_tokens", "prompt_tokens"))
     return fields
+
+
+def _constrain_cache(fields, details_out, incoming):
+    """One broken input or cache constraint makes every present cache count unusable.
+
+    The original integers stay for diagnosis. Their status is no longer known, so a
+    group total cannot add them. ``total_tokens`` is not compared with input plus
+    output, and ``cache_creation`` is not a cache aggregate.
+    """
+    read = details_out.get("cache_read")
+    miss = fields.get("cache_miss")
+    read_known = fields.get("cache_read_status") == "known"
+    miss_known = fields.get("cache_miss_status") == "known"
+    broken = incoming == "inconsistent"
+    if broken:
+        fields["input_status"] = "inconsistent"
+    elif type(incoming) is int:
+        if read_known and read > incoming:
+            broken = True
+        if miss_known and miss > incoming:
+            broken = True
+        if read_known and miss_known and read + miss != incoming:
+            broken = True
+        if not broken and read_known and fields.get("cache_miss_status") == "unknown":
+            fields["cache_miss_status"] = "estimate"
+            fields["cache_miss_estimate"] = incoming - read
+    if broken or "inconsistent" in {fields.get("cache_read_status"), fields.get("cache_miss_status")}:
+        if fields.get("cache_read_status") != "unknown":
+            fields["cache_read_status"] = "inconsistent"
+        if fields.get("cache_miss_status") not in {"unknown", "estimate"}:
+            fields["cache_miss_status"] = "inconsistent"
+        fields.pop("cache_miss_estimate", None)
 
 
 def allow_usage(usage):

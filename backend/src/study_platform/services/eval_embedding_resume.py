@@ -434,6 +434,10 @@ def _rollup_numbers(rows, number_key, status_key, estimate_key=None):
     active = [row for row in rows if row.get("usage_status") != "not_called"]
     if not active:
         return {status_key: "not_called"}
+    if status_key in {"cache_read_status", "cache_miss_status"} and any(
+        (row.get("usage") or {}).get("input_status") == "inconsistent" for row in active
+    ):
+        return {status_key: "inconsistent"}
     statuses = {row.get(status_key, "unknown") for row in active}
     if statuses != {"known"} and not (estimate_key and statuses == {"estimate"}):
         if "inconsistent" in statuses:
@@ -460,6 +464,8 @@ def _token_status(rows, key):
     active = [row for row in rows if row.get("usage_status") != "not_called"]
     if not active:
         return "not_called", None
+    if key == "input" and any((row.get("usage") or {}).get("input_status") == "inconsistent" for row in active):
+        return "inconsistent", None
     if any(row.get("usage_status") != "known" for row in active):
         return "unknown", None
     values = []

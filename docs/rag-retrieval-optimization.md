@@ -233,7 +233,7 @@ uv run --no-sync study-eval-rag \
 
 `244f91e` 上已结束的真实 campaign 没有改写。独立复核看到的已落盘调用是 input 143173、output 35215、cache_read 72816。当时报告里的 DeepSeek USD 0.0852099 只是把这些 input 全部按 miss 估算的上界，不是“命中数为 0”的测量，也不是 provider 账单。同一批已记录 cache 数按公开高峰价的另一种估算是 USD 0.063801996；已记录 embedding 618894 tokens 的 DashScope 估算是 CNY 0.07736175。本仓库不写入这些费率，也不做汇率换算。`ac8d8bf` 两次失败语料调用和中断的 REAL-013 可能重复调用仍然 unknown，不能补 0，也不能并进一份历史总价。
 
-新的 `recorded_usage` 只加已经落在 case 里的安全非负整数。同一题的共享 query embedding 只计一次。cache 字段缺失时该组是 `unknown`，不把其余行的命中数说成整组总数。provider 给出的 miss 记为 known；只有 cache_read 和 input 都已知、且 cache_read 不超过 input 时，才写 `cache_miss_estimate`。两边对不上、或来源不一致，状态是 `inconsistent`，不挑一个数去相加。`currency_total` 和 `unrecorded_calls` 仍是 `unknown`。
+新的 `recorded_usage` 只加状态仍是 `known` 或显式 `estimate` 的安全非负整数。同一题的共享 query embedding 只计一次。cache 字段缺失时该组是 `unknown`。`input_tokens` 和 `prompt_tokens` 冲突、`cache_read` 或显式 miss 大于 input、两者之和不等于 input、或同一计数的来源不一致，这一行上已经出现的 cache 计数都改成 `inconsistent`。原整数留在行上，只供诊断，不能再当 known。组里只要有一行冲突或缺字段，就不发布其余行的部分合计。provider 给出的 miss 在约束成立时记为 known；只有 cache_read 和单一 input 都已知、且 cache_read 不超过 input、又没有显式 miss 时，才写 `cache_miss_estimate`。`currency_total` 和 `unrecorded_calls` 仍是 `unknown`。`total_tokens` 不与 input+output 对账。`cache_creation` 只在它是非负整数时留下，不进入 cache 合计。
 
 本地 PostgreSQL 16.15 与 pgvector 0.6 上，手工向量已经核对：25 条可区分向量在显式 `top_k=24`、`candidate_k=48` 下返回前 24 名且顺序正确，默认仍是 10/20。复用答题走真实检索、改写和生成代码，只替换 HTTP transport；回答非空，`[S1]` 绑定第一条证据，查询嵌入、改写和生成的调用与 usage 都在，语料没有再次嵌入，索引行数不变。这不是真实 provider 的名次或费用。
 
