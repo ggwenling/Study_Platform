@@ -321,8 +321,9 @@ pg_restore --host=127.0.0.1 --port=55432 --username=postgres \
 | C `58dcc338b1cb08b3a19deb547e62836f4580d8a2` | `3bd2585e433105e573556add717fab22586e3f62` |
 | C 标题标记增量 `5e459a4ac32454181471873811819624b0d0cdee` | `9c7bba44f4b9e61ad68e04d133b33c189579ba1e` |
 | 隔离 Postgres 索引复用 | `9a2f9c717daf5c5447c956cc76b64b3070aeafb7` |
+| B sources 路径增量 `dfc0d1c1633c4088e19f302ee47ee895cff8f8b0` | `78edfbe`，只拣这一笔，不合并 PR #21 |
 | 本文第 1–8 节与示例 env | `95dabea42b1df5a540e4eab788406c72c3fd36ba` 的 cherry-pick |
 
 `610fe59` 之后 Evaluation V2 的 schema 是 `evaluation-v2.3`。第 1 节的 `evaluation-v2.2` 只属于 `3bd2585`。检索默认仍是 top_k 10、candidate 20、lexical 0、rewrite false；这次拣入没有改 `config.py`。
 
-RELEASE_READY 仍是 false。最终 SHA 还没冻结：离线 probe 读到 sources 目录外的修复由检索侧另交，拣入后再核数据 head 与代码 head。本环境没有启动 55432 上的 release 栈，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。复用只读也不是专用角色，库属主可以关掉会话只读。
+RELEASE_READY 仍是 false。sources 目录外读取的修复已经在 `78edfbe`。验收候选是包含该提交的当前头，不是合并、tag 或部署许可。本环境没有启动 55432 上的 release 栈，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。复用只读也不是专用角色，库属主可以关掉会话只读。`binding=database` 不核对 `package.sha256`。
