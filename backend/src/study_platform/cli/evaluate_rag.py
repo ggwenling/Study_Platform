@@ -162,7 +162,8 @@ def render_source(material, target):
         image.save(target, format=formats[material["format"]])
 
 
-def seed_corpus(factory, materials, *, cache_dir=None):
+def seed_corpus(factory, materials, *, cache_dir=None, pipeline_profile=None):
+    profile = chunking.resolve_pipeline_profile(pipeline_profile)
     settings = get_settings()
     owner = uuid4()
     scopes, documents, hashes, embedding_metrics, indexed_documents, eval_owner = (
@@ -231,11 +232,13 @@ def seed_corpus(factory, materials, *, cache_dir=None):
             db.flush()
             db.add(version)
             db.flush()
-            extracted = list(ingestion.extract(version, version_dir(version.id), lambda _: None))
+            extracted = list(
+                ingestion.extract(version, version_dir(version.id), lambda _: None, profile)
+            )
             parts = [
-                (part, locator)
+                (part, narrowed)
                 for text, locator in extracted
-                for part in chunking.semantic_chunks(text)
+                for part, narrowed in chunking.segment_unit(text, locator, profile)
             ]
             if not parts:
                 raise ValueError("Evaluation source produced no text")
@@ -243,7 +246,7 @@ def seed_corpus(factory, materials, *, cache_dir=None):
                 vectors, batch_metrics = embed_document_batches(
                     [text for text, _ in parts],
                     source_sha256=hashes[item["id"]],
-                    pipeline_profile=chunking.SEMANTIC_PROFILE,
+                    pipeline_profile=profile,
                     document_id=item["id"],
                     cache_dir=cache_dir,
                     embedding_model=settings.embedding_model,
@@ -261,7 +264,7 @@ def seed_corpus(factory, materials, *, cache_dir=None):
                 id=uuid4(),
                 material_version_id=version.id,
                 generation=1,
-                pipeline_profile=chunking.SEMANTIC_PROFILE,
+                pipeline_profile=profile,
                 embedding_profile=f"{settings.embedding_model}:1024",
                 embedding_dim=1024,
                 status="ready",
@@ -351,6 +354,12 @@ def _base_report(args, cases):
         "min_similarity": settings.retrieval_min_similarity,
         "cases": [],
     }
+    try:
+        report["pipeline_profile"] = chunking.resolve_pipeline_profile(
+            getattr(args, "pipeline_profile", None)
+        )
+    except ValueError:
+        report["pipeline_profile"] = None
     if materials_path.is_file():
         report["materials_sha256"] = hashlib.sha256(materials_path.read_bytes()).hexdigest()
     return report
@@ -439,6 +448,10 @@ def preflight_evaluation_inputs(args, materials):
             raise FileNotFoundError(parent)
         if not os.access(parent, os.W_OK):
             raise PermissionError(parent)
+    try:
+        chunking.resolve_pipeline_profile(getattr(args, "pipeline_profile", None))
+    except ValueError as exc:
+        raise IndexReuseError("pipeline profile") from exc
     for item in materials or []:
         raw = item.get("path") if isinstance(item, dict) else None
         if raw:
@@ -679,7 +692,8 @@ async def live_evaluation(args, cases, materials, output):
         write_json(output / "report.json", report)
         try:
             scopes, documents, hashes, corpus_embedding, eval_owner, indexed = seed_corpus(
-                factory, materials, cache_dir=cache_dir
+                factory, materials, cache_dir=cache_dir,
+                pipeline_profile=getattr(args, "pipeline_profile", None),
             )
             report.update(
                 source_hashes=hashes,
@@ -793,8 +807,14 @@ def main():
         type=Path,
         help="opt-in private directory for resumable corpus batches; vectors are sensitive and local",
     )
+    parser.add_argument(
+        "--pipeline-profile",
+        default=None,
+        help="Index profile. Omit for semantic-v3. semantic-v4 must be selected explicitly.",
+    )
     args = parser.parse_args()
     try:
+        chunking.resolve_pipeline_profile(args.pipeline_profile)
         if args.review:
             if not args.output:
                 raise ValueError(

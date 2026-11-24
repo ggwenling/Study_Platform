@@ -33,7 +33,7 @@ from study_platform.persistence.models import (
     MaterialVersion,
     User,
 )
-from study_platform.services.chunking import SEMANTIC_PROFILE
+from study_platform.services.chunking import KNOWN_PIPELINE_PROFILES
 from study_platform.services.lexical import lexical_column_values
 
 MANIFEST_VERSION = 1
@@ -226,6 +226,13 @@ def _scope_rows(scopes):
     return scopes
 
 
+def _single_pipeline_profile(indexes):
+    profiles = {row.get("pipeline_profile") for row in indexes}
+    if len(profiles) != 1 or next(iter(profiles)) not in KNOWN_PIPELINE_PROFILES:
+        raise IndexReuseError("pipeline profile")
+    return next(iter(profiles))
+
+
 def build_manifest(
     *,
     snapshot,
@@ -280,7 +287,7 @@ def build_manifest(
         "embedding_model": embedding_model,
         "embedding_dim": EMBEDDING_DIM,
         "embedding_profile": profile,
-        "pipeline_profile": SEMANTIC_PROFILE,
+        "pipeline_profile": _single_pipeline_profile(snapshot.get("indexes") or []),
         "dataset_sha256": _sha256(dataset_sha256, "dataset hash"),
         "materials_sha256": _sha256(materials_sha256, "materials file hash"),
         "material_hashes": {row["document_id"]: row["source_sha256"] for row in materials},
@@ -338,8 +345,9 @@ def validate_manifest_shape(manifest):
         raise IndexReuseError("embedding dimension")
     if manifest.get("embedding_profile") != f"{model}:{EMBEDDING_DIM}":
         raise IndexReuseError("embedding model")
-    if manifest.get("pipeline_profile") != SEMANTIC_PROFILE:
-        raise IndexReuseError("index version")
+    profile = manifest.get("pipeline_profile")
+    if profile not in KNOWN_PIPELINE_PROFILES:
+        raise IndexReuseError("pipeline profile")
     _sha256(manifest.get("dataset_sha256"), "dataset hash")
     _sha256(manifest.get("materials_sha256"), "materials file hash")
     hashes = manifest.get("material_hashes")
@@ -392,9 +400,10 @@ def validate_manifest_shape(manifest):
         version_id = _uuid(row.get("material_version_id"), "index version")
         if version_id not in documents:
             raise IndexReuseError("index version")
+        if row.get("pipeline_profile") != profile:
+            raise IndexReuseError("pipeline profile")
         if (
-            row.get("pipeline_profile") != SEMANTIC_PROFILE
-            or row.get("embedding_profile") != manifest["embedding_profile"]
+            row.get("embedding_profile") != manifest["embedding_profile"]
             or row.get("embedding_dim") != EMBEDDING_DIM
             or row.get("status") != "ready"
             or row.get("is_active") is not True
@@ -452,10 +461,11 @@ def verify_index_contents(manifest, snapshot, *, embedding_model, schema_revisio
         raise IndexReuseError("index version")
     for index_id, row in found_indexes.items():
         expected = expected_indexes[index_id]
+        if row["pipeline_profile"] != manifest["pipeline_profile"]:
+            raise IndexReuseError("pipeline profile")
         if (
             not row["is_active"]
             or row["status"] != "ready"
-            or row["pipeline_profile"] != SEMANTIC_PROFILE
             or row["embedding_profile"] != manifest["embedding_profile"]
             or row["embedding_dim"] != EMBEDDING_DIM
             or row["vector_dim_min"] != EMBEDDING_DIM

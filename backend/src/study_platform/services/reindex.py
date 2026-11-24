@@ -22,7 +22,14 @@ from study_platform.persistence.models.materials import (
 )
 from study_platform.persistence.models.operations import AiJob
 from study_platform.services import job_queue, model_connections
-from study_platform.services.chunking import SEMANTIC_PROFILE, semantic_chunks, semantic_v2_chunks
+from study_platform.services.chunking import (
+    SEMANTIC_PROFILE,
+    SEMANTIC_V4_PROFILE,
+    segment_unit,
+    semantic_chunks,
+    semantic_v2_chunks,
+    semantic_v4_chunks,
+)
 from study_platform.services.ingestion import chunks as legacy_chunks
 from study_platform.services.lexical import lexical_column_values
 from study_platform.services.model_usage import ModelUsageContext
@@ -202,6 +209,15 @@ def _signature(rows):
     return digest.hexdigest()
 
 
+def pipeline_for_reindex(rechunk, source_profile):
+    """Rechunk still publishes semantic-v3, except an index that is already v4."""
+    if rechunk and source_profile == SEMANTIC_V4_PROFILE:
+        return SEMANTIC_V4_PROFILE
+    if rechunk:
+        return SEMANTIC_PROFILE
+    return source_profile
+
+
 def _parts(rows, rechunk, source_profile):
     original_chunkers = {
         "document-v1": (legacy_chunks,),
@@ -209,6 +225,7 @@ def _parts(rows, rechunk, source_profile):
         # Existing v2 generations were written both before and after the atomic-block fix.
         "semantic-v2": (semantic_chunks, semantic_v2_chunks),
         SEMANTIC_PROFILE: (semantic_chunks,),
+        SEMANTIC_V4_PROFILE: (semantic_v4_chunks,),
     }.get(source_profile, ())
     for section_id, group in groupby(rows, key=lambda row: row[2]):
         chunks = list(group)
@@ -221,7 +238,13 @@ def _parts(rows, rechunk, source_profile):
             and any([row[0] for row in chunks] == list(original(section_text))
                     for original in original_chunkers)
         ):
-            yield from ((part, locator, section_id, group_id, True) for part in semantic_chunks(section_text))
+            if source_profile == SEMANTIC_V4_PROFILE:
+                produced = segment_unit(section_text, locator, SEMANTIC_V4_PROFILE)
+            else:
+                produced = ((part, locator) for part in semantic_chunks(section_text))
+            yield from (
+                (part, narrowed, section_id, group_id, True) for part, narrowed in produced
+            )
         else:
             yield from (row[:5] for row in chunks)
 
@@ -349,7 +372,7 @@ def run(job_id, kb_id, fence):
                     source = db.get(IndexVersion, UUID(item["source_index_id"]))
                     source_profile = source.pipeline_profile
                     rows = _chunks(db, item["source_index_id"])
-                    pipeline = SEMANTIC_PROFILE if rechunk else source_profile
+                    pipeline = pipeline_for_reindex(rechunk, source_profile)
                     _set_result(job, items, "reindexing", key)
                     db.commit()
                     parts = list(_parts(rows, rechunk, source_profile))
