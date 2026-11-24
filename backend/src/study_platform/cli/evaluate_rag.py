@@ -374,6 +374,7 @@ def evaluation_failure_text(failure):
     parts = ["Evaluation failed"]
     for key in (
         "stage",
+        "exception_class",
         "failure_kind",
         "http_status",
         "error_code",

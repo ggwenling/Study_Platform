@@ -363,7 +363,8 @@ def test_owner_and_name_boundaries_reject_before_reuse():
 
 def _batch_vector(text):
     digest = hashlib.sha256(text.encode()).digest()
-    return [((digest[index % len(digest)] + index) % 251) / 251 or 0.1 for index in range(1024)]
+    # Eighths survive the cache JSON round trip, so a resumed index matches a clean one.
+    return [((digest[index % len(digest)] + index) % 8 + 1) / 8 for index in range(1024)]
 
 
 def _embeddings(database_name):
@@ -399,6 +400,7 @@ def test_resume_matches_a_clean_index_and_failure_drops_only_this_database(tmp_p
     ]
     dataset = tmp_path / "facts.jsonl"
     dataset.write_text("{}\n", encoding="utf-8")
+    dataset.with_name("materials.json").write_text("[]", encoding="utf-8")
     calls = []
     fail_short = {"on": True}
 

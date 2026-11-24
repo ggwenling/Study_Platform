@@ -573,6 +573,7 @@ def test_failed_report_is_failed_and_reuse_can_answer_without_corpus_embed(tmp_p
     text = evaluate_rag.evaluation_failure_text(caught.value.failure)
     rendered = text + json.dumps(report)
     assert "http_status=503" in text and "mapped_error_code=model_service_error" in text
+    assert "exception_class=APIStatusError" in text
     assert SECRET not in rendered and BODY_TEXT not in rendered
     assert public_failure({"failure_kind": "http_429", "request_id": SECRET})["request_id"] is None
 

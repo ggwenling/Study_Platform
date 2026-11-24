@@ -162,7 +162,7 @@ CI 路径见 `.github/workflows/ci.yml`：Python 3.12、PostgreSQL 16、pgvector
 - 错误码指引区分 `Throttling.RateQuota` 和 `Throttling.AllocationQuota`，并建议降频、有界退避，同时看 HTTP、code、RequestID。所读错误页没有 Retry-After。响应里如果带了可解析的秒数且不超过 30 秒，才按它等待；解析不了或更长就停止，不把原始 header 写进日志。
 - 官方 RPM/TPM 不是本账号已经保证的额度。`Throttling.AllocationQuota` 不重试。
 
-失败报告是 `status=failed`。`failure` 只含阶段、异常类名、本库错误码、映射码、可校验的 provider code、HTTP 状态、失败种类、用量是否已知、是否可重试、Retry-After 秒数、至多 64 字符的请求 ID 和尝试次数。不写 provider 自由文本、响应 body 或 header。请求 ID 必须匹配 `[A-Za-z0-9-]{8,64}`，并且不像密钥；否则记空。失败批次的 `usage_status` 为 `unknown` 时，费用就是 unknown，不能写成 0。`currency_total` 保持 `unknown`。探测账本里的小数不能当成这两次语料嵌入的总费用。
+失败报告是 `status=failed`。`failure` 只含阶段、异常类名、本库错误码、映射码、可校验的 provider code、HTTP 状态、失败种类、用量是否已知、是否可重试、Retry-After 秒数、至多 64 字符的请求 ID 和尝试次数。进程退出文本带上异常类名，这样非模型异常不会只剩下映射码。不写 provider 自由文本、响应 body 或 header。请求 ID 必须匹配 `[A-Za-z0-9-]{8,64}`，并且不像密钥；否则记空。失败批次的 `usage_status` 为 `unknown` 时，费用就是 unknown，不能写成 0。`currency_total` 保持 `unknown`。探测账本里的小数不能当成这两次语料嵌入的总费用。
 
 `--embedding-cache DIR` 是显式开关，默认关闭。目录必须是当前用户的 `0700` 目录，不能是符号链接。每个批次文件是 `0600`，原子替换。键绑定源文件 SHA256、`semantic-v3`、供应商 URL 指纹、模型、`<model>:1024`、维度和这 20 条输入的 SHA256。不匹配、损坏、`complete` 不是 true、或权限过宽的文件不当作命中，重新计算。缓存里是原文的向量，只留在本机。命中批次 `outcome=cached`、`calls=0`、`new_corpus_charge=false`，不记成这次的新语料费用。失败仍然只删除这次自己创建的库，不靠留下未验证的共享库。
 
