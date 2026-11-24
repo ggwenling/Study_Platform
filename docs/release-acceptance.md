@@ -351,4 +351,26 @@ uv run python ../infra/release/drill_isolated_env.py
 
 `610fe59` 之后 Evaluation V2 的 schema 是 `evaluation-v2.3`。第 1 节的 `evaluation-v2.2` 只属于 `3bd2585`。检索默认仍是 top_k 10、candidate 20、lexical 0、rewrite false；这次拣入没有改 `config.py`。
 
-RELEASE_READY 仍是 false。sources 目录外读取的修复已经在 `78edfbe`。第 7 节和 `infra/release/drill-evidence.json` 记录的是产品快照 `3bd2585` 上的演练，不是本候选的复跑。本环境的 `16/main` 正在监听，没有启动 55432。验收候选包含这些脚本，但不是 merge、tag 或部署许可，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。复用只读也不是专用角色，库属主可以关掉会话只读。`binding=database` 不核对 `package.sha256`。
+RELEASE_READY 仍是 false。sources 目录外读取的修复已经在 `78edfbe`。第 7 节描述的是产品快照 `3bd2585` 上的演练；那份 JSON 留在提交 `ac8d8bf` 里，不能当作下面这次候选复跑。验收候选包含这些脚本，但不是 merge、tag 或部署许可，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。复用只读也不是专用角色，库属主可以关掉会话只读。`binding=database` 不核对 `package.sha256`。
+
+## 10. 候选 `ac8d8bf` 的隔离复跑
+
+被测产品树是 `ac8d8bf6079834c4a9d6c28e407f38a546a659fb`。证据提交是另一次提交，不移动 `cursor/deep-testing-prep-9b8e`。`backend` 与 `frontend` 相对这个产品树没有改动。演练在原有 `16/releasegate` 上执行，`listen_addresses=127.0.0.1`，端口 55432；`16/main` 保持 down。没有重建集群，也没有对已有数据的 gate 库做 downgrade。
+
+`2026-11-24T05:53:59Z` 运行 `infra/release/drill_isolated_env.py`，`drill=pass`，`release_ready=false`。当前 `infra/release/drill-evidence.json` 的 `product_tree_sha` 就是 `ac8d8bf`。`prior_drill_not_this_run` 标明 `3bd2585`。
+
+- 空库 `study_release_migrate_test`：`upgrade head` → `downgrade base` → `upgrade head`，用户 0 行，revision 回到 `0016_rerank_and_kb_retrieval`。
+- gate 与 restore 的 revision 都是 `0016_rerank_and_kb_retrieval`，与代码 head 一致。`study` 与 `study_graph` 各 48 张表，两边表名集合相同。
+- 合成用户 `release-gate-user@example.test`、知识库 `Release Gate Synthetic`、checkpoint `release-gate-synthetic` 在源库和恢复库都是 1。图角色能读 marker。
+- 存储内容 SHA-256 仍是 `0507d090bef861772b8bb25303edabe24481d3d45f7bf5a474cae3e9fd7e3845`，恢复后的文件哈希与之相同。
+- API `127.0.0.1:18000` 启动、停止、再启动时 `/health/live` 与 `/health/ready` 都是 200。worker 单独运行时有 1 条 `study_release_app` 会话。结束后 API 与 worker 已退出。把 API 指到恢复库时 `/health/ready` 也是 200。
+- 没有模型调用。密码没有写入证据。
+
+同一次读取的候选 CI，不再轮询：
+
+| 运行 | 事件 | 结论 |
+| --- | --- | --- |
+| [45336065785](https://github.com/ggwenling/Study_Platform/actions/runs/45336065785) | push `ac8d8bf` | success。Frontend `138248319497` 05:50:08–05:50:48；Backend `138248319777` 05:50:07–05:51:56 |
+| [45336071099](https://github.com/ggwenling/Study_Platform/actions/runs/45336071099) | pull_request `ac8d8bf` | success。Backend `138248337583` 05:50:10–05:51:48；Frontend `138248337889` 05:50:11–05:50:56 |
+
+这两次 CI 只说明该候选的 Backend 与 Frontend 作业通过。D review、真实 50Q 和浏览器 UX 仍是 NOT_VERIFIED。RELEASE_READY 保持 false，不代替父主放行。

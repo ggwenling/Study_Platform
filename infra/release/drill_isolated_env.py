@@ -585,9 +585,23 @@ def backup_and_restore(values: dict[str, str]) -> dict[str, object]:
     }
 
 
+def product_tree_sha() -> str:
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    dirty = subprocess.check_output(
+        ["git", "diff", "--name-only", "HEAD", "--", "backend", "frontend"],
+        cwd=ROOT, text=True,
+    ).strip()
+    if dirty:
+        fail("refusing to drill while backend or frontend differs from HEAD")
+    if sha == "3bd2585e433105e573556add717fab22586e3f62":
+        fail("refusing to record the 3bd2585 drill as a later candidate result")
+    return sha
+
+
 def main() -> None:
     if (ROOT / ".env").exists():
         fail("refusing to run while a repository root .env exists")
+    product_sha = product_tree_sha()
     assert_loopback_listener()
     values = load_or_create_env()
     ensure_roles_and_databases(
@@ -712,7 +726,9 @@ def main() -> None:
         "release_ready": False,
         "drill": "pass",
         "captured_at": datetime.now(timezone.utc).isoformat(),
-        "product_snapshot": "3bd2585e433105e573556add717fab22586e3f62",
+        "product_tree_sha": product_sha,
+        "product_snapshot": product_sha,
+        "prior_drill_not_this_run": "3bd2585e433105e573556add717fab22586e3f62",
         "postgres": {
             "host": HOST,
             "port": PORT,
