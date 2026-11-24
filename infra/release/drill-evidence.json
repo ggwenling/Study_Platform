@@ -1,8 +1,13 @@
 {
   "release_ready": false,
   "drill": "pass",
-  "captured_at": "2026-11-24T05:45:53.962765+00:00",
-  "product_snapshot": "3bd2585e433105e573556add717fab22586e3f62",
+  "captured_at": "2026-11-24T06:22:49.069586+00:00",
+  "product_tree_sha": "783e680b3682058786a4f6511ea6010b01a42584",
+  "product_snapshot": "783e680b3682058786a4f6511ea6010b01a42584",
+  "prior_drills_not_this_run": [
+    "3bd2585e433105e573556add717fab22586e3f62",
+    "ac8d8bf6079834c4a9d6c28e407f38a546a659fb"
+  ],
   "postgres": {
     "host": "127.0.0.1",
     "port": 55432,
@@ -30,7 +35,12 @@
     },
     {
       "phase": "worker_stopped",
-      "app_sessions_while_running": 1
+      "entry": "study_platform.cli.worker:main",
+      "argv0": "study-worker",
+      "preload_wrapper": false,
+      "pythonstartup": false,
+      "app_sessions_while_running": 1,
+      "import_error": false
     },
     {
       "phase": "restart",
@@ -188,22 +198,20 @@
   },
   "backup": {
     "sha256": {
-      "study.dump": "e20860f450a4ef4c73bf0186bde497038e34a368ad0e4994d9472081c418b957",
-      "study_graph.dump": "bde7fd25d20249ec3d3d500b7a1eb9fbcdc1b3a9d744e9a64c4d1b1023a61e82",
-      "storage.tar": "d2979950d8b4045462ef60132633f31f22f18d76cd0bb2365705baf009abea1f"
+      "study.dump": "d6a348630fb1ea3550191529efe427b44ceab9194005d807996e4155363894f4",
+      "study_graph.dump": "42f2c47065cd663b7c30bfad6a6f7783dda5e7a8a6424138199ecf4cbaf91808",
+      "storage.tar": "f5313ce5f14f1a971b18637942948b8b066a23681e0064d00443a9cc9cbb73de"
     },
     "restored_storage_sha256": "0507d090bef861772b8bb25303edabe24481d3d45f7bf5a474cae3e9fd7e3845",
     "storage_matches": true
   },
-  "backup_relative_dir": ".local/release-gate/backups/20261124T054551Z",
+  "backup_relative_dir": ".local/release-gate/backups/20261124T062246Z",
   "restore_health": {
     "status": 200,
     "body": "{\"status\":\"ready\"}"
   },
   "source_not_downgraded": true,
   "not_verified": [
-    "final_integration_sha",
-    "ci_on_final_sha",
     "real_50q",
     "d_review",
     "browser_ux"
