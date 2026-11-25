@@ -198,20 +198,29 @@ def _restore_main_paragraphs(html: str, markdown: str) -> str:
         element.drop_tree()
 
     def normalize(value):
-        return " ".join(re.findall(r"\w+", value.casefold()))
+        # Formatting delimiters can split a CJK word without adding visible space.
+        return "".join(re.findall(r"\w+", value.casefold()))
 
-    elements = root.xpath(".//h1 | .//h2 | .//h3 | .//h4 | .//h5 | .//h6 | .//p")
+    elements = root.xpath(
+        ".//h1 | .//h2 | .//h3 | .//h4 | .//h5 | .//h6 | "
+        ".//p[not(ancestor::li or ancestor::table)] | "
+        ".//*[self::ul or self::ol or self::table or self::pre]["
+        "not(ancestor::ul or ancestor::ol or ancestor::table)]"
+    )
     source = [" ".join(element.text_content().split()) for element in elements]
     source_keys = [normalize(text) for text in source]
     blocks = re.split(r"\n[ \t]*\n", markdown.strip()) if markdown.strip() else []
-    block_keys = [normalize(block) for block in blocks]
+    block_keys = [
+        normalize(re.sub(r"(?m)^\s*(?:\d+[.)]|[-+*])[ \t]+", "", block))
+        for block in blocks
+    ]
     source_counts, block_counts = Counter(source_keys), Counter(block_keys)
     positions = {key: i for i, key in enumerate(block_keys) if key and block_counts[key] == 1}
     anchors = [(i, positions[key]) for i, key in enumerate(source_keys) if key in positions and source_counts[key] == 1]
     if blocks and (not anchors or [pos for _, pos in anchors] != sorted(pos for _, pos in anchors)):
         return markdown
 
-    extracted = f" {normalize(markdown)} "
+    extracted = normalize(markdown)
     headings = {
         normalize(line) for line in markdown.splitlines() if re.match(r"^ {0,3}#{1,6}[ \t]", line)
     }
@@ -219,9 +228,9 @@ def _restore_main_paragraphs(html: str, markdown: str) -> str:
     heading = None
     restored = set()
     for i, (element, key) in enumerate(zip(elements, source_keys, strict=True)):
-        if element.tag != "p":
+        if re.fullmatch(r"h[1-6]", element.tag):
             heading = i if key else None
-        elif len(key) >= 40 and f" {key} " not in extracted and key not in restored:
+        elif element.tag == "p" and len(key) >= 40 and key not in extracted and key not in restored:
             if heading is not None and source_keys[heading] not in headings:
                 level = int(elements[heading].tag[1])
                 additions[heading] = f"{'#' * level} {source[heading]}"
@@ -235,9 +244,9 @@ def _restore_main_paragraphs(html: str, markdown: str) -> str:
     output = []
     source_start = block_start = 0
     for source_end, block_end in [*anchors, (len(elements), len(blocks))]:
-        output.extend(blocks[block_start:block_end])
-        if source_end < len(elements) or block_start == len(blocks) or not blocks:
+        if block_start == block_end:
             output.extend(additions[i] for i in range(source_start, source_end) if i in additions)
+        output.extend(blocks[block_start:block_end])
         if block_end < len(blocks):
             output.append(blocks[block_end])
         source_start, block_start = source_end + 1, block_end + 1

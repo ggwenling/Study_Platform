@@ -110,6 +110,25 @@ def test_clip_skips_reinsertion_when_extracted_blocks_are_reordered():
     assert web_clip._restore_main_paragraphs(markup, markdown) == markdown
 
 
+def test_clip_restores_paragraph_before_a_retained_list_without_duplicating_inline_markup():
+    first = "First, prepare and inspect the work area before starting any repairs."
+    omitted = "Turn off the electrical supply before you begin with the list below."
+    last = "Finally, switch on the power and check whether the device is working."
+    items = ["Remove the cover", "Insert the replacement"]
+    html = f"""<main><h2>Preparation</h2><p>{first}</p><p>{omitted}</p>
+    <ol><li>{items[0]}</li><li>{items[1]}</li></ol>
+    <h2>重新加载</h2><p>浏览器在<strong>强制重新加载</strong>时会绕过已存储的缓存响应，这适用于需要获取最新版本的情况。</p>
+    <p>{last}</p></main>"""
+    markdown = (
+        f"## Preparation\n\n{first}\n\n1. {items[0]}\n2. {items[1]}\n\n"
+        "## 重新加载\n\n浏览器在**强制重新加载**时会绕过已存储的缓存响应，这适用于需要获取最新版本的情况。"
+        f"\n\n{last}"
+    )
+    assert web_clip._restore_main_paragraphs(html, markdown) == markdown.replace(
+        f"{first}\n\n", f"{first}\n\n{omitted}\n\n",
+    )
+
+
 def test_dns_resolution_obeys_deadline(monkeypatch):
     import time
 

@@ -696,6 +696,39 @@ def test_loose_batch_file_is_not_reused(tmp_path):
     assert resume.load_cached_batch(cache, key, identity, 1) is None
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows readers can block atomic replacement")
+def test_cache_write_retains_valid_batch_during_windows_read(tmp_path):
+    from study_platform.services import _windows_cache_security as windows
+
+    cache = prepare_embedding_cache(tmp_path / "cache")
+    key, identity = resume.batch_identity(
+        source_sha256="ab" * 32, pipeline_profile=SEMANTIC_PROFILE, embedding_model="model-a",
+        embedding_base_url="https://example.test/v1", embedding_dim=1024, texts=["alpha"],
+    )
+    vectors = [_vector("alpha")]
+    resume.store_cached_batch(cache, key, identity, vectors, None, "unknown", 1)
+    with windows._open_existing(cache / "batches" / f"{key}.json", windows.win32con.GENERIC_READ):
+        resume.store_cached_batch(cache, key, identity, vectors, None, "unknown", 2)
+        assert resume.load_cached_batch(cache, key, identity, 1)["elapsed_ms"] == 1
+    assert not list((cache / "batches").glob("*.tmp"))
+
+
+def test_cache_write_cleans_temporary_file_on_replace_error(tmp_path, monkeypatch):
+    cache = prepare_embedding_cache(tmp_path / "cache")
+    key, identity = resume.batch_identity(
+        source_sha256="ab" * 32, pipeline_profile=SEMANTIC_PROFILE, embedding_model="model-a",
+        embedding_base_url="https://example.test/v1", embedding_dim=1024, texts=["alpha"],
+    )
+
+    def fail_replace(*_args):
+        raise PermissionError("replacement failed")
+
+    monkeypatch.setattr(resume.os, "replace", fail_replace)
+    with pytest.raises(PermissionError, match="replacement failed"):
+        resume.store_cached_batch(cache, key, identity, [_vector("alpha")], None, "unknown", 1)
+    assert not list((cache / "batches").glob("*.tmp"))
+
+
 def test_symlink_cache_directory_is_refused(tmp_path, make_symlink):
     target = prepare_embedding_cache(tmp_path / "private")
     link = tmp_path / "link"

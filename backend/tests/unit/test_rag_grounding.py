@@ -213,6 +213,38 @@ def test_supplement_reserves_a_hit_per_query_and_uses_one_embedding_batch(monkey
     assert retrieval_calls == [(scope, [query], [vector], owner) for query, vector in zip(queries, vectors, strict=True)]
 
 
+@pytest.mark.parametrize("conjunction", ["和", "与"])
+def test_entity_comparison_preserves_shared_predicate(monkeypatch, conjunction):
+    monkeypatch.setattr(chat, "get_settings", lambda: SimpleNamespace(rag_query_rewrite_enabled=False))
+    monkeypatch.setattr(chat, "effective_settings", lambda _: {"rerank_enabled": False})
+    scope = {"index_version_ids": ["i"]}
+    question = f"苏州{conjunction}上海的公共交通有什么区别？"
+    queries = ["苏州的公共交通有什么区别", "上海的公共交通有什么区别"]
+    assert chat.missing_qa_queries(scope, question, []) == queries
+    assert chat.missing_qa_queries(scope, question, [{"text": "上海的公共交通以轨道交通为主。"}]) == queries[:1]
+
+
+@pytest.mark.parametrize("top_k", [2, 3])
+def test_supplement_queries_only_as_many_clauses_as_fit(monkeypatch, top_k):
+    original = evidence(top_k)
+    extra = {"id": "extra", "text": "Complementary evidence"}
+    embedded, retrieved = [], []
+
+    def embed(queries, **_kwargs):
+        embedded.append(queries)
+        return [[0.1] for _ in queries]
+
+    def retrieve(_scope, queries, _vectors, _owner):
+        retrieved.append(queries)
+        return [extra]
+
+    monkeypatch.setattr(chat, "effective_settings", lambda _: {"top_k": top_k})
+    monkeypatch.setattr(chat, "embed_texts", embed)
+    monkeypatch.setattr(chat, "retrieve_hybrid", retrieve)
+    assert chat.supplement_qa({}, "compound", UUID(int=1), original, ["first", "second"]) == [*original, extra]
+    assert embedded == retrieved == [["first"]]
+
+
 def test_cited_chunks_preserves_citation_order_and_indexes_evidence():
     rows = chat.cited_chunks("依据 [S2] 与 [S1]", evidence(2))
     assert [row["source_number"] for row in rows] == [2, 1]
