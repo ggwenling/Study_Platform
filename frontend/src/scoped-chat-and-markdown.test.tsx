@@ -439,6 +439,15 @@ describe('inline [S1] citations & KaTeX math rendering in MarkdownContent', () =
     const inlineCode = [...node.querySelectorAll('code')].find((el) => el.textContent === 'arr[S1]')
     expect(inlineCode).toBeTruthy()
     expect(node.querySelector('pre')?.textContent).toContain('items[S1]')
+    expect(node.querySelector('pre code.hljs')).toBeTruthy()
     expect(node.querySelector('.katex')).toBeTruthy()
+  })
+
+  it('highlights a tilde code fence added to an already rendered answer', async () => {
+    await render(<MarkdownContent>回答正文</MarkdownContent>)
+    expect(node.querySelector('pre')).toBeNull()
+    await render(<MarkdownContent>{'回答正文\n\n~~~js\nconst answer = 42\n~~~'}</MarkdownContent>)
+    await act(async () => { await vi.dynamicImportSettled() })
+    expect(node.querySelector('pre code.hljs .hljs-keyword')?.textContent).toBe('const')
   })
 })

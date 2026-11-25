@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useDisclosurePreference } from '../useDisclosurePreference'
 import { BookmarkPlus, Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
@@ -22,6 +22,17 @@ import { SourceReaderDrawer, type ReaderActionContext, type SourceReaderTarget }
 const time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const statusText = { pending: '等待生成…', streaming: '正在生成…', stopped: '已停止', failed: '回答失败', completed: '' }
 const mobileSourcesQuery = '(max-width: 760px)'
+
+const ChatAnswerMarkdown = memo(function ChatAnswerMarkdown({ message, onSelectCitation }: {
+  message: Message
+  onSelectCitation: (messageId: string, citation: Citation) => void
+}) {
+  return (
+    <MarkdownContent citations={message.citations} onSelectCitation={(citation) => onSelectCitation(message.id, citation)}>
+      {message.content}
+    </MarkdownContent>
+  )
+})
 
 export default function LiveChat({ id, searchButton }: { id: string; searchButton?: ReactNode }) {
   const { user, libraries = [], chat, revision, refresh, notify, report, requireLogin } = useWorkspace()
@@ -113,7 +124,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
     return () => media.removeEventListener?.('change', change)
   }, [])
 
-  function openSource(citation: Citation) {
+  const openSource = useCallback((citation: Citation) => {
     if (citation.availability !== 'available') {
       notify('此来源已不可访问。')
       return
@@ -130,16 +141,16 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
       locationLabel: citation.location_label,
       sourceUrl: citation.source_url,
     })
-  }
+  }, [libraries, notify])
 
-  function openCitations(messageId: string, citation: Citation) {
+  const openCitations = useCallback((messageId: string, citation: Citation) => {
     setSelectedId(messageId)
     if (mobile) {
       sourceTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
       setDrawer(true)
     } else setPanel(true)
     openSource(citation)
-  }
+  }, [mobile, openSource, setPanel])
 
   const displayTitle = conversation?.title || live.find((item) => item.role === 'user')?.content.slice(0, 80) || '对话'
 
@@ -269,14 +280,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                   ) : (
                     <>
                       <div className="answer">
-                        {message.content && (
-                          <MarkdownContent
-                            citations={message.citations}
-                            onSelectCitation={(citation) => openCitations(message.id, citation)}
-                          >
-                            {message.content}
-                          </MarkdownContent>
-                        )}
+                        {message.content && <ChatAnswerMarkdown message={message} onSelectCitation={openCitations} />}
                         {message.turn_id && chat.recoveryErrors[message.turn_id] && ['pending', 'streaming'].includes(message.status)
                           ? <p className="muted" role="status">暂时无法确认生成状态。<Button size="sm" variant="secondary" onClick={() => chat.recover(id, message.turn_id!)}>重新查询状态</Button></p>
                           : <p className="muted activity-status" role="status" aria-live="polite">{status}</p>}

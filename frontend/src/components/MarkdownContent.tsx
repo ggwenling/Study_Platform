@@ -70,6 +70,7 @@ export function remarkCitationRefs() {
 }
 
 type PluggableList = NonNullable<Options['rehypePlugins']>
+const remarkPlugins = [remarkGfm, remarkMath, remarkCitationRefs]
 let highlightPromise: Promise<PluggableList[number]> | null = null
 let katexPromise: Promise<PluggableList[number]> | null = null
 
@@ -103,16 +104,19 @@ export function MarkdownContent({
   onSelectCitation?: (citation: Citation) => void
 }) {
   const hasMath = children.includes('$')
+  const hasFence = children.includes('```') || children.includes('~~~')
   const [highlightPlugin, setHighlightPlugin] = useState<PluggableList[number] | null>(null)
   const [katexPlugin, setKatexPlugin] = useState<PluggableList[number] | null>(null)
 
   useEffect(() => {
+    // rehype-highlight only highlights code blocks with a language by default.
+    if (!hasFence || highlightPlugin) return
     let active = true
     void loadHighlight().then((plugin) => {
       if (active) setHighlightPlugin(() => plugin)
     })
     return () => { active = false }
-  }, [])
+  }, [hasFence, highlightPlugin])
 
   useEffect(() => {
     if (!hasMath || katexPlugin) return
@@ -174,7 +178,7 @@ export function MarkdownContent({
 
   return (
     <Markdown
-      remarkPlugins={[remarkGfm, remarkMath, remarkCitationRefs]}
+      remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
       components={components}
     >
