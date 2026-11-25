@@ -37,7 +37,8 @@ function locationLabel(locator: Record<string, unknown>) {
   if (typeof locator.image === 'number') return `图片 ${locator.image}`
   if (typeof locator.paragraph === 'number') return `段落 ${locator.paragraph}`
   if (Array.isArray(locator.table_path) && locator.table_path.length) {
-    const cells = locator.table_path.map(({ table, row, column }) => `表 ${table} · ${row} 行 ${column} 列`)
+    const cells = locator.table_path.map(({ table, row, column }) =>
+      `表 ${table} · ${row} 行${typeof column === 'number' ? ` ${column} 列` : ''}`)
     return cells.join(' / ')
   }
   if (typeof locator.start_line === 'number') return `第 ${locator.start_line} 行`

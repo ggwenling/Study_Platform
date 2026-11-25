@@ -275,6 +275,14 @@ it('packages pasted Markdown note with auto-derived filename and formats Markdow
   expect(locatorLabel({ slide: 3, notes: true })).toBe('第 3 页幻灯片 · 备注')
 })
 
+it('formats table row, cell and nested locators', () => {
+  const row = { table: 1, row: 2 }
+  const cell = { table: 2, row: 3, column: 4 }
+  expect(locatorLabel({ table_path: [row] })).toBe('表 1 · 2 行')
+  expect(locatorLabel({ table_path: [cell] })).toBe('表 2 · 3 行 4 列')
+  expect(locatorLabel({ table_path: [cell, row] })).toBe('表 2 · 3 行 4 列 / 表 1 · 2 行')
+})
+
 it('only exposes absolute HTTP(S) source links and accepts PPTX queue extensions', () => {
   expect(safeExternalUrl('https://example.com/path')).toBe('https://example.com/path')
   expect(safeExternalUrl('javascript:alert(1)')).toBeNull()

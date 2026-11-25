@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     learning_llm_max_output_tokens: int = 2048
     learning_llm_max_retries: int = 2
 
+    def upload_limit_for_mime(self, mime: str) -> int:
+        return self.max_pdf_upload_bytes if mime == "application/pdf" else self.max_upload_bytes
+
 
 @lru_cache
 def get_settings() -> Settings:

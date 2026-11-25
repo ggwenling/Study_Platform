@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
+import jieba
 import sqlalchemy as sa
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from starlette.concurrency import run_in_threadpool
@@ -607,9 +608,11 @@ _CONDITION = re.compile(
     r"\b(?:unless|must not|should not|upper limit|without\s+(?:contacting|validation)|whereas|only if)\b|上限|前提|不得",
     re.IGNORECASE,
 )
+_QA_CONJUNCTION = r"以及|还是|分别|\b(?:and|versus)\b"
 _COMPOUND_QUESTION = re.compile(
-    r"分别|各自|各多少|区别|对比|顺序|以及|同时|[？?].+|\b(?:compare|respectively|versus)\b", re.I,
+    rf"{_QA_CONJUNCTION}|各自|各多少|区别|对比|顺序|同时|[？?].+|\b(?:compare|respectively)\b", re.I,
 )
+_QA_CLAUSE_SEPARATOR = re.compile(rf"[，,；;？?。]|{_QA_CONJUNCTION}", re.I)
 _QA_IDENTIFIER = re.compile(r"\b[a-z0-9]+(?:-[a-z0-9]+)+\b", re.I)
 
 
@@ -710,9 +713,21 @@ def local_qa_evidence(scope, question, owner, evidence):
 def missing_qa_queries(scope, question, evidence):
     if get_settings().rag_query_rewrite_enabled or effective_settings(
         scope.get("retrieval_settings")
-    )["rerank_enabled"] or not _COMPOUND_QUESTION.search(question) or not scope["index_version_ids"]:
+    )["rerank_enabled"] or not scope["index_version_ids"]:
         return []
-    clauses = re.split(r"[，,；;？?。]|以及|还是|分别|(?<=\S)\s*[和与]\s*(?=\S)|\b(?:and|versus)\b", question)
+    # Only standalone Chinese conjunctions are separators (e.g. keep 参与 intact).
+    joins = [
+        start for token, start, end in jieba.tokenize(question)
+        if token in {"和", "与"} and 0 < start and end < len(question)
+    ] if "和" in question or "与" in question else []
+    if not joins and not _COMPOUND_QUESTION.search(question):
+        return []
+    if joins:
+        marked = list(question)
+        for start in joins:
+            marked[start] = "，"
+        question = "".join(marked)
+    clauses = _QA_CLAUSE_SEPARATOR.split(question)
     clauses = [clause.strip() for clause in clauses if len(lexical_query_terms(clause)) >= 2]
     if len(clauses) < 2:
         return []
@@ -733,25 +748,39 @@ def missing_qa_queries(scope, question, evidence):
 
 
 def supplement_qa(scope, question, owner, evidence, queries, *, diagnostics=None):
+    limit = int(effective_settings(scope.get("retrieval_settings"))["top_k"])
+    budget = min(4, limit // 2)
+    if not queries or not budget:
+        return evidence
     try:
         vectors = embed_texts(queries, context=ModelUsageContext(owner, "embedding"), diagnostics=diagnostics)
     except ApiError:
         return evidence
-    supplemental = retrieve_hybrid(scope, queries, vectors, owner)
-    if not supplemental:
+    if len(vectors) != len(queries):
         return evidence
-    limit = int(effective_settings(scope.get("retrieval_settings"))["top_k"])
     base = evidence[:limit]
-    budget = min(4, limit // 2)
-    anchors = set(_QA_IDENTIFIER.findall(" ".join(queries).casefold()))
-    rows = [row for row in supplemental if not _SECTION_START.match(row["text"])]
-    if anchors:
-        # Prefer a sentence carrying the term over syntax and truncated mentions.
-        rows.sort(key=lambda row: not (anchors.intersection(_QA_IDENTIFIER.findall(row["text"].casefold()))
-                                       and ' = "' not in row["text"] and len(row["text"]) >= 45))
+    ranked_queries = []
+    for query, vector in zip(queries, vectors, strict=True):
+        rows = [row for row in retrieve_hybrid(scope, [query], [vector], owner)
+                if not _SECTION_START.match(row["text"])]
+        if anchors := set(_QA_IDENTIFIER.findall(query.casefold())):
+            # Prefer a sentence carrying this query's term over syntax and truncated mentions.
+            rows.sort(key=lambda row: not (anchors.intersection(_QA_IDENTIFIER.findall(row["text"].casefold()))
+                                           and ' = "' not in row["text"] and len(row["text"]) >= 45))
+        ranked_queries.append(iter(rows))
     present = {row["id"] for row in base}
     texts = {row["text"] for row in base}
-    hits = [row for row in rows if row["id"] not in present and row["text"] not in texts][:min(2, budget)]
+    hits = []
+    hit_limit = min(2, budget)
+    # Give each query a turn before returning for an additional hit.
+    for _ in range(hit_limit):
+        for rows in ranked_queries:
+            if len(hits) == hit_limit:
+                break
+            if row := next((row for row in rows if row["id"] not in present and row["text"] not in texts), None):
+                hits.append(row)
+                present.add(row["id"])
+                texts.add(row["text"])
     if not hits:
         return evidence
     expanded = _local_qa_evidence(scope, question, owner, hits, max(0, budget - len(hits)))

@@ -4,6 +4,7 @@ import ipaddress
 import re
 import socket
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
@@ -199,27 +200,48 @@ def _restore_main_paragraphs(html: str, markdown: str) -> str:
     def normalize(value):
         return " ".join(re.findall(r"\w+", value.casefold()))
 
-    extracted = normalize(markdown)
-    additions = []
+    elements = root.xpath(".//h1 | .//h2 | .//h3 | .//h4 | .//h5 | .//h6 | .//p")
+    source = [" ".join(element.text_content().split()) for element in elements]
+    source_keys = [normalize(text) for text in source]
+    blocks = re.split(r"\n[ \t]*\n", markdown.strip()) if markdown.strip() else []
+    block_keys = [normalize(block) for block in blocks]
+    source_counts, block_counts = Counter(source_keys), Counter(block_keys)
+    positions = {key: i for i, key in enumerate(block_keys) if key and block_counts[key] == 1}
+    anchors = [(i, positions[key]) for i, key in enumerate(source_keys) if key in positions and source_counts[key] == 1]
+    if blocks and (not anchors or [pos for _, pos in anchors] != sorted(pos for _, pos in anchors)):
+        return markdown
+
+    extracted = f" {normalize(markdown)} "
+    headings = {
+        normalize(line) for line in markdown.splitlines() if re.match(r"^ {0,3}#{1,6}[ \t]", line)
+    }
+    additions = {}
     heading = None
-    for element in root.xpath(".//h1 | .//h2 | .//h3 | .//h4 | .//h5 | .//h6 | .//p"):
-        text = " ".join(element.text_content().split())
-        if element.tag.startswith("h"):
-            heading = f"{'#' * int(element.tag[1])} {text}" if text else None
-            continue
-        normalized = normalize(text)
-        if len(normalized) < 40 or normalized in extracted:
-            continue
-        if heading and (not additions or additions[-1][0] != heading):
-            additions.append((heading, []))
-        elif not additions:
-            additions.append(("", []))
-        additions[-1][1].append(text)
-        extracted += " " + normalized
+    restored = set()
+    for i, (element, key) in enumerate(zip(elements, source_keys, strict=True)):
+        if element.tag != "p":
+            heading = i if key else None
+        elif len(key) >= 40 and f" {key} " not in extracted and key not in restored:
+            if heading is not None and source_keys[heading] not in headings:
+                level = int(elements[heading].tag[1])
+                additions[heading] = f"{'#' * level} {source[heading]}"
+                headings.add(source_keys[heading])
+            additions[i] = source[i]
+            restored.add(key)
     if not additions:
         return markdown
-    supplemental = "\n\n".join(block for title, paragraphs in additions for block in (title, *paragraphs) if block)
-    return (markdown + "\n\n" + supplemental).strip()
+
+    # Insert each gap before its next known block, keeping the extractor's formatting.
+    output = []
+    source_start = block_start = 0
+    for source_end, block_end in [*anchors, (len(elements), len(blocks))]:
+        output.extend(blocks[block_start:block_end])
+        if source_end < len(elements) or block_start == len(blocks) or not blocks:
+            output.extend(additions[i] for i in range(source_start, source_end) if i in additions)
+        if block_end < len(blocks):
+            output.append(blocks[block_end])
+        source_start, block_start = source_end + 1, block_end + 1
+    return "\n\n".join(output)
 
 
 def _extract(markup: bytes, content_type: str, encoding: str | None, final_url: str):

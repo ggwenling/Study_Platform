@@ -344,11 +344,13 @@ def review_template(report):
 
 def quality_gate(report, review=None):
     rows = {(row["id"], row["strategy"]): row for row in report["cases"]}
+    mode = report.get("strategy")
+    candidate = "candidate" if mode == "product_compare" else "rewrite"
     expected_ids = report.get("expected_case_ids", [])
     expected_pairs = {(case_id, strategy) for case_id in expected_ids
-                      for strategy in ("baseline", "rewrite")}
+                      for strategy in ("baseline", candidate)}
     complete_comparison = (
-        report.get("status") == "completed" and report.get("strategy") == "compare"
+        report.get("status") == "completed" and mode in ("compare", "product_compare")
         and bool(expected_ids) and len(expected_pairs) == 2 * len(expected_ids)
         and len(rows) == len(report["cases"]) and set(rows) == expected_pairs
     )
@@ -390,26 +392,26 @@ def quality_gate(report, review=None):
     additions = sorted(
         group
         for group, strategy in hits
-        if strategy == "rewrite"
+        if strategy == candidate
         and hits[(group, strategy)]
         and not hits.get((group, "baseline"), True)
     )
     regressions = [
         key[0]
         for key in rows
-        if key[1] == "baseline" and passed[key] and not passed.get((key[0], "rewrite"), False)
+        if key[1] == "baseline" and passed[key] and not passed.get((key[0], candidate), False)
     ]
     lost_groups = sorted(
         group
         for group, strategy in hits
         if strategy == "baseline"
         and hits[(group, strategy)]
-        and not hits.get((group, "rewrite"), False)
+        and not hits.get((group, candidate), False)
     )
     safety_failures = [
         key[0]
         for key, row in rows.items()
-        if key[1] == "rewrite"
+        if key[1] == candidate
         and (
             not row["scope_valid"]
             or not row["citation_valid"]

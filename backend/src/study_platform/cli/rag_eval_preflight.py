@@ -110,7 +110,7 @@ def prepare_corpus(materials, cases, settings, directory, render_source, profile
         version = SimpleNamespace(id=material_id, source_mime=MIME_TYPES[material["format"]])
         try:
             render_source(material, source)
-            if source.stat().st_size > settings.max_upload_bytes:
+            if source.stat().st_size > settings.upload_limit_for_mime(version.source_mime):
                 raise ValueError("Source exceeds upload size limit")
             fingerprint = digest(source)
             if (profile or material.get("sha256")) and fingerprint != material.get("sha256"):
