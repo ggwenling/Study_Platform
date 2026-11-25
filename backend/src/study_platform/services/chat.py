@@ -728,7 +728,7 @@ def missing_qa_queries(scope, question, evidence):
         scope.get("retrieval_settings")
     )["rerank_enabled"] or not _COMPOUND_QUESTION.search(question) or not scope["index_version_ids"]:
         return []
-    clauses = re.split(r"[，,；;？?。]|以及|还是|分别|(?<=\S)[和与](?=\S)|\b(?:and|versus)\b", question)
+    clauses = re.split(r"[，,；;？?。]|以及|还是|分别|(?<=\S)\s*[和与]\s*(?=\S)|\b(?:and|versus)\b", question)
     clauses = [clause.strip() for clause in clauses if len(lexical_query_terms(clause)) >= 2]
     if len(clauses) < 2:
         return []

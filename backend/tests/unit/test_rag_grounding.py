@@ -166,6 +166,9 @@ def test_extra_queries_require_a_missing_compound_clause_and_leave_optional_rera
     ]
     question = "stale-while-revalidate 有何作用？stale-if-error 的限制是什么？"
     assert chat.missing_qa_queries(scope, question, evidence) == ["stale-if-error 的限制是什么"]
+    assert chat.missing_qa_queries(
+        scope, "stale-if-error 和 stale-while-revalidate 的基本触发场景分别是什么？", evidence,
+    ) == ["stale-if-error"]
     assert not chat.missing_qa_queries(scope, "stale-if-error 的限制是什么？", evidence)
     assert not chat.missing_qa_queries(
         {**scope, "retrieval_settings": {"rerank_enabled": True}}, question, evidence,
