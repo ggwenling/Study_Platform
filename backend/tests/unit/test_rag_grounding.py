@@ -170,28 +170,47 @@ def test_extra_queries_require_a_missing_compound_clause_and_leave_optional_rera
     assert chat.missing_qa_queries(
         scope, "stale-if-error 和 stale-while-revalidate 的基本触发场景分别是什么？", evidence,
     ) == ["stale-if-error"]
+    for conjunction in (" 和 ", " 与 ", "和", "与"):
+        question = f"stale-if-error{conjunction}stale-while-revalidate 的基本触发场景是什么？"
+        assert chat.missing_qa_queries(scope, question, evidence) == ["stale-if-error"]
     assert not chat.missing_qa_queries(scope, "stale-if-error 的限制是什么？", evidence)
+    assert not chat.missing_qa_queries(scope, "前端工程师如何参与审核流程？", evidence)
     assert not chat.missing_qa_queries(
         {**scope, "retrieval_settings": {"rerank_enabled": True}}, question, evidence,
     )
 
 
-def test_supplement_preserves_the_ranked_hits_and_uses_one_embedding_batch(monkeypatch):
+@pytest.mark.parametrize("second_has_distinct_hit", [True, False])
+def test_supplement_reserves_a_hit_per_query_and_uses_one_embedding_batch(monkeypatch, second_has_distinct_hit):
     original = evidence(10)
-    new = [{"id": "fresh", "text": "A new distinct fact"}]
-    attempts = []
+    first = {"id": "fresh", "text": "A new distinct fact"}
+    extra = {"id": "extra", "text": "Another hit for the first query"}
+    second = {"id": "second", "text": "Only the second query found this"}
+    queries = ["first clause", "second clause"]
+    vectors = [[0.1], [0.2]]
+    embedding_calls = []
+    retrieval_calls = []
+    scope, owner = {"index_version_ids": ["i"]}, UUID(int=1)
 
     def embed(queries, **_kwargs):
-        attempts.append(queries)
-        return [[0.1] for _ in queries]
+        embedding_calls.append(queries)
+        return vectors
+
+    def retrieve(scope, queries, vectors, owner):
+        retrieval_calls.append((scope, queries, vectors, owner))
+        if queries == ["first clause"]:
+            return [original[0], first, extra]
+        return [first, second] if second_has_distinct_hit else [first]
 
     monkeypatch.setattr(chat, "embed_texts", embed)
     monkeypatch.setattr(chat, "effective_settings", lambda _: {"top_k": 10})
-    monkeypatch.setattr(chat, "retrieve_hybrid", lambda *_args: [original[0], *new])
+    monkeypatch.setattr(chat, "retrieve_hybrid", retrieve)
     monkeypatch.setattr(chat, "_local_qa_evidence", lambda _scope, _question, _owner, rows, _budget: rows)
-    queries = ["first clause", "second clause"]
-    assert chat.supplement_qa({}, "compound question", UUID(int=1), original, queries) == [*original, *new]
-    assert attempts == [queries]
+    assert chat.supplement_qa(scope, "compound question", owner, original, queries) == [
+        *original, first, second if second_has_distinct_hit else extra,
+    ]
+    assert embedding_calls == [queries]
+    assert retrieval_calls == [(scope, [query], [vector], owner) for query, vector in zip(queries, vectors, strict=True)]
 
 
 def test_cited_chunks_preserves_citation_order_and_indexes_evidence():

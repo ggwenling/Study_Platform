@@ -296,7 +296,7 @@ def upload(
     if not title or not mime:
         raise ApiError(400, "unsupported_file", "Unsupported file type")
     settings = get_settings()
-    byte_limit = settings.max_pdf_upload_bytes if mime == "application/pdf" else settings.max_upload_bytes
+    byte_limit = settings.upload_limit_for_mime(mime)
     vision = _material_vision_snapshot(db, user.id, mime) if extraction_mode == "vlm" else None
     version_id = uuid4()
     path = source_path(version_id)

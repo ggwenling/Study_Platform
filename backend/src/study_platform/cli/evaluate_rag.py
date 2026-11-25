@@ -225,10 +225,11 @@ def seed_corpus(factory, materials, *, cache_dir=None, pipeline_profile=None, pr
             else:
                 shutil.copyfile(snapshot.source, path)
                 version.page_count = snapshot.page_count
-            if path.stat().st_size > settings.max_upload_bytes:
+            byte_size = path.stat().st_size
+            if byte_size > settings.upload_limit_for_mime(version.source_mime):
                 raise ValueError("Evaluation material exceeds the existing upload limit")
             hashes[item["id"]] = snapshot.sha256 if snapshot is not None else digest(path)
-            version.source_sha256, version.byte_size = hashes[item["id"]], path.stat().st_size
+            version.source_sha256, version.byte_size = hashes[item["id"]], byte_size
             db.add(material)
             db.flush()
             db.add(version)

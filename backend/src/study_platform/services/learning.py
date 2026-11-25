@@ -66,36 +66,26 @@ def _sample_scoped_chunks(
     max_chars: int = 16000,
 ) -> list[dict]:
     indices = [UUID(x) if isinstance(x, str) else x for x in scope_ids]
-    rows = db.execute(
+    document_rank = sa.func.row_number().over(
+        partition_by=Material.id,
+        order_by=(MaterialChunk.ordinal, MaterialChunk.id),
+    )
+    query = (
         chunk_query(indices, owner_user_id)
-        .order_by(Material.id, MaterialChunk.ordinal)
-        .limit(max(limit * 4, 48))
-    ).all()
-    excluded = exclude_ids or set()
-    by_material: dict[UUID, list[dict]] = {}
-    for row, title in rows:
-        if row.id in excluded or not (row.text or "").strip():
-            continue
-        by_material.setdefault(row.material_version_id, []).append(chunk_dto(row, title))
+        .where(MaterialChunk.text.regexp_match("[^[:space:]]"))
+        .order_by(document_rank, Material.id)
+        .limit(limit)
+    )
+    if exclude_ids:
+        query = query.where(MaterialChunk.id.not_in(exclude_ids))
+    rows = db.execute(query).all()
     sampled: list[dict] = []
     total_chars = 0
-    buckets = list(by_material.values())
-    idx = 0
-    while buckets and len(sampled) < limit:
-        next_buckets: list[list[dict]] = []
-        for bucket in buckets:
-            if idx < len(bucket):
-                item = bucket[idx]
-                if total_chars + len(item["text"]) > max_chars and sampled:
-                    return sampled
-                sampled.append(item)
-                total_chars += len(item["text"])
-                if len(sampled) >= limit:
-                    return sampled
-                if idx + 1 < len(bucket):
-                    next_buckets.append(bucket)
-        buckets = next_buckets
-        idx += 1
+    for row, title in rows:
+        if total_chars + len(row.text) > max_chars and sampled:
+            break
+        sampled.append(chunk_dto(row, title))
+        total_chars += len(row.text)
     return sampled
 
 

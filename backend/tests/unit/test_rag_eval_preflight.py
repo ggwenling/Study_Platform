@@ -1,10 +1,14 @@
 import json
+from contextlib import nullcontext
 from pathlib import Path
+from runpy import run_path
+from types import SimpleNamespace
 
 import pytest
 
 from study_platform.cli import evaluate_rag
-from study_platform.cli.rag_eval_preflight import digest, load_profile
+from study_platform.cli.rag_eval_preflight import digest, load_profile, prepare_corpus
+from study_platform.core.config import Settings
 from study_platform.services.rag_evaluation import read_dataset, support_hit
 
 
@@ -96,6 +100,42 @@ def test_bad_source_fails_live_before_database_or_provider(tmp_path, monkeypatch
     summary = json.loads(capsys.readouterr().out)
     assert [item["id"] for item in summary["materials"]] == ["doc"]
     assert summary["failures"][0]["detail"] == "Source SHA-256 mismatch"
+
+
+def test_pdf_above_generic_limit_can_preflight_and_seed(tmp_path, monkeypatch):
+    write_pdf = run_path(str(Path(__file__).resolve().parents[2] / "evaluation/long_documents/prepare.py"))["write_pdf"]
+    source = tmp_path / "long.pdf"
+    write_pdf(source, ["An ordinary text layer contains a complete statement for the source preflight."],
+              lambda _page: False, large=True)
+    settings = Settings(_env_file=None, storage_dir=tmp_path / "storage")
+    size = source.stat().st_size
+    assert settings.max_upload_bytes < size <= settings.max_pdf_upload_bytes
+    material = {"id": "pdf", "format": "pdf", "title": "Large PDF", "path": str(source), "knowledge_base": "kb"}
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    prepared, summary = prepare_corpus([material], [], settings, stage, evaluate_rag.render_source, None)
+    assert summary["preflight_passed"] and prepared["pdf"].page_count == 1
+
+    rows = []
+    database = SimpleNamespace(add=rows.append, flush=lambda: None)
+    factory = SimpleNamespace(begin=lambda: nullcontext(database))
+    monkeypatch.setattr(evaluate_rag, "get_settings", lambda: settings)
+    monkeypatch.setattr("study_platform.services.storage.get_settings", lambda: settings)
+    monkeypatch.setattr(evaluate_rag, "embed_document_batches",
+                        lambda texts, **_kwargs: ([[0.1] * 1024 for _ in texts], []))
+    *_, indexed = evaluate_rag.seed_corpus(factory, [material], prepared=prepared)
+    assert indexed == ["pdf"]
+    assert any(getattr(row, "byte_size", None) == size for row in rows)
+
+    settings.max_pdf_upload_bytes = size - 1
+    reject = tmp_path / "reject"
+    reject.mkdir()
+    _, summary = prepare_corpus(
+        [material, {**material, "id": "txt", "format": "txt"}], [], settings, reject, evaluate_rag.render_source, None,
+    )
+    assert [error["detail"] for error in summary["failures"]] == ["Source exceeds upload size limit"] * 2
+    with pytest.raises(ValueError, match="exceeds the existing upload limit"):
+        evaluate_rag.seed_corpus(factory, [material], prepared=prepared)
 
 
 def test_support_checks_required_spans_and_location_before_accepting_alternative():

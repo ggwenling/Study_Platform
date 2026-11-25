@@ -19,10 +19,11 @@ from study_platform.services.rag_evaluation import (
 )
 
 
-def comparison():
+def comparison(mode="compare"):
+    candidate = "rewrite" if mode == "compare" else "candidate"
     rows = []
     for key, answerable in [("answerable", True), ("no-answer", False)]:
-        for strategy in ("baseline", "rewrite"):
+        for strategy in ("baseline", candidate):
             rows.append(
                 {
                     "id": key,
@@ -30,7 +31,7 @@ def comparison():
                     "split": "heldout",
                     "strategy": strategy,
                     "answerable": answerable,
-                    "retrieval_support_hit": answerable and strategy == "rewrite",
+                    "retrieval_support_hit": answerable and strategy == candidate,
                     "answer_error": None,
                     "citation_valid": True,
                     "scope_valid": True,
@@ -38,29 +39,32 @@ def comparison():
             )
     report = {
         "cases": rows,
-        "strategy": "compare",
+        "strategy": mode,
         "status": "completed",
         "expected_case_ids": ["answerable", "no-answer"],
     }
     review = review_template(report)
     review.update(reviewer="test reviewer", human_confirmed=True)
     for row in review["cases"]:
-        row["fact_correct"] = row["id"] != "answerable" or row["strategy"] == "rewrite"
+        row["fact_correct"] = row["id"] != "answerable" or row["strategy"] == candidate
         row["citations_supported"] = True
     return report, review
 
 
 @pytest.mark.parametrize(
-    "damage", ["interrupted", "missing_question", "missing_side", "duplicate", "legacy", "single"]
+    "damage", ["interrupted", "missing_question", "missing_side", "wrong_side", "duplicate", "legacy", "single"]
 )
-def test_incomplete_comparisons_never_pass_even_with_all_existing_rows_reviewed(damage):
-    report, _ = comparison()
+@pytest.mark.parametrize("mode", ["compare", "product_compare"])
+def test_incomplete_comparisons_never_pass_even_with_all_existing_rows_reviewed(damage, mode):
+    report, _ = comparison(mode)
     if damage == "interrupted":
         report["status"] = "running"
     elif damage == "missing_question":
         report["expected_case_ids"].append("second-paraphrase")
     elif damage == "missing_side":
         report["cases"].pop()
+    elif damage == "wrong_side":
+        report["cases"][-1]["strategy"] = "candidate" if mode == "compare" else "rewrite"
     elif damage == "duplicate":
         report["cases"].append(report["cases"][0])
     elif damage == "legacy":
@@ -130,8 +134,9 @@ def test_dataset_rejects_quotes_that_normalize_to_empty(tmp_path, quote):
     )
 
 
-def test_group_gain_requires_review_and_safety_without_regression():
-    report, review = comparison()
+@pytest.mark.parametrize("mode", ["compare", "product_compare"])
+def test_group_gain_requires_review_and_safety_without_regression(mode):
+    report, review = comparison(mode)
     assert not quality_gate(report)["eligible_for_default"]
     assert quality_gate(report, review)["eligible_for_default"]
     review["cases"][-1]["fact_correct"] = False
@@ -160,8 +165,9 @@ def test_review_is_bound_to_exact_report_and_case_ids():
     "field,value",
     [("citation_valid", False), ("scope_valid", False), ("answer_error", "provider_failure")],
 )
-def test_invalid_citations_scope_or_model_errors_block_promotion(field, value):
-    report, _ = comparison()
+@pytest.mark.parametrize("mode", ["compare", "product_compare"])
+def test_invalid_citations_scope_or_model_errors_block_promotion(field, value, mode):
+    report, _ = comparison(mode)
     report["cases"][1][field] = value
     review = review_template(report)
     review.update(reviewer="test reviewer", human_confirmed=True)
@@ -170,8 +176,9 @@ def test_invalid_citations_scope_or_model_errors_block_promotion(field, value):
     assert not quality_gate(report, review)["eligible_for_default"]
 
 
-def test_correct_baseline_answer_and_fact_group_must_not_regress():
-    report, _ = comparison()
+@pytest.mark.parametrize("mode", ["compare", "product_compare"])
+def test_correct_baseline_answer_and_fact_group_must_not_regress(mode):
+    report, _ = comparison(mode)
     report["cases"][0]["retrieval_support_hit"] = True
     report["cases"][1]["retrieval_support_hit"] = False
     review = review_template(report)

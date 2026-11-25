@@ -85,6 +85,31 @@ def test_clip_recovers_missing_main_paragraph_without_navigation_or_duplicates(m
     assert hidden not in markdown
 
 
+def test_clip_restores_middle_step_under_existing_heading(monkeypatch):
+    import trafilatura
+
+    title = "Replace the battery"
+    first = "First, switch off the device and remove its cover with the supplied tool."
+    middle = "Next, disconnect the old battery before handling the replacement battery."
+    last = "Finally, reconnect the power supply only after closing the battery cover."
+    markup = f"<main><h2>{title}</h2><p>{first}</p><p>{middle}</p><p>{last}</p></main>".encode()
+    monkeypatch.setattr(trafilatura, "extract", lambda *args, **kwargs: f"## {title}\n\n{first}\n\n{last}")
+
+    _, markdown = web_clip._extract(markup, "text/html", "utf-8", "https://example.org/")
+
+    assert markdown == f"## {title}\n\n{first}\n\n{middle}\n\n{last}"
+
+
+def test_clip_skips_reinsertion_when_extracted_blocks_are_reordered():
+    first = "First, switch off the device and remove its cover with the supplied tool."
+    middle = "Next, disconnect the old battery before handling the replacement battery."
+    last = "Finally, reconnect the power supply only after closing the battery cover."
+    markup = f"<main><p>{first}</p><p>{middle}</p><p>{last}</p></main>"
+    markdown = f"{last}\n\n{first}"
+
+    assert web_clip._restore_main_paragraphs(markup, markdown) == markdown
+
+
 def test_dns_resolution_obeys_deadline(monkeypatch):
     import time
 

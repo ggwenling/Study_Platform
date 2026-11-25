@@ -52,11 +52,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - name: Verify checked-out revision
         env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" && git rev-parse HEAD
+          EXPECTED_SHA: ${{ github.sha }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_SHA" || exit 1
+          printf 'Candidate SHA: %s\nTested SHA: %s\n' "$CANDIDATE_SHA" "$actual_sha"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
@@ -96,11 +100,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - name: Verify checked-out revision
         env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" && git rev-parse HEAD
+          EXPECTED_SHA: ${{ github.sha }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_SHA" || exit 1
+          printf 'Candidate SHA: %s\nTested SHA: %s\n' "$CANDIDATE_SHA" "$actual_sha"
 
       - uses: actions/setup-node@v4
         with:

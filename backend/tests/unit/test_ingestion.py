@@ -267,6 +267,7 @@ def test_docx_semantic_v4_groups_flat_table_rows_with_headers_and_preserves_nest
     path = tmp_path / "matrix.docx"
     doc = Document()
     table = doc.add_table(rows=3, cols=2)
+    table.rows[0]._tr.get_or_add_trPr().append(OxmlElement("w:tblHeader"))
     table.cell(0, 0).text = "检查项"
     table.cell(0, 1).text = "期望结果"
     table.cell(1, 0).text = "CT-8402"
@@ -319,3 +320,24 @@ def test_docx_semantic_v4_groups_flat_table_rows_with_headers_and_preserves_nest
         "检查项",
         {"table_path": [{"table": 1, "row": 1, "column": 1}], "cell_paragraph": 1},
     )
+
+
+@pytest.mark.parametrize("explicitly_disabled", [False, True])
+def test_docx_semantic_v4_keeps_short_unmarked_first_row_as_data(tmp_path, explicitly_disabled):
+    doc = Document()
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "ALPHA-100"
+    table.cell(0, 1).text = "62 minutes"
+    table.cell(1, 0).text = "BETA-200"
+    table.cell(1, 1).text = "91 minutes"
+    if explicitly_disabled:
+        header = OxmlElement("w:tblHeader")
+        header.set(qn("w:val"), "false")
+        table.rows[0]._tr.get_or_add_trPr().append(header)
+    path = tmp_path / "records.docx"
+    doc.save(path)
+
+    assert list(ingestion.extract_docx(path, group_table_rows=True)) == [
+        ("ALPHA-100 | 62 minutes", {"table_path": [{"table": 1, "row": 1}]}),
+        ("BETA-200 | 91 minutes", {"table_path": [{"table": 1, "row": 2}]}),
+    ]

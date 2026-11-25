@@ -104,6 +104,7 @@ def ensure_ooxml_uncompressed_limit(path):
 def extract_docx(path, *, legacy_columns=False, group_table_rows=False):
     ensure_ooxml_uncompressed_limit(path)
     from docx import Document
+    from docx.oxml.ns import qn
     from docx.table import Table
     from docx.text.paragraph import Paragraph
 
@@ -148,7 +149,6 @@ def extract_docx(path, *, legacy_columns=False, group_table_rows=False):
                 table_number += 1
                 seen_cells = set()
                 headers: dict[int, str] = {}
-                row_count = len(block.rows)
                 for row_number, row in enumerate(block.rows, 1):
                     columns_before = 0 if legacy_columns else row.grid_cols_before
                     if columns_before < 0:
@@ -160,11 +160,9 @@ def extract_docx(path, *, legacy_columns=False, group_table_rows=False):
                         row_locator = {
                             "table_path": [*table_path, {"table": table_number, "row": row_number}]
                         }
-                        if (
-                            row_number == 1
-                            and row_count >= 2
-                            and len(row_cells) >= 2
-                            and all(len(text) <= 40 and "\n" not in text for _, text in row_cells)
+                        if row_number == 1 and any(
+                            flag.get(qn("w:val"), "true") in {"1", "true", "on"}
+                            for flag in row._tr.xpath("./w:trPr/w:tblHeader")
                         ):
                             headers = {col: text for col, text in row_cells}
                             yield " | ".join(text for _, text in row_cells), row_locator

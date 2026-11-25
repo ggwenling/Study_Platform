@@ -38,8 +38,8 @@ def test_collect_quiz_hits_falls_back_round_robin_when_retrieval_is_empty(monkey
     mv_a, mv_b = uuid4(), uuid4()
     rows = [
         _chunk(mv_a, 0, "Fresh responses can be reused without validation.", "rfc9111.txt"),
-        _chunk(mv_a, 1, "Stale responses normally require revalidation.", "rfc9111.txt"),
         _chunk(mv_b, 0, "The immutable directive applies during freshness lifetime.", "rfc8246.txt"),
+        _chunk(mv_a, 1, "Stale responses normally require revalidation.", "rfc9111.txt"),
         _chunk(mv_b, 1, "Clients should not send conditional requests while fresh.", "rfc8246.txt"),
     ]
     seen_queries: list[str] = []
@@ -48,14 +48,6 @@ def test_collect_quiz_hits_falls_back_round_robin_when_retrieval_is_empty(monkey
         "retrieve",
         lambda _scope, query, _owner: seen_queries.append(query) or [],
     )
-    monkeypatch.setattr(
-        learning,
-        "chunk_query",
-        lambda _indices, _owner: SimpleNamespace(
-            order_by=lambda *_a: SimpleNamespace(limit=lambda _n: "stmt")
-        ),
-    )
-
     hits = learning._collect_quiz_hits(
         _FakeDb(rows),
         {"index_version_ids": [str(uuid4())]},
@@ -81,16 +73,8 @@ def test_collect_quiz_hits_supplements_sparse_retrieval_without_duplicates(monke
     second_row, second_title = _chunk(mv_a, 1, "Clause two.", "doc.txt")
     retrieved = [learning.chunk_dto(first_row, first_title)]
     monkeypatch.setattr(learning, "retrieve", lambda *_args: retrieved)
-    monkeypatch.setattr(
-        learning,
-        "chunk_query",
-        lambda _indices, _owner: SimpleNamespace(
-            order_by=lambda *_a: SimpleNamespace(limit=lambda _n: "stmt")
-        ),
-    )
-
     hits = learning._collect_quiz_hits(
-        _FakeDb([(first_row, first_title), (second_row, second_title)]),
+        _FakeDb([(second_row, second_title)]),
         {"index_version_ids": [str(uuid4())]},
         [str(uuid4())],
         owner,
@@ -119,14 +103,6 @@ def test_generate_learning_quiz_still_raises_no_chunks_when_index_has_no_text(mo
         "get_settings",
         lambda: SimpleNamespace(learning_stub_grader=False),
     )
-    monkeypatch.setattr(
-        learning,
-        "chunk_query",
-        lambda _indices, _owner: SimpleNamespace(
-            order_by=lambda *_a: SimpleNamespace(limit=lambda _n: "stmt")
-        ),
-    )
-
     with pytest.raises(ApiError) as error:
         learning.generate_learning_quiz.__wrapped__(
             _EmptyDb(),
