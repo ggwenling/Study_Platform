@@ -167,7 +167,7 @@ def test_vision_probe_uses_small_image_and_saved_snapshot(monkeypatch):
 
     def invoke(prompt, image_bytes, mime_type, *, context, saved):
         with Image.open(BytesIO(image_bytes)) as image:
-            assert image.size == (1, 1)
+            assert image.size == (32, 32)
         calls.append((prompt, mime_type, context.purpose, saved))
         return "white"
 

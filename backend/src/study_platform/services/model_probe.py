@@ -11,8 +11,8 @@ from study_platform.core.errors import ApiError
 from study_platform.services.model_connections import selection
 from study_platform.services.model_usage import ModelUsageContext, record_model_call
 
-_ONE_PIXEL_PNG = b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jk3sAAAAASUVORK5CYII="
+_PROBE_PNG = b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAN0lEQVR4nO3RwQ0AMAjDwJT9d05HMB9+vgGCZF7bXJrT9XhgwR8gEyETIRMhEyETIRMhEyEThXzH8QM9OMM6fAAAAABJRU5ErkJggg=="
 )
 
 
@@ -20,8 +20,8 @@ def probe_vision(owner, saved):
     from study_platform.services.model_calls import invoke_vision
 
     return invoke_vision(
-        "Reply with one short word describing this 1x1 image.",
-        _ONE_PIXEL_PNG,
+        "Reply with one short word describing this image.",
+        _PROBE_PNG,
         "image/png",
         context=ModelUsageContext(owner, "connection_test"),
         saved=saved,

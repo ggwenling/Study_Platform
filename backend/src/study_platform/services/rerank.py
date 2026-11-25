@@ -52,8 +52,16 @@ def parse_results(payload: Any, document_count: int) -> list[dict[str, float | i
     return sorted(results, key=lambda item: (-item["relevance_score"], item["index"]))
 
 
+def rerank_endpoint(base_url: str) -> str:
+    """Resolve the POST endpoint, preserving explicit `/rerank` or `/reranks` URLs."""
+    stripped = base_url.rstrip("/")
+    if stripped.endswith(("/rerank", "/reranks")):
+        return stripped
+    return f"{stripped}/rerank"
+
+
 def _post_rerank(base_url, api_key, model, query, documents, top_n, timeout):
-    endpoint = f"{base_url.rstrip('/')}/rerank"
+    endpoint = rerank_endpoint(base_url)
     with sync_client(base_url, timeout) as client:
         response = client.post(
             endpoint,
