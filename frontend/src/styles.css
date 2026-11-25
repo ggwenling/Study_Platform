@@ -715,10 +715,10 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 }
 .sidebar-sections:focus-visible { outline-offset: -3px; }
 @media (forced-colors: none) {
-  .sidebar-sections { --scroll-thumb: light-dark(#9b9b9b, #656565); scrollbar-color: var(--scroll-thumb) transparent; }
+  .sidebar-sections { --scroll-thumb: light-dark(#8e8e8e, #656565); scrollbar-color: var(--scroll-thumb) transparent; }
   .sidebar-sections:is(:hover, :focus-within) { --scroll-thumb: light-dark(#6d6d6d, #929292); }
-  @supports selector(::-webkit-scrollbar) {
-    .sidebar-sections { scrollbar-width: auto; scrollbar-color: auto; }
+  @supports not (scrollbar-color: auto) {
+    .sidebar-sections { scrollbar-width: auto; }
     .sidebar-sections::-webkit-scrollbar { width: 6px; }
     .sidebar-sections::-webkit-scrollbar-track { background: transparent; }
     .sidebar-sections::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }
