@@ -725,13 +725,23 @@ def missing_qa_queries(scope, question, evidence):
     shared = {}
     for start in joins:
         left = _QA_CLAUSE_SEPARATOR.split(question[:start])[-1].strip()
+        left_terms = lexical_query_terms(left)
+        if len(left_terms) != 1:
+            continue
         right = _QA_CLAUSE_SEPARATOR.split(question[start + 1:])[0].strip()
         entity, marker, predicate = right.partition("的")
-        if marker and lexical_query_terms(entity) and lexical_query_terms(predicate) and (
-            len(lexical_query_terms(left)) == 1
-        ):
-            shared[left] = (left + marker + predicate, lexical_query_terms(left))
-            shared[right] = (right, lexical_query_terms(entity))
+        if not marker:
+            entity = next(jieba.cut(right), "")
+            predicate = right[len(entity):]
+        entity_terms = lexical_query_terms(entity)
+        predicate_terms = set(lexical_query_terms(predicate))
+        topic = {
+            term.casefold() for term in jieba.cut(predicate)
+            if term.casefold() in predicate_terms and not _COMPOUND_QUESTION.fullmatch(term)
+        }
+        if entity_terms and topic:
+            shared[left] = (left + marker + predicate, left_terms, topic)
+            shared[right] = (right, entity_terms, topic)
     marked = list(question)
     for start in joins:
         marked[start] = "，"
@@ -739,16 +749,20 @@ def missing_qa_queries(scope, question, evidence):
     clauses = [clause for clause in clauses if clause in shared or len(lexical_query_terms(clause)) >= 2]
     if len(clauses) < 2:
         return []
-    corpus = " ".join(row["text"].casefold() for row in evidence)
+    texts = [row["text"].casefold() for row in evidence]
+    corpus = " ".join(texts)
     substantive = [row["text"].casefold() for row in evidence if len(row["text"]) >= 35
                    and not _SECTION_START.match(row["text"]) and " . . ." not in row["text"]]
     missing = []
     for clause in clauses:
-        query, terms = shared.get(clause, (clause, lexical_query_terms(clause)))
-        anchors = _QA_IDENTIFIER.findall(clause)
-        if anchors:
+        query = clause
+        if clause in shared:
+            query, terms, topic = shared[clause]
+            covered = any(all(term in text for term in terms) and any(word in text for word in topic) for text in texts)
+        elif anchors := _QA_IDENTIFIER.findall(clause):
             covered = all(sum(anchor.casefold() in text for text in substantive) >= 2 for anchor in anchors)
         else:
+            terms = lexical_query_terms(clause)
             covered = sum(term in corpus for term in terms) >= (len(terms) + 1) // 2
         if not covered and query not in missing:
             missing.append(query)

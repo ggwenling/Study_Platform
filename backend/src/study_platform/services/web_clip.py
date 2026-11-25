@@ -181,6 +181,12 @@ def _client_for_target(target: PublicTarget) -> httpx.Client:
     )
 
 
+_MARKDOWN_INLINE_LINK = re.compile(
+    r"(?<!\\)\[((?:\\[^\n]|[^\[\]\\\n])*)\]\("
+    r"(?:<(?:\\[^\n]|[^<>\\\n])*>|(?:\\[^\n]|[^()\s\\]|\([^()\r\n]*\))*)\)"
+)
+
+
 def _restore_main_paragraphs(html: str, markdown: str) -> str:
     """Recover paragraphs dropped by the extractor from an unambiguous main region."""
     try:
@@ -210,9 +216,10 @@ def _restore_main_paragraphs(html: str, markdown: str) -> str:
     source = [" ".join(element.text_content().split()) for element in elements]
     source_keys = [normalize(text) for text in source]
     blocks = re.split(r"\n[ \t]*\n", markdown.strip()) if markdown.strip() else []
+    visible_blocks = [_MARKDOWN_INLINE_LINK.sub(r"\1", block) for block in blocks]
     block_keys = [
         normalize(re.sub(r"(?m)^\s*(?:\d+[.)]|[-+*])[ \t]+", "", block))
-        for block in blocks
+        for block in visible_blocks
     ]
     source_counts, block_counts = Counter(source_keys), Counter(block_keys)
     positions = {key: i for i, key in enumerate(block_keys) if key and block_counts[key] == 1}
@@ -220,9 +227,9 @@ def _restore_main_paragraphs(html: str, markdown: str) -> str:
     if blocks and (not anchors or [pos for _, pos in anchors] != sorted(pos for _, pos in anchors)):
         return markdown
 
-    extracted = normalize(markdown)
+    extracted = "".join(block_keys)
     headings = {
-        normalize(line) for line in markdown.splitlines() if re.match(r"^ {0,3}#{1,6}[ \t]", line)
+        normalize(line) for block in visible_blocks for line in block.splitlines() if re.match(r"^ {0,3}#{1,6}[ \t]", line)
     }
     additions = {}
     heading = None

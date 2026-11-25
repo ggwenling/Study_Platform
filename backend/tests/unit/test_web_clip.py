@@ -129,6 +129,26 @@ def test_clip_restores_paragraph_before_a_retained_list_without_duplicating_inli
     )
 
 
+@pytest.mark.parametrize("destination", [
+    "https://example.org/guide",
+    "https://example.org/Guide_(repair)",
+    "<https://example.org/Guide_(repair)>",
+])
+def test_clip_restores_paragraph_after_list_with_link(destination):
+    omitted = "After removing the cover, disconnect the old battery from its power cable."
+    last = "Finally, reconnect the power supply only after closing the battery cover."
+    markup = (
+        f'<main><h2>Replace the battery</h2><ol><li><a href="{destination.strip("<>")}">Remove the cover</a></li>'
+        f"<li>Remove the screws</li></ol><p>{omitted}</p><p>{last}</p></main>"
+    )
+    markdown = (
+        f"## Replace the battery\n\n1. [Remove the cover]({destination})\n"
+        f"2. Remove the screws\n\n{last}"
+    )
+
+    assert web_clip._restore_main_paragraphs(markup, markdown) == markdown.replace(last, f"{omitted}\n\n{last}")
+
+
 def test_dns_resolution_obeys_deadline(monkeypatch):
     import time
 
