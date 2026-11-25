@@ -32,7 +32,7 @@ function UsageBreakdown({ title, rows }: { title: string; rows: ModelUsageBucket
 }
 
 export function Settings({ user, requireLogin }: { user: User | null; requireLogin: () => void }) {
-  const { revision } = useWorkspace()
+  const { revisions } = useWorkspace()
   const [summary, setSummary] = useState<ModelUsageSummary | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -52,7 +52,7 @@ export function Settings({ user, requireLogin }: { user: User | null; requireLog
       },
     ).finally(() => { if (active) setBusy(false) })
     return () => { active = false }
-  }, [user, revision, attempt])
+  }, [user, revisions.usage, attempt])
 
   if (!user) return <div className="placeholder-page">
     <EmptyState title="登录后查看设置" description="管理个人模型连接，查看自己的调用用量。" action={<Button onClick={requireLogin}>登录</Button>} />

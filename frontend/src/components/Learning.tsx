@@ -91,7 +91,7 @@ function SourceList({ sources, onOpenSource, disabled = false }: {
 }
 
 export function Learning({ knowledgeBases, notify, overview, refreshOverview }: Props) {
-  const { capabilities, aiJobs, revision } = useWorkspace()
+  const { capabilities, aiJobs, revisions } = useWorkspace()
   const navigate = useNavigate()
   const location = useLocation()
   const historyState = location.state as {
@@ -220,7 +220,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
       if (!controller.signal.aborted) setPendingError(errorMessage(error))
     })
     return () => controller.abort()
-  }, [revision, pendingRetry])
+  }, [revisions.learning, pendingRetry])
 
   useEffect(() => {
     const state = location.state as typeof historyState
@@ -256,7 +256,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
       },
     )
     return () => controller.abort()
-  }, [kbId, materialsRetry])
+  }, [kbId, revisions.materials, materialsRetry])
 
   function applyResponseUpdate(responseId: string, result: LearningResponseResult) {
     setAttempt((prev) => {

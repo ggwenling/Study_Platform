@@ -59,7 +59,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   node = document.body.appendChild(document.createElement('div'))
   root = createRoot(node)
-  workspace.value = { user: { id: 'one' }, libraries: [library('A'), library('B')], revision: 0, capabilities: { rag: true, max_upload_bytes: 1000 }, refresh: vi.fn(), report: vi.fn(), notify: vi.fn(), requireLogin: vi.fn(), chat: { isBusy: () => false, activeFor: () => null, pendingFor: () => null, send: vi.fn() } }
+  workspace.value = { user: { id: 'one' }, libraries: [library('A'), library('B')], revisions: { materials: 0 }, capabilities: { rag: true, max_upload_bytes: 1000 }, refresh: vi.fn(), report: vi.fn(), notify: vi.fn(), requireLogin: vi.fn(), chat: { isBusy: () => false, activeFor: () => null, pendingFor: () => null, send: vi.fn() } }
   vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
 })
 afterEach(async () => { await act(async () => root.unmount()); node.remove(); vi.useRealTimers(); vi.unstubAllGlobals() })

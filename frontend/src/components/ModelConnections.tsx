@@ -93,7 +93,7 @@ export function ModelConnectionsPanel() {
     void load()
     return () => { active = false; window.clearTimeout(timer) }
   }, [reload])
-  const load = () => { setReload((value) => value + 1); refresh() }
+  const load = () => { setReload((value) => value + 1); refresh('capabilities', 'usage') }
 
   async function choose(kind: ModelConnection['kind'], id: string | null) {
     setBusy(id ?? kind)

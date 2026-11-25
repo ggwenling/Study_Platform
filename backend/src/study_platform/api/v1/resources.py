@@ -427,6 +427,7 @@ def list_messages(
     cursor: UUID | None = None,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
+    order: Literal["asc", "desc"] = "asc",
 ):
     owned_conversation(db, user, conversation_id)
     stmt = sa.select(Message).where(Message.conversation_id == conversation_id)
@@ -438,8 +439,12 @@ def list_messages(
         )
         if not anchor:
             raise ApiError(400, "invalid_cursor", "Invalid cursor")
-        stmt = stmt.where(Message.sequence_no > anchor.sequence_no)
-    rows = db.scalars(stmt.order_by(Message.sequence_no).limit(limit + 1)).all()
+        if order == "desc":
+            stmt = stmt.where(Message.sequence_no < anchor.sequence_no)
+        else:
+            stmt = stmt.where(Message.sequence_no > anchor.sequence_no)
+    sequence = Message.sequence_no.desc() if order == "desc" else Message.sequence_no.asc()
+    rows = db.scalars(stmt.order_by(sequence).limit(limit + 1)).all()
     return {
         "items": [message_dto(db, r) for r in rows[:limit]],
         "next_cursor": rows[limit - 1].id if len(rows) > limit else None,

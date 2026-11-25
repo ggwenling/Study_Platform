@@ -39,7 +39,7 @@ let view = false
 
 function Harness() {
   chat = useChat(() => { revision += 1 }, report)
-  workspace.value = { user, chat, revision, report, notify: vi.fn(), requireLogin: vi.fn() }
+  workspace.value = { user, chat, revisions: { messages: revision }, report, notify: vi.fn(), requireLogin: vi.fn() }
   return view ? <LiveChat id="c" /> : null
 }
 async function render() { await act(async () => root.render(<Harness />)) }
@@ -65,6 +65,32 @@ beforeEach(() => {
   vi.mocked(api.messages).mockResolvedValue({ items: [], next_cursor: null })
 })
 afterEach(async () => { await act(async () => root.unmount()); node.remove(); vi.useRealTimers() })
+
+it('loads recent messages first, retries older pages, and preserves them on refresh', async () => {
+  view = true
+  const latest = message('completed', '最新回答')
+  const previous = userMessage('较早问题')
+  vi.mocked(api.messages)
+    .mockResolvedValueOnce({ items: [latest], next_cursor: latest.id })
+    .mockRejectedValueOnce(new Error('网络中断'))
+    .mockResolvedValueOnce({ items: [previous], next_cursor: null })
+    .mockResolvedValueOnce({ items: [latest], next_cursor: latest.id })
+  await render()
+  expect(api.messages).toHaveBeenCalledExactlyOnceWith('c', undefined, 'desc', expect.any(AbortSignal))
+  expect(node.querySelectorAll('article.message')).toHaveLength(1)
+  const loadButton = () => [...node.querySelectorAll('button')].find((button) => button.textContent?.includes('加载更早消息'))!
+  await act(async () => loadButton().click())
+  expect(node.querySelector('.chat-older [role="alert"]')?.textContent).toBe('请求失败，请检查连接后重试。')
+  expect(node.querySelectorAll('article.message')).toHaveLength(1)
+  await act(async () => loadButton().click())
+  expect(api.messages).toHaveBeenLastCalledWith('c', latest.id, 'desc', expect.any(AbortSignal))
+  expect([...node.querySelectorAll('article.message')].map((row) => row.classList[1])).toEqual(['user-message', 'ai-message'])
+  expect(loadButton()).toBeUndefined()
+  revision += 1
+  await render()
+  expect(node.querySelectorAll('article.message')).toHaveLength(2)
+  expect(loadButton()).toBeUndefined()
+})
 
 describe('disconnected chat recovery', () => {
   it('shows real phases, ignores another turn and removes the orb before final recovery', async () => {

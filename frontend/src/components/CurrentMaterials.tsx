@@ -35,7 +35,7 @@ export function CurrentMaterials({
   onUseAll?: () => void
   scoped?: boolean
 }) {
-  const { revision, refresh, report, notify } = useWorkspace()
+  const { revisions, refresh, report, notify } = useWorkspace()
   const [data, setData] = useState<{ libraryId: string; rows: Material[] | null; error: string }>({ libraryId, rows: null, error: '' })
   const [attempt, setAttempt] = useState(0)
   const [checking, setChecking] = useState(true)
@@ -82,7 +82,7 @@ export function CurrentMaterials({
     }
     void load()
     return () => { controller.abort(); window.clearTimeout(timer) }
-  }, [libraryId, revision, attempt])
+  }, [libraryId, revisions.materials, attempt])
 
   const readyIds = new Set(rows?.filter((row) => row.status === 'ready').map((row) => row.id))
   const invalidIds = rows ? selectedIds.filter((id) => !readyIds.has(id)) : []
@@ -153,12 +153,12 @@ export function CurrentMaterials({
             {!terminal(row) && row.job_id && <Button type="button" size="sm" variant="secondary" disabled={busy !== null} loading={busy === `cancel:${row.id}`} onClick={async () => {
               if (busy) return
               setBusy(`cancel:${row.id}`)
-              try { await api.cancelJob(row.job_id!); refresh(); notify?.('已取消资料处理。') } catch (failure) { report(failure) } finally { setBusy(null) }
+              try { await api.cancelJob(row.job_id!); refresh('materials', 'overview'); notify?.('已取消资料处理。') } catch (failure) { report(failure) } finally { setBusy(null) }
             }}>取消处理</Button>}
             {['failed', 'cancelled'].includes(row.status) && <Button type="button" size="sm" variant="secondary" disabled={busy !== null} loading={busy === row.id} onClick={async () => {
               if (busy) return
               setBusy(row.id)
-              try { await api.retryMaterial(row.id); refresh() } catch (failure) { report(failure) } finally { setBusy(null) }
+              try { await api.retryMaterial(row.id); refresh('materials', 'overview') } catch (failure) { report(failure) } finally { setBusy(null) }
             }}>重试处理</Button>}
             <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={() => setConfirmDelete(row)}>删除</Button>
           </div>
@@ -177,7 +177,7 @@ export function CurrentMaterials({
                 try {
                   await api.deleteMaterial(confirmDelete.id)
                   setConfirmDelete(null)
-                  refresh()
+                  refresh('materials', 'overview')
                   notify?.('资料已删除。')
                 } catch (failure) { report(failure) } finally { setBusy(null) }
               }}>确认删除</Button>

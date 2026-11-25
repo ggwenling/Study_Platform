@@ -370,7 +370,7 @@ export function Composer({ demo = false, conversationId, preferredLibrary, initi
           try {
             const library = await api.createKnowledgeBase({ name })
             chooseLibrary(library.id)
-            refresh()
+            refresh('libraries', 'overview')
             setCreating(false)
           } catch (error) { setCreateError(errorMessage(error)); report(error) } finally { setCreateBusy(false) }
         }}>

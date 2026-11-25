@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Archive, ArchiveRestore, BookOpen, ChevronRight, Download, Ellipsis, GraduationCap, History, Layers, MessageCircle, PanelLeft, Pencil, Search, Settings, Trash2 } from 'lucide-react'
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
@@ -40,10 +40,11 @@ const navigation = [
 
 function LearningRoute({ notify }: { notify: (message: string) => void }) {
   const { user, libraries, overview, refresh, requireLogin } = useWorkspace()
+  const refreshOverview = useCallback(() => refresh('overview', 'usage'), [refresh])
   if (!user) {
     return <div className="placeholder-page"><EmptyState title="登录后使用学习" description="练习、拍照作答与错题本。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
   }
-  return <Learning knowledgeBases={libraries} notify={notify} overview={overview} refreshOverview={refresh} />
+  return <Learning knowledgeBases={libraries} notify={notify} overview={overview} refreshOverview={refreshOverview} />
 }
 
 function Placeholder({ title, description }: { title: string; description: string }) {
@@ -349,7 +350,7 @@ const historyWhen = new Intl.DateTimeFormat('zh-CN', {
 })
 
 function HistoryPage() {
-  const { user, revision, refresh, notify, report, requireLogin, chat } = useWorkspace()
+  const { user, revisions, refresh, notify, report, requireLogin, chat } = useWorkspace()
   const [archived, setArchived] = useState(false)
   const [items, setItems] = useState<Conversation[] | null>(null)
   const [error, setError] = useState('')
@@ -362,7 +363,7 @@ function HistoryPage() {
       (failure) => { if (active) { setError(errorMessage(failure)); report(failure) } },
     )
     return () => { active = false }
-  }, [user, revision, archived])
+  }, [user, revisions.conversations, archived])
   if (!user) return <div className="placeholder-page"><EmptyState title="登录后查看历史" description="打开已保存的会话。" action={<Button onClick={requireLogin}>登录</Button>} /></div>
   function changeHistory(next: boolean) {
     if (archived === next) return
@@ -375,7 +376,7 @@ function HistoryPage() {
       <Button size="sm" variant={archived ? 'ghost' : 'secondary'} aria-pressed={!archived} onClick={() => changeHistory(false)}>未归档</Button>
       <Button size="sm" variant={archived ? 'secondary' : 'ghost'} aria-pressed={archived} onClick={() => changeHistory(true)}>已归档</Button>
     </div>
-    {error ? <p role="alert">{error} <Button size="sm" onClick={refresh}>重试</Button></p>
+    {error ? <p role="alert">{error} <Button size="sm" onClick={() => refresh('conversations')}>重试</Button></p>
       : !items ? <p role="status">正在读取历史…</p>
       : !items.length ? <p className="muted">{archived ? '暂无已归档的会话。' : '暂无会话历史。'}</p>
       : <ul className="resource-list history-list">
@@ -393,7 +394,7 @@ function HistoryPage() {
                 try {
                   await api.archiveConversation(row.id, false)
                   setItems((current) => current?.filter((item) => item.id !== row.id) ?? null)
-                  refresh()
+                  refresh('conversations', 'overview')
                   notify('会话已恢复。')
                 } catch (failure) { report(failure) }
               } }
@@ -415,17 +416,17 @@ function HistoryPage() {
     onClose={() => setDialogTarget(null)}
     onRenamed={(updated) => {
       setItems((current) => current ? current.map((item) => item.id === updated.id ? updated : item) : current)
-      refresh()
+      refresh('conversations')
     }}
     onArchived={(updated) => {
       setItems((current) => current?.filter((item) => item.id !== updated.id) ?? null)
-      refresh()
+      refresh('conversations', 'overview')
     }}
     onBeforeDelete={(deletedId) => chat?.evictConversation?.(deletedId)}
     onDeleted={(deletedId) => {
       chat?.evictConversation?.(deletedId)
       setItems((current) => current ? current.filter((item) => item.id !== deletedId) : current)
-      refresh()
+      refresh('conversations', 'overview')
     }}
     report={report}
     notify={notify}

@@ -13,6 +13,8 @@ let session: AuthResponse | null = null
 let csrfMemory: string | undefined
 let refreshing: Promise<User> | null = null
 let sessionVersion = 0
+type SharedRead = { promise: Promise<unknown>; controller: AbortController; readers: number }
+const sharedReads = new Map<string, SharedRead>()
 
 function csrfToken(): string | undefined {
   return csrfMemory ?? session?.csrf_token
@@ -60,10 +62,69 @@ async function request<T>(path: string, options: RequestInit = {}, auth: 'bearer
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
+
+function sharedRead<T>(path: string, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) return Promise.reject(signal.reason)
+  const owner = session?.user.id
+  if (!owner) return request<T>(path, { signal })
+  const version = sessionVersion
+  let entry = sharedReads.get(path)
+  if (!entry) {
+    const controller = new AbortController()
+    const promise = request<T>(path, { signal: controller.signal })
+    const created: SharedRead = { promise, controller, readers: 0 }
+    sharedReads.set(path, created)
+    entry = created
+    const forget = () => { if (sharedReads.get(path) === created) sharedReads.delete(path) }
+    void promise.then(forget, forget)
+  }
+  const read = entry
+  read.readers += 1
+  return new Promise<T>((resolve, reject) => {
+    let finished = false
+    function finish() {
+      if (finished) return false
+      finished = true
+      signal?.removeEventListener('abort', abort)
+      read.readers -= 1
+      return true
+    }
+    function abort() {
+      if (!finish()) return
+      if (read.readers === 0) {
+        if (sharedReads.get(path) === read) sharedReads.delete(path)
+        read.controller.abort()
+      }
+      reject(signal?.reason)
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    void read.promise.then(
+      (result) => {
+        if (!finish()) return
+        if (version !== sessionVersion || session?.user.id !== owner) {
+          reject(new DOMException('Session changed', 'AbortError'))
+        } else resolve(result as T)
+      },
+      (error) => {
+        if (!finish()) return
+        reject(version !== sessionVersion ? new DOMException('Session changed', 'AbortError') : error)
+      },
+    )
+  })
+}
+
+function invalidateWorkspaceReads(resources: readonly string[]) {
+  for (const path of sharedReads.keys()) {
+    if ((resources.includes('conversations') && (path === '/conversations' || path.startsWith('/conversations?'))) ||
+        (resources.includes('materials') && path.startsWith('/knowledge-bases/'))) sharedReads.delete(path)
+  }
+}
 const json = (method: string, body?: unknown): RequestInit => ({ method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
 
 function clearSession() {
   sessionVersion += 1
+  for (const { controller } of sharedReads.values()) controller.abort()
+  sharedReads.clear()
   session = null
   csrfMemory = undefined
   refreshing = null
@@ -140,6 +201,7 @@ export const api = {
   modelUsage: (days = 30) => request<ModelUsageSummary>('/me/model-usage' + query({ days: String(days) })),
   refresh,
   clearSession,
+  invalidateWorkspaceReads,
   authOptions: () => request<{ google: boolean; password_reset: boolean }>('/auth/options', {}, 'public'),
   register: (body: { email: string; password: string; display_name: string }) => authenticate('/auth/register', body),
   login: (body: { email: string; password: string }) => authenticate('/auth/login', body),
@@ -194,7 +256,7 @@ export const api = {
     request<ClassificationState>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/classification`, json('POST')),
   confirmClassification: (id: string, material: string, body: ClassificationDecision) =>
     request<ClassificationState>(`/knowledge-bases/${pathId(id)}/documents/${pathId(material)}/classification`, json('PATCH', body)),
-  materials: (id: string, cursor?: string, signal?: AbortSignal) => request<Page<Material>>(`/knowledge-bases/${pathId(id)}/materials` + query({ cursor }), { signal }),
+  materials: (id: string, cursor?: string, signal?: AbortSignal) => sharedRead<Page<Material>>(`/knowledge-bases/${pathId(id)}/materials` + query({ cursor }), signal),
   webClip: (id: string, body: { url: string; title?: string }) => request<UploadResult>(`/knowledge-bases/${pathId(id)}/materials/web-clip`, json('POST', body)),
   material: (id: string) => request<Material>(`/materials/${pathId(id)}`),
   deleteMaterial: (id: string) => request<void>(`/materials/${pathId(id)}`, json('DELETE')),
@@ -224,13 +286,14 @@ export const api = {
   content: (id: string) => checkedFetch(`/material-versions/${pathId(id)}/content`),
   pageImage: (id: string, page: number) => checkedFetch(`/material-versions/${pathId(id)}/pages/${page}`),
   source: (id: string) => request<Citation>(`/sources/${pathId(id)}`),
-  conversations: (cursor?: string, project?: string, archived = false) => request<Page<Conversation>>('/conversations' + query({ cursor, project_knowledge_base_id: project, archived: archived ? 'true' : undefined })),
+  conversations: (cursor?: string, project?: string, archived = false) => sharedRead<Page<Conversation>>('/conversations' + query({ cursor, project_knowledge_base_id: project, archived: archived ? 'true' : undefined })),
   createConversation: (body: { title?: string; project_knowledge_base_id?: string } = {}) => request<Conversation>('/conversations', json('POST', body)),
   conversation: (id: string) => request<Conversation>(`/conversations/${pathId(id)}`),
   updateConversation: (id: string, body: { title: string }) => request<Conversation>(`/conversations/${pathId(id)}`, json('PATCH', body)),
   deleteConversation: (id: string) => request<void>(`/conversations/${pathId(id)}`, json('DELETE')),
   archiveConversation: (id: string, archived: boolean) => request<Conversation>(`/conversations/${pathId(id)}/archive`, json('PATCH', { archived })),
-  messages: (id: string, cursor?: string) => request<Page<Message>>(`/conversations/${pathId(id)}/messages` + query({ cursor })),
+  messages: (id: string, cursor?: string, order: 'asc' | 'desc' = 'asc', signal?: AbortSignal) =>
+    request<Page<Message>>(`/conversations/${pathId(id)}/messages` + query({ cursor, order: order === 'desc' ? order : undefined }), { signal }),
   overview: () => request<Dashboard>('/dashboard/overview'),
   search: (q: string, cursor?: string, includeContent = false, signal?: AbortSignal) => request<Page<SearchItem>>(
     '/search' + query({ q, cursor, include_content: includeContent ? 'true' : undefined }), { signal },

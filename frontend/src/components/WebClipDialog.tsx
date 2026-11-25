@@ -37,7 +37,7 @@ export function WebClipDialog({ open, onOpenChange, libraryId, libraryName }: {
     try {
       await api.webClip(libraryId, { url, ...(title ? { title } : {}) })
       uploadQueue.markSubmitted({ id: libraryId, name: libraryName })
-      refresh()
+      refresh('materials', 'overview')
       notify(`网页已提交至「${libraryName}」，正在处理。`)
       onOpenChange(false)
     } catch (failure) {

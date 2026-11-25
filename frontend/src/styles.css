@@ -320,6 +320,7 @@ h1, h2, h3, p { margin: 0; }
 .ai-message { max-width: min(100%, 900px); }
 .ai-message > .pill { margin: 9px 0 0 40px; }
 .answer { padding-left: 40px; line-height: 1.75; overflow-wrap: anywhere; }
+.chat-older { margin-block-end: 16px; text-align: center; }
 .answer p, .answer ul, .answer pre { margin: 10px 0; }
 .answer ul { padding-left: 21px; }
 .answer li + li { margin-top: 4px; }

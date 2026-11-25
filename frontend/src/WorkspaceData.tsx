@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '@/api/client'
 import { ApiError } from '@/api/stream'
@@ -14,15 +14,21 @@ export type NoticeOptions = {
   durationMs?: number
 }
 
+const initialRevisions = {
+  libraries: 0, conversations: 0, overview: 0, capabilities: 0, materials: 0,
+  messages: 0, notes: 0, learning: 0, usage: 0,
+}
+type Resource = keyof typeof initialRevisions
+
 type Data = {
   user: User | null
   libraries: KnowledgeBase[]
   recent: Conversation[]
   overview: Dashboard | null
   capabilities: Capabilities | null
-  revision: number
+  revisions: typeof initialRevisions
   loading: boolean
-  refresh: () => void
+  refresh: (...resources: [Resource, ...Resource[]]) => void
   notify: (message: string, options?: NoticeOptions) => void
   report: (error: unknown) => void
   requireLogin: () => void
@@ -33,6 +39,27 @@ type Data = {
 }
 
 const Workspace = createContext<Data | null>(null)
+
+const emptyLibraries: KnowledgeBase[] = []
+const emptyRecent: Conversation[] = []
+const loadLibraries = () => allPages(api.knowledgeBases)
+const loadRecent = () => api.conversations().then((page) => page.items)
+
+function useResource<T>(user: User | null, revision: number, load: () => Promise<T>, report: (error: unknown) => void) {
+  const [value, setValue] = useState<T | null>(null)
+  const [loading, setLoading] = useState(Boolean(user))
+  const reportFailure = useEffectEvent(report)
+  useEffect(() => {
+    if (!user) return
+    let active = true
+    void load().then(
+      (data) => { if (active) { setValue(data); setLoading(false) } },
+      (error) => { if (active) { setLoading(false); reportFailure(error) } },
+    )
+    return () => { active = false }
+  }, [user, revision, load])
+  return { value, loading }
+}
 
 export function useWorkspace() {
   const data = useContext(Workspace)
@@ -47,48 +74,41 @@ export function WorkspaceData({ user, notify, requireLogin, onExpired, children 
   onExpired: () => void
   children: ReactNode
 }) {
-  const [revision, setRevision] = useState(0)
-  const [libraries, setLibraries] = useState<KnowledgeBase[]>([])
-  const [recent, setRecent] = useState<Conversation[]>([])
-  const [overview, setOverview] = useState<Dashboard | null>(null)
-  const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
-  const [loading, setLoading] = useState(Boolean(user))
-  const refresh = () => setRevision((value) => value + 1)
+  const [revisions, setRevisions] = useState(initialRevisions)
+  const expired = useRef(false)
+  const refresh: Data['refresh'] = useCallback((...resources) => {
+    api.invalidateWorkspaceReads(resources)
+    setRevisions((current) => {
+      const next = { ...current }
+      for (const resource of resources) next[resource] += 1
+      return next
+    })
+  }, [])
 
   function report(error: unknown) {
     if (error instanceof ApiError && error.status === 401) {
+      if (expired.current) return
+      expired.current = true
       onExpired()
       requireLogin()
     }
     notify(errorMessage(error))
   }
 
-  const chat = useChat(refresh, report)
-  const aiJobs = useAiJobs({ userId: user?.id, notify, report, refresh })
+  const { value: libraries, loading: loadingLibraries } = useResource(user, revisions.libraries, loadLibraries, report)
+  const { value: recent, loading: loadingRecent } = useResource(user, revisions.conversations, loadRecent, report)
+  const { value: overview, loading: loadingOverview } = useResource(user, revisions.overview, api.overview, report)
+  const { value: capabilities, loading: loadingCapabilities } = useResource(user, revisions.capabilities, api.capabilities, report)
+  const loading = loadingLibraries || loadingRecent || loadingOverview || loadingCapabilities
+  const chat = useChat(() => refresh('messages', 'conversations', 'overview', 'usage'), report)
+  const aiJobs = useAiJobs({ userId: user?.id, notify, report, refresh: () => refresh('notes', 'learning', 'overview', 'usage') })
   const libraryUploadQueue = useUploadQueue({
     userId: user?.id, maxUploadBytes: capabilities?.max_upload_bytes,
-    maxPdfUploadBytes: capabilities?.max_pdf_upload_bytes, refresh, notify, report,
+    maxPdfUploadBytes: capabilities?.max_pdf_upload_bytes, refresh: () => refresh('materials', 'overview'), notify, report,
   })
-  useEffect(() => {
-    if (!user) return
-    let active = true
-    void Promise.allSettled([
-      allPages(api.knowledgeBases).then((data) => { if (active) setLibraries(data) }),
-      api.conversations().then((data) => { if (active) setRecent(data.items) }),
-      api.overview().then((data) => { if (active) setOverview(data) }),
-      api.capabilities().then((data) => { if (active) setCapabilities(data) }),
-    ]).then((results) => {
-      if (!active) return
-      setLoading(false)
-      const failure = results.find((result) => result.status === 'rejected' && result.reason instanceof ApiError && result.reason.status === 401)
-        ?? results.find((result) => result.status === 'rejected')
-      if (failure?.status === 'rejected') report(failure.reason)
-    })
-    return () => { active = false }
-  }, [user, revision])
 
   return (
-    <Workspace.Provider value={{ user, libraries, recent, overview, capabilities, revision, loading, refresh, notify, report, requireLogin, chat, uploadQueue: libraryUploadQueue, libraryUploadQueue, aiJobs }}>
+    <Workspace.Provider value={{ user, libraries: libraries ?? emptyLibraries, recent: recent ?? emptyRecent, overview, capabilities, revisions, loading, refresh, notify, report, requireLogin, chat, uploadQueue: libraryUploadQueue, libraryUploadQueue, aiJobs }}>
       {children}
     </Workspace.Provider>
   )

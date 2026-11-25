@@ -1112,6 +1112,20 @@
               ],
               "title": "Cursor"
             }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string",
+              "default": "asc",
+              "title": "Order"
+            }
           }
         ],
         "responses": {
