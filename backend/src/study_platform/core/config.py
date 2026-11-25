@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     # 0.4 is the best-tested value when enabling it.
     retrieval_lexical_weight: float = 0.0
     retrieval_lexical_scoring: str = "idf"
+    ingest_pipeline_profile: Literal["semantic-v3", "semantic-v4"] = "semantic-v4"
     rerank_timeout_seconds: float = 15.0
     rag_query_rewrite_enabled: bool = False
     learning_confidence_threshold: float = 0.85

@@ -72,11 +72,15 @@ def citation_dto(db, citation) -> dict:
             "原文",
         )
     if locator.get("table_path"):
-        label = " / ".join(
-            f"表格 {part['table']}，第 {part['row']} 行，第 {part['column']} 列"
-            for part in locator["table_path"]
-        )
-        label += f"，段落 {locator['cell_paragraph']}"
+        parts = []
+        for part in locator["table_path"]:
+            segment = f"表格 {part['table']}，第 {part['row']} 行"
+            if "column" in part:
+                segment += f"，第 {part['column']} 列"
+            parts.append(segment)
+        label = " / ".join(parts)
+        if "cell_paragraph" in locator:
+            label += f"，段落 {locator['cell_paragraph']}"
     if locator.get("extraction") == "vlm":
         label += " · 视觉解析（VLM）"
     base = f"/api/v1/material-versions/{version.id}"

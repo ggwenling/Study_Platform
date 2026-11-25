@@ -46,6 +46,19 @@ def test_rejects_hostname_resolving_to_private_address(monkeypatch):
     assert error.value.code == "web_clip_url_blocked"
 
 
+def test_rejects_benchmark_fake_ip_with_actionable_hint(monkeypatch):
+    monkeypatch.setattr(
+        web_clip.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("198.18.0.207", 443))],
+    )
+    with pytest.raises(ApiError, match="公网地址") as error:
+        web_clip.public_target("https://developer.mozilla.org/en-US/")
+    assert error.value.status_code == 422
+    assert error.value.code == "web_clip_url_blocked"
+    assert "198.18.0.0/15" in error.value.message
+
+
 def test_dns_resolution_obeys_deadline(monkeypatch):
     import time
 

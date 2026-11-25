@@ -101,11 +101,35 @@ def ensure_ooxml_uncompressed_limit(path):
             raise ValueError("OOXML uncompressed payload too large")
 
 
-def extract_docx(path, *, legacy_columns=False):
+def extract_docx(path, *, legacy_columns=False, group_table_rows=False):
     ensure_ooxml_uncompressed_limit(path)
     from docx import Document
     from docx.table import Table
     from docx.text.paragraph import Paragraph
+
+    def _row_has_nested_table(row, seen_cells):
+        for cell in row.cells:
+            if cell._tc in seen_cells:
+                continue
+            for item in cell.iter_inner_content():
+                if isinstance(item, Table):
+                    return True
+        return False
+
+    def _flat_row_cells(row, columns_before, seen_cells):
+        cells = []
+        for column_number, cell in enumerate(row.cells, columns_before + 1):
+            if cell._tc in seen_cells:
+                continue
+            seen_cells.add(cell._tc)
+            parts = [
+                item.text.strip()
+                for item in cell.iter_inner_content()
+                if isinstance(item, Paragraph) and item.text.strip()
+            ]
+            if parts:
+                cells.append((column_number, " ".join(parts)))
+        return cells
 
     def blocks(container, table_path=()):
         paragraph_number = table_number = 0
@@ -123,10 +147,36 @@ def extract_docx(path, *, legacy_columns=False):
             elif isinstance(block, Table):
                 table_number += 1
                 seen_cells = set()
+                headers: dict[int, str] = {}
+                row_count = len(block.rows)
                 for row_number, row in enumerate(block.rows, 1):
                     columns_before = 0 if legacy_columns else row.grid_cols_before
                     if columns_before < 0:
                         raise ValueError("DOCX table row has a negative leading column count")
+                    if group_table_rows and not _row_has_nested_table(row, seen_cells):
+                        row_cells = _flat_row_cells(row, columns_before, seen_cells)
+                        if not row_cells:
+                            continue
+                        row_locator = {
+                            "table_path": [*table_path, {"table": table_number, "row": row_number}]
+                        }
+                        if (
+                            row_number == 1
+                            and row_count >= 2
+                            and len(row_cells) >= 2
+                            and all(len(text) <= 40 and "\n" not in text for _, text in row_cells)
+                        ):
+                            headers = {col: text for col, text in row_cells}
+                            yield " | ".join(text for _, text in row_cells), row_locator
+                        elif headers:
+                            formatted = " | ".join(
+                                f"{headers[col]}：{text}" if col in headers else text
+                                for col, text in row_cells
+                            )
+                            yield formatted, row_locator
+                        else:
+                            yield " | ".join(text for _, text in row_cells), row_locator
+                        continue
                     for column_number, cell in enumerate(row.cells, columns_before + 1):
                         if cell._tc in seen_cells:
                             continue
@@ -318,7 +368,10 @@ def extract(
     elif mime == "text/markdown":
         yield from extract_markdown(path)
     elif mime.endswith("wordprocessingml.document"):
-        yield from extract_docx(path)
+        profile = chunking.resolve_pipeline_profile(pipeline_profile)
+        yield from extract_docx(
+            path, group_table_rows=(profile == chunking.SEMANTIC_V4_PROFILE)
+        )
     elif mime.endswith("presentationml.presentation"):
         yield from extract_pptx(path, version)
     elif mime == "application/pdf":

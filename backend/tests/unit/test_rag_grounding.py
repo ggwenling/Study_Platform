@@ -27,6 +27,7 @@ def test_prompt_states_material_only_grounding_rules():
     assert "只使用本轮提供的资料作为资料依据" in system
     assert "不编造引用" in system
     assert "资料不足" in system
+    assert "不要误判为冲突" in system
 
 
 def test_prompt_knowledge_only_forbids_general_knowledge_supplement():

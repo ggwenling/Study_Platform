@@ -241,7 +241,10 @@ def create_job(db, user, version, *, vision=None, activate_version=False):
     from study_platform.services.model_connections import library_snapshot
     material = db.get(Material, version.material_id)
     embedding = library_snapshot(db, user.id, material.knowledge_base_id)
-    payload = {"embedding_connection": embedding}
+    payload = {
+        "embedding_connection": embedding,
+        "pipeline_profile": get_settings().ingest_pipeline_profile,
+    }
     if vision is not None:
         payload.update(extraction_mode="vlm", vision_connection=vision)
     if activate_version:

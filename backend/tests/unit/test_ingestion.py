@@ -257,3 +257,65 @@ def test_docx_uncompressed_limit_rejects_oversized_archive(tmp_path, monkeypatch
     )
     with pytest.raises(ValueError, match="OOXML uncompressed"):
         ingestion.ensure_ooxml_uncompressed_limit(path)
+
+
+def test_docx_semantic_v4_groups_flat_table_rows_with_headers_and_preserves_nested_fallback(
+    tmp_path, monkeypatch
+):
+    from study_platform.services.material_reader import locator_label
+
+    path = tmp_path / "matrix.docx"
+    doc = Document()
+    table = doc.add_table(rows=3, cols=2)
+    table.cell(0, 0).text = "检查项"
+    table.cell(0, 1).text = "期望结果"
+    table.cell(1, 0).text = "CT-8402"
+    table.cell(1, 1).text = "样本验证状态 304"
+    table.cell(2, 0).text = "KB-2920"
+    table.cell(2, 1).text = "弹层关闭后回到触发按钮"
+
+    nested_table = doc.add_table(rows=1, cols=1)
+    cell = nested_table.cell(0, 0)
+    cell.paragraphs[0].text = "outer"
+    cell.add_table(rows=1, cols=1).cell(0, 0).text = "inner"
+    doc.save(path)
+
+    monkeypatch.setattr(ingestion, "source_path", lambda _: path)
+    version = SimpleNamespace(
+        id=uuid4(),
+        source_mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    v4_units = list(ingestion.extract(version, tmp_path, lambda _: None, "semantic-v4"))
+    assert v4_units[:3] == [
+        ("检查项 | 期望结果", {"table_path": [{"table": 1, "row": 1}]}),
+        (
+            "检查项：CT-8402 | 期望结果：样本验证状态 304",
+            {"table_path": [{"table": 1, "row": 2}]},
+        ),
+        (
+            "检查项：KB-2920 | 期望结果：弹层关闭后回到触发按钮",
+            {"table_path": [{"table": 1, "row": 3}]},
+        ),
+    ]
+    assert v4_units[3:] == [
+        ("outer", {"table_path": [{"table": 2, "row": 1, "column": 1}], "cell_paragraph": 1}),
+        (
+            "inner",
+            {
+                "table_path": [
+                    {"table": 2, "row": 1, "column": 1},
+                    {"table": 1, "row": 1},
+                ],
+            },
+        ),
+    ]
+    assert locator_label(v4_units[1][1]) == "表格 1，第 2 行"
+    assert locator_label(v4_units[3][1]) == "表格 2，第 1 行，第 1 列，段落 1"
+    assert locator_label(v4_units[4][1]) == "表格 2，第 1 行，第 1 列 / 表格 1，第 1 行"
+
+    # Default (semantic-v3) stays cell-by-cell for backward compatibility.
+    v3_units = list(ingestion.extract(version, tmp_path, lambda _: None))
+    assert v3_units[0] == (
+        "检查项",
+        {"table_path": [{"table": 1, "row": 1, "column": 1}], "cell_paragraph": 1},
+    )

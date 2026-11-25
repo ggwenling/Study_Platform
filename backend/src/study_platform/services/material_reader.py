@@ -54,11 +54,16 @@ def locator_label(locator: dict) -> str:
         line_no = locator.get("start_line")
         return f"{locator['heading']} · 第 {line_no} 行" if isinstance(line_no, int) else str(locator["heading"])
     if locator.get("table_path"):
-        parts = " / ".join(
-            f"表格 {part['table']}，第 {part['row']} 行，第 {part['column']} 列"
-            for part in locator["table_path"]
-        )
-        return f"{parts}，段落 {locator.get('cell_paragraph', 1)}"
+        parts = []
+        for part in locator["table_path"]:
+            segment = f"表格 {part['table']}，第 {part['row']} 行"
+            if "column" in part:
+                segment += f"，第 {part['column']} 列"
+            parts.append(segment)
+        joined = " / ".join(parts)
+        if "cell_paragraph" in locator:
+            return f"{joined}，段落 {locator['cell_paragraph']}"
+        return joined
     for key, fmt in (
         ("page", "第 {} 页"),
         ("paragraph", "段落 {}"),

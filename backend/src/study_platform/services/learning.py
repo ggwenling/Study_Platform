@@ -51,6 +51,97 @@ from study_platform.services.vision_pipeline import grade_vision_image
 
 _QUESTION_LINE = re.compile(r"^\s*(?:\d+[\.\)、．]|第\s*\d+\s*题)", re.M)
 _OPTION_LETTER = re.compile(r"^\s*([A-Fa-f])(?:[\.\)、:：\s]|$)")
+_QUIZ_RETRIEVAL_QUERY = (
+    "重要概念、定义、公式、规则与例题; key concepts, definitions, rules, formulas, examples"
+)
+
+
+def _sample_scoped_chunks(
+    db: Session,
+    scope_ids: list[str],
+    owner_user_id: UUID,
+    limit: int,
+    *,
+    exclude_ids: set[UUID] | None = None,
+    max_chars: int = 16000,
+) -> list[dict]:
+    indices = [UUID(x) if isinstance(x, str) else x for x in scope_ids]
+    rows = db.execute(
+        chunk_query(indices, owner_user_id)
+        .order_by(Material.id, MaterialChunk.ordinal)
+        .limit(max(limit * 4, 48))
+    ).all()
+    excluded = exclude_ids or set()
+    by_material: dict[UUID, list[dict]] = {}
+    for row, title in rows:
+        if row.id in excluded or not (row.text or "").strip():
+            continue
+        by_material.setdefault(row.material_version_id, []).append(chunk_dto(row, title))
+    sampled: list[dict] = []
+    total_chars = 0
+    buckets = list(by_material.values())
+    idx = 0
+    while buckets and len(sampled) < limit:
+        next_buckets: list[list[dict]] = []
+        for bucket in buckets:
+            if idx < len(bucket):
+                item = bucket[idx]
+                if total_chars + len(item["text"]) > max_chars and sampled:
+                    return sampled
+                sampled.append(item)
+                total_chars += len(item["text"])
+                if len(sampled) >= limit:
+                    return sampled
+                if idx + 1 < len(bucket):
+                    next_buckets.append(bucket)
+        buckets = next_buckets
+        idx += 1
+    return sampled
+
+
+def _collect_quiz_hits(
+    db: Session,
+    scope: dict,
+    scope_ids: list[str],
+    owner_user_id: UUID,
+    count: int,
+    *,
+    stub_mode: bool,
+) -> list[dict]:
+    target_limit = max(count * 3, 12)
+    if stub_mode:
+        indices = [UUID(x) if isinstance(x, str) else x for x in scope_ids]
+        rows = db.execute(
+            chunk_query(indices, owner_user_id)
+            .order_by(MaterialChunk.ordinal)
+            .limit(target_limit)
+        ).all()
+        return [chunk_dto(row, title) for row, title in rows]
+    retrieved = retrieve(scope, _QUIZ_RETRIEVAL_QUERY, owner_user_id)
+    hits: list[dict] = []
+    seen_ids: set[UUID] = set()
+    for item in retrieved:
+        if not (item.get("text") or "").strip():
+            continue
+        chunk_id = item.get("id")
+        if isinstance(chunk_id, str):
+            chunk_id = UUID(chunk_id)
+        if chunk_id in seen_ids:
+            continue
+        if isinstance(chunk_id, UUID):
+            seen_ids.add(chunk_id)
+        hits.append(item)
+    min_hits = min(max(count * 2, 6), target_limit)
+    if len(hits) < min_hits:
+        extra = _sample_scoped_chunks(
+            db,
+            scope_ids,
+            owner_user_id,
+            target_limit - len(hits),
+            exclude_ids=seen_ids,
+        )
+        hits.extend(extra)
+    return hits
 
 
 def _reference_from_answer_key(answer_key) -> str:
@@ -178,14 +269,9 @@ def generate_learning_quiz(
         raise ApiError(409, "library_not_ready", "当前知识库尚无可用索引，请先上传并完成处理。")
     scope = {"index_version_ids": scope_ids}
     settings = get_settings()
-    if settings.learning_stub_grader:
-        indices = [UUID(x) if isinstance(x, str) else x for x in scope_ids]
-        rows = db.execute(
-            chunk_query(indices, owner_user_id).order_by(MaterialChunk.ordinal).limit(max(count * 3, 12))
-        ).all()
-        hits = [chunk_dto(row, title) for row, title in rows]
-    else:
-        hits = retrieve(scope, "重要概念、定义、公式与例题", owner_user_id)
+    hits = _collect_quiz_hits(
+        db, scope, scope_ids, owner_user_id, count, stub_mode=settings.learning_stub_grader
+    )
     if not hits:
         raise ApiError(409, "no_chunks", "没有可用于出题的资料片段")
     if before_publish:

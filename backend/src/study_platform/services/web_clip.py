@@ -24,6 +24,7 @@ _ALLOWED_CONTENT_TYPES = {
     "text/plain",
     "text/markdown",
 }
+_BENCHMARK_NET = ipaddress.ip_network("198.18.0.0/15")
 _DNS_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="web-clip-dns")
 _FETCH_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="web-clip-fetch")
 
@@ -134,6 +135,15 @@ def public_target(value: str, *, deadline: float | None = None) -> PublicTarget:
     if deadline is not None and time.monotonic() >= deadline:
         raise ApiError(504, "web_clip_timeout", "网页抓取超时，请稍后重试。")
     if not addresses or any(not _is_public_address(address) for address in addresses):
+        if addresses and all(
+            isinstance(address, ipaddress.IPv4Address) and address in _BENCHMARK_NET
+            for address in addresses
+        ):
+            raise ApiError(
+                422,
+                "web_clip_url_blocked",
+                "仅允许访问解析到公网地址的网页（当前域名被解析到保留网段 198.18.0.0/15，若本机开启了代理 TUN/Fake-IP，请关闭 Fake-IP 或对该域名配置直连后重试）。",
+            )
         raise ApiError(422, "web_clip_url_blocked", "仅允许访问解析到公网地址的网页。")
 
     authority_host = f"[{host}]" if ":" in host else host
