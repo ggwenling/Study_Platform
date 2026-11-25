@@ -1,5 +1,7 @@
 """Deterministic checks for RAG grounding prompts and citation publication (no models)."""
 
+import json
+
 import pytest
 
 from study_platform.core.errors import ApiError
@@ -50,6 +52,49 @@ def test_prompt_serializes_one_source_block_per_evidence_chunk():
     assert '"source": "S3"' in system
     assert '"source": "S4"' not in system
     assert "Supporting fact 2." in system
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="Desktop Q09: the prompt drops DOCX row positions needed to connect the two checks.",
+)
+def test_prompt_exposes_adjacent_focus_table_rows_in_retrieval_order():
+    scope = {
+        "answer_mode": "knowledge_only",
+        "intent": "qa",
+        "content": "公开指南里的 Tab 导航做法，与本地 FC-0304、FC-8540 测试顺序如何对应？",
+    }
+    chunks = [
+        {
+            "id": "focus-row-three",
+            "title": "focus-matrix.docx",
+            "material_version_id": "focus-matrix-version",
+            "text": "检查项：FC-8540 | 期望结果：下一步 Tab 到筛选按钮",
+            "locator": {"table_path": [{"table": 1, "row": 3}]},
+        },
+        {
+            "id": "wai-apg",
+            "title": "wai-apg",
+            "text": "Tab and Shift+Tab move focus between components.",
+        },
+        {
+            "id": "focus-row-two",
+            "title": "focus-matrix.docx",
+            "material_version_id": "focus-matrix-version",
+            "text": "检查项：FC-0304 | 期望结果：焦点先到搜索框",
+            "locator": {"table_path": [{"table": 1, "row": 2}]},
+        },
+    ]
+
+    documents = json.loads(_system_message(scope, chunks).split("\n本轮资料JSON：\n", 1)[1])
+    focus_rows = {
+        doc["source"]: doc.get("locator", {}).get("table_path")
+        for doc in documents
+        if doc["title"] == "focus-matrix.docx"
+    }
+
+    assert focus_rows == {"S1": [{"table": 1, "row": 3}], "S3": [{"table": 1, "row": 2}]}
 
 
 def test_cited_chunks_preserves_citation_order_and_indexes_evidence():

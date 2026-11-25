@@ -46,17 +46,26 @@ def test_rejects_hostname_resolving_to_private_address(monkeypatch):
     assert error.value.code == "web_clip_url_blocked"
 
 
-def test_rejects_benchmark_fake_ip_with_actionable_hint(monkeypatch):
+@pytest.mark.parametrize(
+    ("url", "fake_ip"),
+    [
+        ("https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Caching", "198.18.0.207"),
+        ("https://www.w3.org/WAI/ARIA/apg/practices/keyboard-interface/", "198.18.0.208"),
+    ],
+)
+def test_rejects_public_qa_urls_on_fake_ip_dns_with_actionable_hint(monkeypatch, url, fake_ip):
     monkeypatch.setattr(
         web_clip.socket,
         "getaddrinfo",
-        lambda *_args, **_kwargs: [(2, 1, 6, "", ("198.18.0.207", 443))],
+        lambda *_args, **_kwargs: [(2, 1, 6, "", (fake_ip, 443))],
     )
     with pytest.raises(ApiError, match="公网地址") as error:
-        web_clip.public_target("https://developer.mozilla.org/en-US/")
+        web_clip.fetch_public_webpage(url)
     assert error.value.status_code == 422
     assert error.value.code == "web_clip_url_blocked"
     assert "198.18.0.0/15" in error.value.message
+    assert "Fake-IP" in error.value.message
+    assert "直连后重试" in error.value.message
 
 
 def test_dns_resolution_obeys_deadline(monkeypatch):
