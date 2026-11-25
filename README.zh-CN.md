@@ -30,12 +30,13 @@
 
 | 使用流程 | 你可以做什么 |
 | --- | --- |
-| **收集与建立索引** | 上传 PDF、DOCX、Markdown、UTF-8 TXT、PNG 或 JPEG，或直接粘贴文本。后台 worker 解析资料，对符合条件的扫描件和图片做 OCR，再建立索引。可以查看进度和重试失败任务。 |
+| **收集与建立索引** | 上传 PDF、DOCX、PPTX、Markdown、UTF-8 TXT、PNG 或 JPEG，粘贴文本，或按 URL 导入可公开访问的网页。PPTX 会提取幻灯片文字、表格和演讲者备注。后台 worker 解析资料，对符合条件的扫描件和图片做 OCR，再建立索引。可以查看进度并重试失败任务。 |
 | **提问与核对** | 接收带引用的流式回答，把单轮问题限定到指定资料，对已就绪资料生成摘要。可以查看引用片段和可用的原页预览，也可以用检索命中测试检查片段匹配情况。 |
 | **查找与整理** | 按 `Ctrl+K` 找回资料片段或研究笔记，直接打开命中位置。用项目组织会话，导出 Markdown，在历史中恢复已归档会话。 |
 | **沉淀研究资料** | 创建笔记或将回答存为笔记。用知识工坊生成学习指南、知识导图或公式速查，也可以把选定笔记回写为资料。 |
-| **练习与复习** | 从知识库生成测验和闪卡，使用文本或照片作答，回顾练习记录和错题。 |
-| **配置模型** | 使用平台默认模型，或配置兼容的语言和向量连接。各知识库拥有独立的向量连接绑定，向量维度为 1024。 |
+| **练习与复习** | 从知识库生成测验和闪卡，使用文本或照片作答，回顾练习记录和错题。视觉模型辅助需显式开启。 |
+| **导出与备份** | 笔记可导出为 ZIP，闪卡可导出为 Anki TSV 或 Markdown，筛选后的错题可导出为 Markdown。Windows 备份与恢复覆盖 `study` schema 和配置的存储目录。 |
+| **配置模型** | 使用平台默认模型，或配置兼容的语言和向量连接。可按知识库启用兼容的 Rerank 连接。各知识库拥有独立的向量连接绑定，向量维度为 1024。 |
 
 ## 快速开始
 
@@ -88,7 +89,7 @@ uv run study-setup-checkpointer
 | 进程 | 命令 | 用途 |
 | --- | --- | --- |
 | API | `cd backend`，再执行 `uv run study-api` | 监听 `127.0.0.1:8000`，OpenAPI 文档位于 `/docs`。 |
-| Worker | `cd backend`，再执行 `uv run study-worker` | 处理上传资料并更新索引。 |
+| Worker | `cd backend`，再执行 `uv run study-worker` | 用独立的有界线程池处理资料入库与索引重建，以及笔记、闪卡和测验生成任务。 |
 | Web | `cd frontend`，再执行 `npm run dev` | 监听 `127.0.0.1:5173`，将 API 请求代理到 8000。 |
 
 打开[本机应用](http://127.0.0.1:5173/)，注册账号，创建知识库并上传一份小型 TXT 或 PDF。待资料就绪后，提出一个文件中能找到答案的问题，再打开引用核对。[后端就绪检查](http://127.0.0.1:8000/health/ready)可确认结构迁移与存储配置，供应商连接会在实际建立索引或提问时使用。
@@ -102,7 +103,7 @@ flowchart LR
     Browser["React 19 · Vite 前端"] --> API["FastAPI · HTTP 与 SSE"]
     API --> DB[("PostgreSQL · study schema")]
     API --> Files["本机资料存储"]
-    DB --> Worker["后台资料处理 worker"]
+    DB --> Worker["study-worker · 资料处理与生成双池"]
     Worker --> Files
     Worker --> Index["文本提取 · OCR · 切分"]
     Index --> DB
@@ -110,7 +111,7 @@ flowchart LR
     API --> Models
 ```
 
-前端使用 React、TypeScript 和 Vite。FastAPI 提供认证、检索、笔记、学习和流式问答，独立 worker 处理资料入库、索引重建和生成任务。PostgreSQL 通过 pgvector 和内建的文本搜索能力存储应用数据及索引。Alembic 管理 `study` schema，LangGraph checkpointer 使用单独的 `study_graph`。[架构说明](docs/architecture/README.md) · [API 接入](docs/api-integration.md)
+前端使用 React、TypeScript 和 Vite。FastAPI 提供认证、检索、笔记、学习和流式问答。`study-worker` 将资料入库与索引重建、生成任务分到独立的有界线程池。笔记、闪卡和测验等长任务会入队，并提供任务状态和粗粒度进度。PostgreSQL 通过 pgvector 和内建的文本搜索能力存储应用数据及索引。Alembic 管理 `study` schema，LangGraph checkpointer 使用单独的 `study_graph`。[架构说明](docs/architecture/README.md) · [API 接入](docs/api-integration.md)
 
 ## 测试与验收
 
@@ -120,10 +121,10 @@ flowchart LR
 
 ## 使用边界
 
-- 默认单文件上限为 20 MiB，PDF 最多 50 页，图片最多 2000 万像素。扫描质量会影响 OCR 结果。
-- 原件与应用记录保存在配置的主机上。使用托管模型连接时，建立向量或回答所需的输入会发送给对应供应商。请按资料性质选择供应商。
+- 默认单文件上限为 20 MiB，PDF 最多 50 页，图片最多 2000 万像素。网页导入仅支持可公开访问的页面，登录墙和重度 JavaScript 页面可能无法提取正文。扫描件和幻灯片图片质量会影响 OCR 结果。
+- 原件与应用记录保存在配置的主机上。使用托管模型服务时，用于向量化或回答的输入会发送给供应商。启用托管 Rerank 时，问题和候选资料片段也会发送给对应供应商。请按资料性质选择供应商。
 - 全文搜索基于已保存的正文。模型问答和学习产物依赖已配置的模型服务和原始资料质量。
-- 已提供 Windows 启停和故障恢复说明。整库备份与恢复属于后续工作，Markdown 导出面向单篇笔记或单条会话。[本地运行与恢复](docs/local-runtime.md)
+- Windows 备份与恢复只包含 PostgreSQL `study` schema 和配置的 `STORAGE_DIR`（默认为 `.local/storage`），不包含 `.env` 或单独管理的 `study_graph` checkpointer schema。恢复前请阅读脚本检查和恢复步骤。[本地运行与恢复](docs/local-runtime.md)
 
 ## 更多文档
 

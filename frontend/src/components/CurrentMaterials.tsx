@@ -145,7 +145,10 @@ export function CurrentMaterials({
               onChange={(event) => toggleMaterial(row.id, event.target.checked)}
             />
           )}
-          <div><strong>{row.title}</strong><span>{phases[row.status] ?? row.status}</span>{row.error_message && <p className="error-text">{row.error_message}</p>}</div>
+          <div><strong>{row.title}</strong><span>{phases[row.status] ?? row.status}
+            {!terminal(row) && row.total_pages != null && row.processed_pages != null &&
+              ` · 已处理 ${row.processed_pages} / ${row.total_pages} 页`}
+          </span>{row.error_message && <p className="error-text">{row.error_message}</p>}</div>
           <div className="current-materials-actions">
             {!terminal(row) && row.job_id && <Button type="button" size="sm" variant="secondary" disabled={busy !== null} loading={busy === `cancel:${row.id}`} onClick={async () => {
               if (busy) return

@@ -50,12 +50,14 @@ let nextUploadSeq = 1
 export function useUploadQueue({
   userId,
   maxUploadBytes,
+  maxPdfUploadBytes,
   refresh,
   notify,
   report,
 }: {
   userId?: string | null
   maxUploadBytes?: number
+  maxPdfUploadBytes?: number
   refresh: () => void
   notify: (message: string) => void
   report: (error: unknown) => void
@@ -120,8 +122,10 @@ export function useUploadQueue({
         callbacks.current.notify(`不支持的文件类型：「${file.name}」（支持 PDF、DOCX、PPTX、TXT、MD、PNG、JPG）。`)
         continue
       }
-      if (maxUploadBytes && file.size > maxUploadBytes) {
-        callbacks.current.notify(`「${file.name}」超过服务器允许的大小。`)
+      const limit = /\.pdf$/i.test(file.name) ? maxPdfUploadBytes ?? maxUploadBytes : maxUploadBytes
+      if (limit && file.size > limit) {
+        const size = limit >= 1024 ** 2 ? `${limit / 1024 ** 2} MiB` : '服务器允许的大小'
+        callbacks.current.notify(`「${file.name}」超过${size}，请压缩或拆分后重试。`)
         continue
       }
       if (file.size === 0) {
@@ -143,7 +147,7 @@ export function useUploadQueue({
       setLastUploaded({ libraryId: target.id, at: Date.now() })
     }
     return accepted.length
-  }, [maxUploadBytes])
+  }, [maxPdfUploadBytes, maxUploadBytes])
 
   const retryItem = useCallback((id: string) => {
     setItems((current) => current.map((row) =>

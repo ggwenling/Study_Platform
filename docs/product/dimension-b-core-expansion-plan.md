@@ -1,13 +1,22 @@
 # 维度 B：核心新功能拓展需求规格与推进计划
 
-> 状态：需求已确认，待按批次实现｜2026-11-20  
-> 基线：`codex` 分支（`b25ff35`，维度 A P0–P3 及复审修复已合入）  
+> 状态：需求规格于 2026-11-20 确认。B1–B4 已实现（截至 2026-11-21）。
+> 实现提交：`561e05f`、`433cb75`、`d118f90`、`58698ec`。
 > 适用范围：知循 · KnowLoop（Synapse）个人多库知识工作台核心能力拓展（B1–B4）  
 > 参考红线：[产品定位与路线图](product-positioning-and-roadmap.md) · [维度 A 规划](dimension-a-ux-polish-plan.md) · [Windows 本地运行与恢复](../local-runtime.md) · [AGENTS.md](../../AGENTS.md)
 
 ---
 
-## 1. 背景与目标
+## 当前实现状态
+
+| 项目 | 实现状态 | 主要入口 | 已有自动化验证范围 |
+| --- | --- | --- | --- |
+| **B1 网页导入与 PPTX** | 已实现。仅导入可公开访问的网页，不支持登录墙或需重型浏览器渲染的页面。 | `services/web_clip.py`、`services/ingestion.py`、`api/v1/materials.py`、`WebClipDialog.tsx` | `test_web_clip.py`、`test_pptx_extraction.py`、`test_upload_validation.py`、`test_ingestion_db.py` 覆盖抓取校验、PPTX 解析与入库契约。 |
+| **B2 原文阅读器** | 已实现。聊天、学习、知识库及搜索入口可打开来源上下文与 PDF 页面。 | `services/material_reader.py`、`SourceReaderDrawer.tsx`、`api/v1/materials.py` | `test_resource_api.py`、`source-reader.test.tsx`、`chat-note-saving.test.tsx` 覆盖阅读器上下文、引用入口与页面交互。 |
+| **B3 导出与 Windows 备份恢复** | 已实现。支持笔记 ZIP、闪卡 Anki TSV/Markdown、筛选后的错题 Markdown，以及 `study` schema 和配置存储目录的备份恢复。 | `services/study_exports.py`、`api/v1/studio.py`、`infra/windows/backup-restore.ps1` | `test_exports.py`、`test_resource_api.py`、`studyExports.test.ts`、`studio-and-flashcards.test.tsx`、`learning-v2.test.tsx`。PowerShell 脚本测试使用数据库桩。 |
+| **B4 显式 VLM** | 已实现。资料视觉重解析和照片判题均需显式选择，仍保留 OCR/不确定结果边界。 | `services/vision_pipeline.py`、`services/model_calls.py`、`api/v1/materials.py`、`VisionReparseDialog.tsx` | `test_vision_pipeline.py`、`test_vision_calls.py`、`test_model_connections.py`、`vision-upload.test.tsx`、`vision-confirmation.test.tsx` 覆盖调用契约、护栏与界面选择。 |
+
+## 1. 规划时的背景与目标
 
 在维度 A 完成日常高频交互打磨后，知循已形成顺畅的“资料上传 → 单库/范围问答 → 笔记与脑图沉淀 → 闪卡与练习复习”个人知识闭环。下一阶段的核心瓶颈从“操作摩擦”转向“能力厚度与长期可托付性”：
 

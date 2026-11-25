@@ -34,6 +34,7 @@ function SharedQueue({ children }: { children: ReactNode }) {
   const queue = useUploadQueue({
     userId: workspace.value.user?.id,
     maxUploadBytes: workspace.value.capabilities?.max_upload_bytes,
+    maxPdfUploadBytes: workspace.value.capabilities?.max_pdf_upload_bytes,
     refresh: workspace.value.refresh,
     notify: workspace.value.notify,
     report: workspace.value.report,
@@ -64,9 +65,12 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); node.remove(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 it('polls processing stages, announces readiness and stops at terminal state', async () => {
-  vi.mocked(api.materials).mockResolvedValueOnce({ items: [material('ocr')], next_cursor: null }).mockResolvedValue({ items: [material('ready')], next_cursor: null })
+  vi.mocked(api.materials).mockResolvedValueOnce({
+    items: [{ ...material('ocr'), processed_pages: 75, total_pages: 150 }], next_cursor: null,
+  }).mockResolvedValue({ items: [material('ready')], next_cursor: null })
   await render(<CurrentMaterials libraryId="A" name="库A" />)
   expect(node.textContent).toContain('识别文字中')
+  expect(node.textContent).toContain('已处理 75 / 150 页')
   expect(node.textContent).toContain('暂无可问答资料，请等待处理完成')
   await act(async () => { await vi.advanceTimersByTimeAsync(2200) })
   expect(node.textContent).toContain('资料已就绪，可以继续提问')
@@ -269,6 +273,14 @@ it('packages pasted Markdown note with auto-derived filename and formats Markdow
   expect(locatorLabel({ heading: '矩阵特征值总结', start_line: 1 })).toBe('矩阵特征值总结 · 第 1 行')
   expect(locatorLabel({ slide: 3 })).toBe('第 3 页幻灯片')
   expect(locatorLabel({ slide: 3, notes: true })).toBe('第 3 页幻灯片 · 备注')
+})
+
+it('formats table row, cell and nested locators', () => {
+  const row = { table: 1, row: 2 }
+  const cell = { table: 2, row: 3, column: 4 }
+  expect(locatorLabel({ table_path: [row] })).toBe('表 1 · 2 行')
+  expect(locatorLabel({ table_path: [cell] })).toBe('表 2 · 3 行 4 列')
+  expect(locatorLabel({ table_path: [cell, row] })).toBe('表 2 · 3 行 4 列 / 表 1 · 2 行')
 })
 
 it('only exposes absolute HTTP(S) source links and accepts PPTX queue extensions', () => {

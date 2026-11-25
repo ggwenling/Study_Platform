@@ -14,7 +14,7 @@ import styles from './Account.module.css'
 export type AccountMode = 'login' | 'register' | 'forgot' | 'reset' | 'google_link'
 const titles = { login: '欢迎回来', register: '创建账号', forgot: '找回密码', reset: '设置新密码', google_link: '绑定 Google 账号' }
 const descriptions = {
-  login: '登录知循，继续你的资料问答',
+  login: '使用邮箱或 Google 账号进入你的知识库。',
   register: '创建你的个人知识空间',
   forgot: '输入账号邮箱，接收密码重置链接',
   reset: '设置新密码后，请重新登录',
@@ -33,6 +33,7 @@ export function Account({ open, onOpenChange, onLogin, mode, setMode, next, rese
   returnFocus: () => void
 }) {
   const [options, setOptions] = useState<{ google: boolean; password_reset: boolean } | null>(null)
+  const [optionsFailed, setOptionsFailed] = useState(false)
   const [email, setEmail] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<{ message: string; field?: 'email' | 'password' } | null>(null)
@@ -50,9 +51,17 @@ export function Account({ open, onOpenChange, onLogin, mode, setMode, next, rese
       return
     }
     let current = true
-    void api.authOptions().then((value) => { if (current) setOptions(value) }, () => { if (current) setOptions(null) })
+    setOptions(null)
+    setOptionsFailed(false)
+    void api.authOptions().then((value) => { if (current) setOptions(value) }, () => {
+      if (current) setOptionsFailed(true)
+    })
     return () => { current = false }
   }, [open])
+
+  useEffect(() => {
+    if (open) formRef.current?.querySelector<HTMLInputElement>('input')?.focus()
+  }, [mode, open])
 
   function changeMode(nextMode: AccountMode) {
     setError(null)
@@ -124,6 +133,9 @@ export function Account({ open, onOpenChange, onLogin, mode, setMode, next, rese
         <Button className={styles.submit} type="submit" loading={busy}>{({ login: '登录', register: '创建账号', forgot: '发送重置邮件', reset: '设置新密码', google_link: '验证并绑定' })[mode]}</Button>
         {mode === 'login' && <>
           <div className={styles.divider}>或</div>
+          {!options && <p className="muted" role="status">
+            {optionsFailed ? '暂时无法读取 Google 登录与邮件找回状态。可以继续使用邮箱登录。' : '正在检查 Google 登录与邮件找回方式…'}
+          </p>}
           <Button type="button" variant="secondary" disabled={busy || !options?.google} onClick={() => window.location.assign('/api/v1/auth/google/start?' + new URLSearchParams({ next }))}>{options && !options.google ? 'Google 登录暂不可用' : '使用 Google 继续'}</Button>
           <div className={styles.footer}><span>还没有账号？</span><Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => changeMode('register')}>立即注册</Button></div>
         </>}

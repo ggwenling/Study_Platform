@@ -5721,6 +5721,14 @@
           "max_upload_bytes": {
             "type": "integer",
             "title": "Max Upload Bytes"
+          },
+          "max_pdf_upload_bytes": {
+            "type": "integer",
+            "title": "Max Pdf Upload Bytes"
+          },
+          "max_pdf_pages": {
+            "type": "integer",
+            "title": "Max Pdf Pages"
           }
         },
         "type": "object",
@@ -5732,7 +5740,9 @@
           "retrieval_defaults",
           "answer_modes",
           "upload_mime_types",
-          "max_upload_bytes"
+          "max_upload_bytes",
+          "max_pdf_upload_bytes",
+          "max_pdf_pages"
         ],
         "title": "CapabilitiesDTO"
       },
@@ -7320,6 +7330,28 @@
             "type": "integer",
             "title": "Progress"
           },
+          "processed_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processed Pages"
+          },
+          "total_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Pages"
+          },
           "error_code": {
             "anyOf": [
               {
@@ -7856,6 +7888,28 @@
               }
             ],
             "title": "Page Count"
+          },
+          "processed_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processed Pages"
+          },
+          "total_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Pages"
           },
           "mime_type": {
             "anyOf": [

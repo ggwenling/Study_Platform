@@ -1,0 +1,91 @@
+{
+  "review_status": "synthetic_not_human_curated",
+  "generated_at_commit": "see baseline_sha in run manifest",
+  "fixtures": [
+    {
+      "id": "fixture-plain-txt",
+      "path": "fixtures/samples/notes.txt",
+      "format": "txt",
+      "committed": true,
+      "purpose": "UTF-8 text ingest smoke"
+    },
+    {
+      "id": "fixture-markdown",
+      "path": "fixtures/samples/guide.md",
+      "format": "md",
+      "committed": true,
+      "purpose": "Markdown headings; runtime upload uses md MIME",
+      "note": "RAG evaluate_rag renderer still uses txt/docx/png/jpeg/pdf only"
+    },
+    {
+      "id": "fixture-empty",
+      "path": "fixtures/samples/empty.txt",
+      "format": "txt",
+      "committed": true,
+      "purpose": "Empty upload rejection / worker skip"
+    },
+    {
+      "id": "fixture-duplicate",
+      "path": "fixtures/samples/duplicate-a.txt",
+      "format": "txt",
+      "committed": true,
+      "purpose": "Same SHA dedup with duplicate-b.txt"
+    },
+    {
+      "id": "fixture-duplicate-b",
+      "path": "fixtures/samples/duplicate-b.txt",
+      "format": "txt",
+      "committed": true,
+      "purpose": "Duplicate of duplicate-a.txt"
+    },
+    {
+      "id": "fixture-docx",
+      "format": "docx",
+      "committed": false,
+      "generator": "study_platform.cli.evaluate_rag render_source",
+      "purpose": "Synthetic DOCX from materials.json sections"
+    },
+    {
+      "id": "fixture-pptx",
+      "format": "pptx",
+      "committed": false,
+      "generator": "BLOCKED: add harness/generate_office_fixtures.py in phase 2",
+      "purpose": "Slide ingest (product supports upload; not in evaluate_rag set)"
+    },
+    {
+      "id": "fixture-pdf-scan",
+      "format": "pdf",
+      "committed": false,
+      "generator": "evaluate_rag render_source",
+      "purpose": "Scan-style PDF with embedded text"
+    },
+    {
+      "id": "fixture-png-ocr",
+      "format": "png",
+      "committed": false,
+      "generator": "evaluate_rag render_source",
+      "purpose": "OCR path without committed bitmap"
+    },
+    {
+      "id": "fixture-oversized",
+      "format": "txt",
+      "committed": false,
+      "generator": "harness/generate_oversized.py (runtime only)",
+      "purpose": "Exceed max_upload_bytes — expect 413/422"
+    },
+    {
+      "id": "fixture-malformed-pdf",
+      "format": "pdf",
+      "committed": false,
+      "generator": "runtime random bytes",
+      "purpose": "Ingest failure + retry"
+    },
+    {
+      "id": "fixture-web-clip",
+      "format": "txt",
+      "committed": true,
+      "path": "corpus material web-clip",
+      "purpose": "Web clipping stored as UTF-8 text"
+    }
+  ]
+}

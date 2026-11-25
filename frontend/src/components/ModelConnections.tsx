@@ -163,7 +163,7 @@ export function ModelConnectionsPanel() {
 
   return <section className="model-settings" aria-labelledby="model-settings-title">
     <header><div><h2 id="model-settings-title"><Server size={20} />模型连接</h2>
-      <p>查看当前默认模型，管理个人连接。连接测试会产生少量调用。</p></div>
+      <p>选择模型用途，保存连接并测试，通过后即可设为默认。测试会产生少量调用。</p></div>
       <Button ref={addRef} variant="secondary" onClick={() => open()} disabled={Boolean(busy) || !credentialsReady}><Plus size={16} />添加连接</Button>
     </header>
     {error && <p role="alert">{error} <Button size="sm" onClick={load}>重试</Button></p>}
@@ -203,6 +203,7 @@ export function ModelConnectionsPanel() {
           {editing !== 'new' && editing.tested_at && <p className="muted">最近测试 {new Date(editing.tested_at).toLocaleString('zh-CN')}</p>}
           <Select label="连接类型" value={kind} disabled={editing !== 'new'} onValueChange={(value) => setKind(value as ModelConnection['kind'])}
             options={connectionTypes.map((value) => ({ value, label: modelGroups[value].label }))} />
+          {editing === 'new' && <p className="muted">{modelGroups[kind].description}</p>}
           <Input label="连接名称" name="name" maxLength={80} required defaultValue={editing === 'new' ? '' : editing.name} placeholder="例如：个人模型服务" />
           <Input label="Base URL" name="base_url" required maxLength={500} defaultValue={editing === 'new' ? '' : editing.base_url} placeholder="https://api.example.com/v1"
             readOnly={editing !== 'new' && editing.libraries.length > 0} />

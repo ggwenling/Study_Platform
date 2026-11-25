@@ -45,7 +45,7 @@ export interface Dashboard {
   due_wrong_question_count: number
   activity: { date: string; count: number }[]
 }
-export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; vision?: boolean; rerank?: boolean; retrieval_defaults?: Omit<RetrievalSettings, 'rerank_connection_id'>; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number }
+export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; vision?: boolean; rerank?: boolean; retrieval_defaults?: Omit<RetrievalSettings, 'rerank_connection_id'>; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number; max_pdf_upload_bytes?: number; max_pdf_pages?: number }
 export interface ModelUsageBucket { key: string; label?: string | null; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }
 export interface ModelUsageTotals { calls: number; successes: number; failures: number; fallback_calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }
 export interface ModelUsageSummary { days: number; since: string; totals: ModelUsageTotals; by_day: ModelUsageBucket[]; by_purpose: ModelUsageBucket[]; by_model: ModelUsageBucket[]; by_connection: ModelUsageBucket[] }
@@ -141,8 +141,8 @@ export interface WrongQuestionItem {
   is_due: boolean
 }
 
-export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null; source_url?: string | null; page_count?: number | null }
-export interface Job { id: string; status: string; phase: string | null; progress: number; error_code: string | null; attempt_count: number }
+export interface Material { id: string; knowledge_base_id: string; title: string; mime_type: string | null; byte_size: number | null; status: string; version_id: string | null; job_id: string | null; created_at: string; error_code: string | null; error_message: string | null; source_url?: string | null; page_count?: number | null; processed_pages?: number | null; total_pages?: number | null }
+export interface Job { id: string; status: string; phase: string | null; progress: number; error_code: string | null; attempt_count: number; processed_pages?: number | null; total_pages?: number | null }
 export type AiGenerationJobType = 'notes' | 'flashcards' | 'quiz'
 export type AiJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 export interface SubmittedAiJob {

@@ -19,10 +19,11 @@ from study_platform.services.rag_evaluation import (
 )
 
 
-def comparison():
+def comparison(mode="compare"):
+    candidate = "rewrite" if mode == "compare" else "candidate"
     rows = []
     for key, answerable in [("answerable", True), ("no-answer", False)]:
-        for strategy in ("baseline", "rewrite"):
+        for strategy in ("baseline", candidate):
             rows.append(
                 {
                     "id": key,
@@ -30,7 +31,7 @@ def comparison():
                     "split": "heldout",
                     "strategy": strategy,
                     "answerable": answerable,
-                    "retrieval_support_hit": answerable and strategy == "rewrite",
+                    "retrieval_support_hit": answerable and strategy == candidate,
                     "answer_error": None,
                     "citation_valid": True,
                     "scope_valid": True,
@@ -38,29 +39,32 @@ def comparison():
             )
     report = {
         "cases": rows,
-        "strategy": "compare",
+        "strategy": mode,
         "status": "completed",
         "expected_case_ids": ["answerable", "no-answer"],
     }
     review = review_template(report)
     review.update(reviewer="test reviewer", human_confirmed=True)
     for row in review["cases"]:
-        row["fact_correct"] = row["id"] != "answerable" or row["strategy"] == "rewrite"
+        row["fact_correct"] = row["id"] != "answerable" or row["strategy"] == candidate
         row["citations_supported"] = True
     return report, review
 
 
 @pytest.mark.parametrize(
-    "damage", ["interrupted", "missing_question", "missing_side", "duplicate", "legacy", "single"]
+    "damage", ["interrupted", "missing_question", "missing_side", "wrong_side", "duplicate", "legacy", "single"]
 )
-def test_incomplete_comparisons_never_pass_even_with_all_existing_rows_reviewed(damage):
-    report, _ = comparison()
+@pytest.mark.parametrize("mode", ["compare", "product_compare"])
+def test_incomplete_comparisons_never_pass_even_with_all_existing_rows_reviewed(damage, mode):
+    report, _ = comparison(mode)
     if damage == "interrupted":
         report["status"] = "running"
     elif damage == "missing_question":
         report["expected_case_ids"].append("second-paraphrase")
     elif damage == "missing_side":
         report["cases"].pop()
+    elif damage == "wrong_side":
+        report["cases"][-1]["strategy"] = "candidate" if mode == "compare" else "rewrite"
     elif damage == "duplicate":
         report["cases"].append(report["cases"][0])
     elif damage == "legacy":
@@ -76,7 +80,7 @@ def test_incomplete_comparisons_never_pass_even_with_all_existing_rows_reviewed(
     assert not gate["complete_comparison"] and not gate["eligible_for_default"]
 
 
-def test_interrupted_live_evaluation_keeps_planned_questions_and_running_status(
+def test_interrupted_live_evaluation_keeps_planned_questions_and_marks_failed(
     tmp_path, monkeypatch
 ):
     dataset = tmp_path / "facts.jsonl"
@@ -89,22 +93,27 @@ def test_interrupted_live_evaluation_keeps_planned_questions_and_running_status(
         metrics_format="table",
     )
     cases = [{"id": n, "knowledge_base": "kb"} for n in ("first", "second")]
-    monkeypatch.setattr(evaluate_rag, "isolated_database", lambda _: nullcontext(None))
+    monkeypatch.setattr(evaluate_rag, "isolated_database", lambda *_args, **_kwargs: nullcontext(None))
     monkeypatch.setattr(
-        evaluate_rag, "seed_corpus", lambda *_: ({"kb": {}}, {}, {}, [], uuid4())
+        evaluate_rag,
+        "seed_corpus",
+        lambda *_args, **_kwargs: ({"kb": {}}, {}, {}, [], uuid4(), ["notes"]),
     )
 
     async def eval_case(case, *_args, **_kwargs):
         if case["id"] == "second":
-            raise RuntimeError("interrupted")
+            raise RuntimeError("interrupted secret sk-SUPERSECRETVALUE")
         return [{"id": "first", "strategy": name} for name in ("baseline", "rewrite")]
 
     monkeypatch.setattr(evaluate_rag, "evaluate_case", eval_case)
-    with pytest.raises(RuntimeError, match="interrupted"):
+    with pytest.raises(evaluate_rag.EvaluationFailed):
         asyncio.run(evaluate_rag.live_evaluation(args, cases, [], tmp_path))
     saved = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
-    assert saved["status"] == "running" and saved["expected_case_ids"] == ["first", "second"]
+    assert saved["status"] == "failed" and saved["expected_case_ids"] == ["first", "second"]
+    assert saved["failure"]["stage"] == "evaluation"
+    assert saved["failure"]["exception_class"] == "RuntimeError"
     assert [r["id"] for r in saved["cases"]] == ["first", "first"]
+    assert "sk-SUPERSECRETVALUE" not in json.dumps(saved) and "interrupted" not in json.dumps(saved)
 
 
 @pytest.mark.parametrize("quote", ["……", ["有效依据", "。？！"]])
@@ -125,8 +134,9 @@ def test_dataset_rejects_quotes_that_normalize_to_empty(tmp_path, quote):
     )
 
 
-def test_group_gain_requires_review_and_safety_without_regression():
-    report, review = comparison()
+@pytest.mark.parametrize("mode", ["compare", "product_compare"])
+def test_group_gain_requires_review_and_safety_without_regression(mode):
+    report, review = comparison(mode)
     assert not quality_gate(report)["eligible_for_default"]
     assert quality_gate(report, review)["eligible_for_default"]
     review["cases"][-1]["fact_correct"] = False
@@ -155,8 +165,9 @@ def test_review_is_bound_to_exact_report_and_case_ids():
     "field,value",
     [("citation_valid", False), ("scope_valid", False), ("answer_error", "provider_failure")],
 )
-def test_invalid_citations_scope_or_model_errors_block_promotion(field, value):
-    report, _ = comparison()
+@pytest.mark.parametrize("mode", ["compare", "product_compare"])
+def test_invalid_citations_scope_or_model_errors_block_promotion(field, value, mode):
+    report, _ = comparison(mode)
     report["cases"][1][field] = value
     review = review_template(report)
     review.update(reviewer="test reviewer", human_confirmed=True)
@@ -165,8 +176,9 @@ def test_invalid_citations_scope_or_model_errors_block_promotion(field, value):
     assert not quality_gate(report, review)["eligible_for_default"]
 
 
-def test_correct_baseline_answer_and_fact_group_must_not_regress():
-    report, _ = comparison()
+@pytest.mark.parametrize("mode", ["compare", "product_compare"])
+def test_correct_baseline_answer_and_fact_group_must_not_regress(mode):
+    report, _ = comparison(mode)
     report["cases"][0]["retrieval_support_hit"] = True
     report["cases"][1]["retrieval_support_hit"] = False
     review = review_template(report)
@@ -291,6 +303,113 @@ def test_retrieval_summary_from_mock_report():
     assert "overall" in table and "R@1" in table
 
 
+def test_blank_evidence_uses_product_pack_and_does_not_call_the_model(monkeypatch):
+    from study_platform.services import chat
+    from study_platform.services.rag_evaluation import evaluate_case
+
+    calls = {"model": 0}
+
+    def embed(queries, diagnostics=None):
+        if diagnostics is not None:
+            diagnostics["calls"] = 1
+            diagnostics["input_count"] = len(queries)
+        return [[0.0]]
+
+    def retrieve(_scope, _vectors, _owner):
+        return [
+            {
+                "id": "blank",
+                "text": " \n\t ",
+                "material_version_id": "m",
+                "index_version_id": "idx",
+                "title": "t",
+                "locator": "L1",
+            }
+        ]
+
+    captured = {}
+
+    class Model:
+        async def ainvoke(self, messages):
+            calls["model"] += 1
+            captured["messages"] = messages
+            return SimpleNamespace(content="alpha [S1]", usage_metadata=None)
+
+    monkeypatch.setattr("study_platform.services.rag_evaluation.embed_texts", embed)
+    monkeypatch.setattr(
+        "study_platform.services.rag_evaluation.chat.retrieve_vectors", retrieve
+    )
+    monkeypatch.setattr("study_platform.services.rag_evaluation.chat_model", lambda: Model())
+    case = {
+        "id": "Q",
+        "fact_group": "g",
+        "split": "heldout",
+        "question": "问什么",
+        "knowledge_base": "kb",
+        "answerable": True,
+        "expected_facts": [["alpha"]],
+        "support": [{"document": "doc", "quote": "alpha"}],
+    }
+    scope = {"index_version_ids": ["idx"], "answer_mode": "knowledge_only", "intent": "qa"}
+    rows = asyncio.run(evaluate_case(case, scope, {"m": "doc"}, "baseline", owner="owner"))
+    assert calls["model"] == 0
+    assert rows[0]["answer_metrics"]["calls"] == 0
+    assert rows[0]["answer"] == chat.INSUFFICIENT_MATERIAL
+    assert rows[0]["evidence"][0]["text"] == " \n\t "
+    assert rows[0]["retrieval_support_hit"] is False
+    assert rows[0]["evidence_characters"] == len(" \n\t ")
+
+    def retrieve_text(_scope, _vectors, _owner):
+        return [
+            {
+                "id": "c1",
+                "text": "alpha quote [S9]",
+                "material_version_id": "m",
+                "index_version_id": "idx",
+                "title": "手册 [S2]",
+                "locator": {"heading": "节 [S4]"},
+                "source": "[S8]",
+                "note": "备注 [S5]",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "study_platform.services.rag_evaluation.chat.retrieve_vectors", retrieve_text
+    )
+    composed = asyncio.run(evaluate_case(case, scope, {"m": "doc"}, "baseline", owner="owner"))
+    assert calls["model"] == 1
+    assert composed[0]["answer_metrics"]["calls"] == 1
+    assert composed[0]["answer"] == "alpha [S1]"
+    system = captured["messages"][0].content
+    rules, raw_docs = system.split("本轮资料JSON：\n", 1)
+    docs = json.loads(raw_docs)
+    assert docs[0]["source"] == "S1"
+    assert docs[0]["title"] == "手册 (S2)"
+    assert docs[0]["text"] == "alpha quote (S9)"
+    assert set(docs[0]) == {"source", "title", "text"}
+    assert "[S" not in raw_docs
+    assert "[S1]" in rules
+    assert captured["messages"][-1].content == "问什么"
+    assert composed[0]["evidence"][0]["title"] == "手册 [S2]"
+    assert composed[0]["evidence"][0]["text"] == "alpha quote [S9]"
+    assert composed[0]["evidence"][0]["locator"] == {"heading": "节 [S4]"}
+
+
+def test_retrieval_report_keeps_strategies_and_heldout_separate():
+    cases = []
+    for strategy, split, mrr in [("baseline", "calibration", 1), ("baseline", "heldout", 0),
+                                 ("hybrid", "heldout", 1), ("rewrite", "heldout", 0.5)]:
+        cases.append({
+            "strategy": strategy, "split": split, "knowledge_base": "A",
+            "retrieval_ir": {"skipped": False, "mrr": mrr, "recall@1": mrr, "hit@1": mrr, "ndcg@1": mrr},
+        })
+    summary = summarize_retrieval({"cases": cases}, [1])
+    assert summary["by_strategy"]["baseline"]["by_scope"]["overall"]["mrr"] == 0.5
+    assert summary["by_strategy"]["baseline"]["by_split"]["heldout"]["mrr"] == 0
+    assert summary["by_strategy"]["hybrid"]["by_split"]["heldout"]["mrr"] == 1
+    assert "rewrite/heldout | 1 | 0.5000" in format_retrieval_table(summary)
+
+
 def test_equivalent_supporting_passages_are_accepted_but_file_match_alone_is_not():
     case = {"support": [{"document": "doc", "quote": ["按学期进行范围分区", "按授课学期进行分区"]}]}
     documents = {"v": "doc"}
@@ -300,3 +419,74 @@ def test_equivalent_supporting_passages_are_accepted_but_file_match_alone_is_not
     assert not support_hit(
         case, [{"material_version_id": "v", "text": "本学期课程安排。"}], documents
     )
+
+
+def test_edge_case_dataset_has_eight_groups_and_balanced_paraphrases():
+    path = Path(__file__).resolve().parents[2] / "evaluation/edge_cases/facts.jsonl"
+    cases, _ = read_dataset(path)
+
+    assert len(cases) == 16
+    assert len({case["fact_group"] for case in cases}) == 8
+    for split in ("calibration", "heldout"):
+        groups = {
+            case["fact_group"]
+            for case in cases
+            if case["split"] == split
+        }
+        assert len(groups) == 4
+        for group in groups:
+            paraphrases = [case for case in cases if case["fact_group"] == group]
+            assert len(paraphrases) == 2
+            assert {case["split"] for case in paraphrases} == {split}
+            assert len({case["question"] for case in paraphrases}) == 2
+            assert all(case["expected_facts"] == paraphrases[0]["expected_facts"] for case in paraphrases)
+            assert all(case["support"] == paraphrases[0]["support"] for case in paraphrases)
+
+
+def test_edge_case_cross_document_evidence_and_scanned_formats_are_annotated():
+    path = Path(__file__).resolve().parents[2] / "evaluation/edge_cases/facts.jsonl"
+    cases, materials = read_dataset(path)
+    by_id = {case["id"]: case for case in cases}
+    by_material = {material["id"]: material for material in materials}
+
+    cross_document = by_id["E03-1"]
+    assert {item["document"] for item in cross_document["support"]} == {
+        "batch-policy",
+        "batch-index",
+    }
+    assert len(cross_document["expected_facts"]) == 3
+    assert all("CX-8042" in by_id[case_id]["question"] for case_id in ("E01-1", "E01-2"))
+    assert by_id["E01-1"]["expected_facts"] == [["北侧C-17柜"]]
+    assert [item["document"] for item in by_id["E01-1"]["support"]] == ["asset-index"]
+    competing_text = by_material["near-id-match"]["sections"][0]
+    assert by_material["near-id-match"]["knowledge_base"] == "A"
+    assert "CX-8402" in competing_text and "CX-8042" not in competing_text
+    assert "南侧C-18柜" in competing_text
+    assert all("待核暂存" in by_id[case_id]["question"] for case_id in ("E02-1", "E02-2"))
+    assert by_id["E02-1"]["expected_facts"] == [["尚未完成复核、仅供暂时留存", "复核前暂存"]]
+    assert "待核保留" in by_material["terms-and-counts"]["sections"][1]
+    assert by_id["H01-1"]["expected_facts"] == [["36天"]]
+    assert all("第2班" in by_id[case_id]["question"] for case_id in ("H01-1", "H01-2"))
+    assert all("36" not in by_id[case_id]["question"] for case_id in ("H01-1", "H01-2"))
+    assert "上一周期为30天" in by_material["calibration-schedule"]["sections"][0]
+    assert by_material["processing-matrix"]["format"] == "docx"
+    assert "| 平衡 | 4 | 27 |" in by_material["processing-matrix"]["sections"][0]
+    assert "\\times 4=32" in by_material["batch-formula"]["sections"][0]
+    assert by_material["scan-inspection"]["format"] == "pdf"
+    assert by_id["H04-1"]["support"][0]["quote"] == "备用阀门铭牌为VN-528。"
+
+
+def test_edge_case_unanswerable_near_answer_is_confined_to_other_library():
+    path = Path(__file__).resolve().parents[2] / "evaluation/edge_cases/facts.jsonl"
+    cases, materials = read_dataset(path)
+    no_answer_cases = [case for case in cases if case["fact_group"] == "E04"]
+    requested_materials = [material for material in materials if material["knowledge_base"] == "A"]
+    other_library = [material for material in materials if material["knowledge_base"] == "B"]
+
+    assert len(no_answer_cases) == 2
+    assert all(not case["answerable"] and not case["expected_facts"] and not case["support"] for case in no_answer_cases)
+    requested_text = "\n".join(section for material in requested_materials for section in material["sections"])
+    distractor_text = "\n".join(other_library[0]["sections"])
+    assert "沧屿储物箱" in no_answer_cases[0]["question"]
+    assert "沧屿储物箱" in requested_text and "沧屿储物箱" in distractor_text
+    assert "当班库管" not in requested_text and "当班库管" in distractor_text

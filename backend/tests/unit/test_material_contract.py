@@ -60,6 +60,7 @@ def test_material_response_serializes_uuid_dates_and_nullable_errors(monkeypatch
         "version_id": str(version_id), "job_id": str(job_id),
         "created_at": "2026-01-01T00:00:00Z", "error_code": None, "error_message": None,
         "source_url": None, "page_count": None,
+        "processed_pages": None, "total_pages": None,
     }
 
 
