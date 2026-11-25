@@ -648,7 +648,7 @@ def _related_chunk(anchor, neighbor, rows):
     return int(bool(_CONDITION.search(neighbor["text"])))
 
 
-def _select_local_evidence(seeds, rows, question, limit):
+def _select_local_evidence(seeds, rows, question, budget):
     terms = lexical_query_terms(question)
     identifiers = {item.casefold() for item in _QA_IDENTIFIER.findall(question)}
     seen = {row["id"] for row in seeds}
@@ -659,17 +659,6 @@ def _select_local_evidence(seeds, rows, question, limit):
         if _table_path(anchor.get("locator"))
         and identifiers.intersection(_QA_IDENTIFIER.findall(anchor["text"].casefold()))
     }
-    # Keep a strongly identified row together even when one cell happened to
-    # rank below the cutoff for original hits.
-    required = {0} if seeds else set()
-    row_budget = min(limit, max(3, limit // 2))
-    for rank in sorted(keyed_table_anchors):
-        peers = [i for i, row in enumerate(seeds)
-                 if i != rank and _related_chunk(seeds[rank], row, rows) == 12]
-        required.update(i for i in [rank, *peers] if i not in required
-                        and len(required) < row_budget)
-        if len(required) >= row_budget:
-            break
     for neighbor in rows:
         if neighbor["id"] in seen or neighbor["text"] in texts or not neighbor["text"].strip():
             continue
@@ -685,30 +674,20 @@ def _select_local_evidence(seeds, rows, question, limit):
     selected = []
     used_anchors = set()
     for score, rank, row in sorted(scored, key=lambda item: (-item[0], item[1], item[2]["ordinal"])):
-        # Reserve at least half the budget for the original ranked hits.
-        if len(selected) >= min(4, limit // 2):
+        if len(selected) >= budget:
             break
         if row["id"] in seen or row["text"] in texts or (rank in used_anchors and score < 12):
-            continue
-        if len(required | {rank, *used_anchors}) + len(selected) >= limit:
             continue
         selected.append(row)
         used_anchors.add(rank)
         seen.add(row["id"])
         texts.add(row["text"])
-    kept = required | used_anchors
-    for rank in range(len(seeds)):
-        if len(kept) >= limit - len(selected):
-            break
-        kept.add(rank)
-    return [row for rank, row in enumerate(seeds) if rank in kept] + selected
+    return [*seeds, *selected]
 
 
-def local_qa_evidence(scope, question, owner, evidence):
-    limit = int(effective_settings(scope.get("retrieval_settings"))["top_k"])
-    seeds = pack_evidence(evidence)[:limit]
+def _local_qa_evidence(scope, question, owner, seeds, budget):
     anchors = [row for row in seeds[:12] if "ordinal" in row and "index_version_id" in row]
-    if not anchors or limit < 2:
+    if not anchors or budget < 1:
         return seeds
     windows = [
         sa.and_(MaterialChunk.index_version_id == row["index_version_id"],
@@ -720,7 +699,12 @@ def local_qa_evidence(scope, question, owner, evidence):
         rows = db.execute(query.where(sa.or_(*windows)).order_by(
             MaterialChunk.index_version_id, MaterialChunk.ordinal
         )).all()
-    return _select_local_evidence(seeds, [chunk_dto(row, title) for row, title in rows], question, limit)
+    return _select_local_evidence(seeds, [chunk_dto(row, title) for row, title in rows], question, budget)
+
+
+def local_qa_evidence(scope, question, owner, evidence):
+    limit = int(effective_settings(scope.get("retrieval_settings"))["top_k"])
+    return _local_qa_evidence(scope, question, owner, pack_evidence(evidence)[:limit], min(4, limit // 2))
 
 
 def missing_qa_queries(scope, question, evidence):
@@ -757,12 +741,21 @@ def supplement_qa(scope, question, owner, evidence, queries, *, diagnostics=None
     if not supplemental:
         return evidence
     limit = int(effective_settings(scope.get("retrieval_settings"))["top_k"])
-    fused = fuse_rankings([evidence, supplemental], limit, weights=[1.0, 0.8])
-    # Give each search room near the front so expansion cannot immediately
-    # discard distinct evidence for the clause that triggered it.
-    leading = [row for pair in zip(evidence[:3], supplemental[:3], strict=False) for row in pair]
-    merged = pack_evidence([*leading, *fused])[:limit]
-    return local_qa_evidence(scope, question, owner, merged)
+    base = evidence[:limit]
+    budget = min(4, limit // 2)
+    anchors = set(_QA_IDENTIFIER.findall(" ".join(queries).casefold()))
+    rows = [row for row in supplemental if not _SECTION_START.match(row["text"])]
+    if anchors:
+        # Prefer a sentence carrying the term over syntax and truncated mentions.
+        rows.sort(key=lambda row: not (anchors.intersection(_QA_IDENTIFIER.findall(row["text"].casefold()))
+                                       and ' = "' not in row["text"] and len(row["text"]) >= 45))
+    present = {row["id"] for row in base}
+    texts = {row["text"] for row in base}
+    hits = [row for row in rows if row["id"] not in present and row["text"] not in texts][:min(2, budget)]
+    if not hits:
+        return evidence
+    expanded = _local_qa_evidence(scope, question, owner, hits, max(0, budget - len(hits)))
+    return pack_evidence([*base, *expanded, *evidence[limit:]])[:limit + budget]
 
 
 def display_evidence_text(text: str) -> str:

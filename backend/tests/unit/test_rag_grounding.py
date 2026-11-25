@@ -2,6 +2,7 @@
 
 import json
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -123,9 +124,9 @@ def test_local_evidence_adds_same_row_cells_and_never_crosses_index_or_table():
     wrong_index = chunk("跨资料不正确", 11, 3, index="another")
     wrong_table = chunk("同名表表项不正确", 12, 3, table=2)
     result = chat._select_local_evidence(
-        [anchor, other, weak], [value, wrong_index, wrong_table], "KB-2920 的期望是什么？", 3,
+        [anchor, other, weak], [value, wrong_index, wrong_table], "KB-2920 的期望是什么？", 1,
     )
-    assert result == [anchor, other, value]
+    assert result == [anchor, other, weak, value]
 
 
 def test_local_evidence_respects_headings_while_supplementing_a_limit():
@@ -142,7 +143,7 @@ def test_local_evidence_respects_headings_while_supplementing_a_limit():
     ) == [anchor, valid]
 
 
-def test_local_evidence_keeps_already_retrieved_value_of_queried_table_row():
+def test_local_evidence_keeps_original_hits_when_adding_a_continuation():
     def row(number, text, locator):
         return {"id": number, "index_version_id": "i", "ordinal": number, "section_id": number,
                 "text": text, "locator": locator}
@@ -152,8 +153,8 @@ def test_local_evidence_keeps_already_retrieved_value_of_queried_table_row():
     anchor = row(50, "CT-8402", {"table_path": [{"table": 1, "row": 3, "column": 1}]})
     value = row(51, "Sample validation status 304", {"table_path": [{"table": 1, "row": 3, "column": 2}]})
     next_line = row(2, "only if there is a matching response", {"line": 2})
-    result = chat._select_local_evidence([hit, anchor, plain, value], [next_line], "CT-8402 的值？", 4)
-    assert result == [hit, anchor, value, next_line]
+    result = chat._select_local_evidence([hit, anchor, plain, value], [next_line], "CT-8402 的值？", 1)
+    assert result == [hit, anchor, plain, value, next_line]
 
 
 def test_extra_queries_require_a_missing_compound_clause_and_leave_optional_rerank_budget(monkeypatch):
@@ -173,6 +174,24 @@ def test_extra_queries_require_a_missing_compound_clause_and_leave_optional_rera
     assert not chat.missing_qa_queries(
         {**scope, "retrieval_settings": {"rerank_enabled": True}}, question, evidence,
     )
+
+
+def test_supplement_preserves_the_ranked_hits_and_uses_one_embedding_batch(monkeypatch):
+    original = evidence(10)
+    new = [{"id": "fresh", "text": "A new distinct fact"}]
+    attempts = []
+
+    def embed(queries, **_kwargs):
+        attempts.append(queries)
+        return [[0.1] for _ in queries]
+
+    monkeypatch.setattr(chat, "embed_texts", embed)
+    monkeypatch.setattr(chat, "effective_settings", lambda _: {"top_k": 10})
+    monkeypatch.setattr(chat, "retrieve_hybrid", lambda *_args: [original[0], *new])
+    monkeypatch.setattr(chat, "_local_qa_evidence", lambda _scope, _question, _owner, rows, _budget: rows)
+    queries = ["first clause", "second clause"]
+    assert chat.supplement_qa({}, "compound question", UUID(int=1), original, queries) == [*original, *new]
+    assert attempts == [queries]
 
 
 def test_cited_chunks_preserves_citation_order_and_indexes_evidence():

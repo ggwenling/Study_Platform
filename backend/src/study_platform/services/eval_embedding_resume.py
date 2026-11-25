@@ -538,6 +538,7 @@ def recorded_usage(embedding, rewrite, generation):
 
 def query_costs(cases):
     embedding = []
+    supplemental = []
     seen = {}
     rewrite = []
     generation = []
@@ -562,6 +563,15 @@ def query_costs(cases):
             prior["usage_status"] = "inconsistent"
             prior["cache_read_status"] = "inconsistent"
             prior["cache_miss_status"] = "inconsistent"
+        extra = row.get("supplemental_embedding_metrics") or {}
+        if extra.get("calls"):
+            usage, status = allow_usage(extra.get("usage"))
+            cache_status, miss_status = _usage_row(usage, status)
+            supplemental.append({
+                "id": row["id"], "strategy": row.get("strategy"), "calls": extra["calls"],
+                "usage": usage, "usage_status": status, "cache_read_status": cache_status,
+                "cache_miss_status": miss_status,
+            })
         rewrite_metrics = row.get("rewrite_metrics") or None
         if row.get("strategy") == "rewrite" and rewrite_metrics:
             usage, status = allow_usage(rewrite_metrics.get("usage"))
@@ -598,8 +608,9 @@ def query_costs(cases):
         )
     return {
         "embedding": embedding,
+        "supplemental_embedding": supplemental,
         "rewrite": rewrite,
         "generation": generation,
-        "recorded_usage": recorded_usage(embedding, rewrite, generation),
+        "recorded_usage": recorded_usage([*embedding, *supplemental], rewrite, generation),
         "currency_total": "unknown",
     }
