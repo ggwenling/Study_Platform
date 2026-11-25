@@ -722,13 +722,21 @@ def missing_qa_queries(scope, question, evidence):
     ] if "和" in question or "与" in question else []
     if not joins and not _COMPOUND_QUESTION.search(question):
         return []
-    if joins:
-        marked = list(question)
-        for start in joins:
-            marked[start] = "，"
-        question = "".join(marked)
-    clauses = _QA_CLAUSE_SEPARATOR.split(question)
-    clauses = [clause.strip() for clause in clauses if len(lexical_query_terms(clause)) >= 2]
+    shared = {}
+    for start in joins:
+        left = _QA_CLAUSE_SEPARATOR.split(question[:start])[-1].strip()
+        right = _QA_CLAUSE_SEPARATOR.split(question[start + 1:])[0].strip()
+        entity, marker, predicate = right.partition("的")
+        if marker and lexical_query_terms(entity) and lexical_query_terms(predicate) and (
+            len(lexical_query_terms(left)) == 1
+        ):
+            shared[left] = (left + marker + predicate, lexical_query_terms(left))
+            shared[right] = (right, lexical_query_terms(entity))
+    marked = list(question)
+    for start in joins:
+        marked[start] = "，"
+    clauses = [clause.strip() for clause in _QA_CLAUSE_SEPARATOR.split("".join(marked))]
+    clauses = [clause for clause in clauses if clause in shared or len(lexical_query_terms(clause)) >= 2]
     if len(clauses) < 2:
         return []
     corpus = " ".join(row["text"].casefold() for row in evidence)
@@ -736,21 +744,23 @@ def missing_qa_queries(scope, question, evidence):
                    and not _SECTION_START.match(row["text"]) and " . . ." not in row["text"]]
     missing = []
     for clause in clauses:
+        query, terms = shared.get(clause, (clause, lexical_query_terms(clause)))
         anchors = _QA_IDENTIFIER.findall(clause)
-        terms = lexical_query_terms(clause)
         if anchors:
             covered = all(sum(anchor.casefold() in text for text in substantive) >= 2 for anchor in anchors)
         else:
             covered = sum(term in corpus for term in terms) >= (len(terms) + 1) // 2
-        if not covered and clause not in missing:
-            missing.append(clause)
+        if not covered and query not in missing:
+            missing.append(query)
     return missing[:2]
 
 
 def supplement_qa(scope, question, owner, evidence, queries, *, diagnostics=None):
     limit = int(effective_settings(scope.get("retrieval_settings"))["top_k"])
     budget = min(4, limit // 2)
-    if not queries or not budget:
+    hit_limit = min(2, budget)
+    queries = queries[:hit_limit]
+    if not queries:
         return evidence
     try:
         vectors = embed_texts(queries, context=ModelUsageContext(owner, "embedding"), diagnostics=diagnostics)
@@ -771,7 +781,6 @@ def supplement_qa(scope, question, owner, evidence, queries, *, diagnostics=None
     present = {row["id"] for row in base}
     texts = {row["text"] for row in base}
     hits = []
-    hit_limit = min(2, budget)
     # Give each query a turn before returning for an additional hit.
     for _ in range(hit_limit):
         for rows in ranked_queries:

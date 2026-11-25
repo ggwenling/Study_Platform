@@ -194,8 +194,9 @@ def store_cached_batch(directory, key, identity, vectors, usage, usage_status, e
         allow_nan=False,
         separators=(",", ":"),
     ).encode() + b"\n"
-    directory = _batch_dir(directory)
-    temporary = directory / f".{key}.{uuid4().hex}.tmp"
+    batches = _batch_dir(directory)
+    destination = batches / f"{key}.json"
+    temporary = batches / f".{key}.{uuid4().hex}.tmp"
     if os.name == "nt":
         descriptor = _windows_cache_security.open_new(temporary)
     else:
@@ -210,11 +211,22 @@ def store_cached_batch(directory, key, identity, vectors, usage, usage_status, e
         temporary.unlink(missing_ok=True)
         raise
     os.close(descriptor)
+    try:
+        if os.name != "nt":
+            os.chmod(temporary, 0o600)
+        os.replace(temporary, destination)
+    except PermissionError as exc:
+        # A concurrent reader can prevent replacement on Windows. Keep an
+        # already validated batch for this identity in that case.
+        if (
+            os.name != "nt" or getattr(exc, "winerror", None) not in (5, 32)
+            or load_cached_batch(directory, key, identity, len(vectors)) is None
+        ):
+            raise
+    finally:
+        temporary.unlink(missing_ok=True)
     if os.name != "nt":
-        os.chmod(temporary, 0o600)
-    os.replace(temporary, directory / f"{key}.json")
-    if os.name != "nt":
-        os.chmod(directory / f"{key}.json", 0o600)
+        os.chmod(destination, 0o600)
 
 
 def _delay(failure, retry_index):

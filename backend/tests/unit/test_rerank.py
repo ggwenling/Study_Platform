@@ -71,6 +71,8 @@ def test_post_uses_guarded_sync_client_and_standard_request(monkeypatch):
     ("base_url", "expected_endpoint"),
     [
         ("https://rerank.example/v1", "https://rerank.example/v1/rerank"),
+        ("http://rerank", "http://rerank/rerank"),
+        ("http://reranks/", "http://reranks/rerank"),
         ("https://rerank.example/v1/", "https://rerank.example/v1/rerank"),
         ("https://rerank.example/v1/rerank", "https://rerank.example/v1/rerank"),
         (
