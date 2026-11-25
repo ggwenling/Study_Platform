@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from PIL import Image
 
+from study_platform.core.errors import ApiError
 from study_platform.services import ingestion
 
 
@@ -51,14 +52,15 @@ class FakePage:
 
 
 class FakeDocument:
-    def __init__(self, page):
+    def __init__(self, page, count=1):
         self.page = page
+        self.count = count
 
     def __len__(self):
-        return 1
+        return self.count
 
     def __getitem__(self, index):
-        assert index == 0
+        assert 0 <= index < self.count
         return self.page
 
     def close(self):
@@ -101,6 +103,26 @@ def test_sparse_watermarked_page_uses_ocr_and_saves_page_image(tmp_path, monkeyp
     assert phases == ["parsing", "ocr"]
     assert version.page_count == 1
     assert (tmp_path / "page-1.png").is_file()
+
+
+def test_pdf_boundary_reports_last_page_and_rejects_over_limit(tmp_path, monkeypatch):
+    text = "The final page remains available to a question and its original citation."
+    version = setup_pdf(tmp_path, monkeypatch, text)
+    settings = ingestion.get_settings()
+    settings.max_pdf_pages = 150
+    pdfium = sys.modules["pypdfium2"]
+    pdfium.PdfDocument = lambda _: FakeDocument(FakePage(text, None), 150)
+    progress = []
+    parsed = list(ingestion.extract(
+        version, tmp_path, lambda _: None, settings=settings,
+        page_progress=lambda done, total: progress.append((done, total)),
+    ))
+    assert len(parsed) == 150 and parsed[-1] == (text, {"page": 150})
+    assert progress == [(page, 150) for page in range(150)]
+    pdfium.PdfDocument = lambda _: FakeDocument(FakePage(text, None), 151)
+    with pytest.raises(ApiError) as error:
+        list(ingestion.extract(version, tmp_path, lambda _: None, settings=settings))
+    assert error.value.code == "pdf_page_limit"
 
 
 def test_short_text_layer_is_kept_when_ocr_does_not_improve_it(tmp_path, monkeypatch):

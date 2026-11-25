@@ -1,6 +1,7 @@
 """Deterministic checks for RAG grounding prompts and citation publication (no models)."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,11 +55,6 @@ def test_prompt_serializes_one_source_block_per_evidence_chunk():
     assert "Supporting fact 2." in system
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Desktop Q09: the prompt drops DOCX row positions needed to connect the two checks.",
-)
 def test_prompt_exposes_adjacent_focus_table_rows_in_retrieval_order():
     scope = {
         "answer_mode": "knowledge_only",
@@ -95,6 +91,85 @@ def test_prompt_exposes_adjacent_focus_table_rows_in_retrieval_order():
     }
 
     assert focus_rows == {"S1": [{"table": 1, "row": 3}], "S3": [{"table": 1, "row": 2}]}
+    assert documents[0]["document"] == documents[2]["document"]
+    assert "locator" not in documents[1]
+
+
+def test_prompt_ignores_invalid_table_positions_and_does_not_expose_storage_ids():
+    chunks = evidence(2)
+    chunks[0].update(material_version_id="storage-id", locator={"table_path": [{"table": True, "row": 2}]})
+    chunks[1].update(material_version_id="storage-id", locator={"table_path": [
+        {"table": 1, "row": 2, "column": 3, "other": "untrusted"},
+    ]})
+    scope = {"answer_mode": "knowledge_only", "intent": "qa", "content": "问题？"}
+    message = _system_message(scope, chunks)
+    documents = json.loads(message.split("\n本轮资料JSON：\n", 1)[1])
+    assert "locator" not in documents[0]
+    assert documents[1]["locator"] == {"table_path": [{"table": 1, "row": 2, "column": 3}]}
+    assert "storage-id" not in message and "untrusted" not in message
+
+
+def test_local_evidence_adds_same_row_cells_and_never_crosses_index_or_table():
+    def chunk(name, ordinal, row, index="i", table=1):
+        return {
+            "id": name, "index_version_id": index, "ordinal": ordinal, "section_id": name,
+            "text": name, "locator": {"table_path": [{"table": table, "row": row}]},
+        }
+
+    anchor = chunk("KB-2920", 10, 3)
+    other = chunk("WAI navigation", 2, 1, index="public")
+    weak = chunk("Existing lower-ranked result", 22, 2)
+    value = chunk("弹层关闭后回到触发按钮", 11, 3)
+    wrong_index = chunk("跨资料不正确", 11, 3, index="another")
+    wrong_table = chunk("同名表表项不正确", 12, 3, table=2)
+    result = chat._select_local_evidence(
+        [anchor, other, weak], [value, wrong_index, wrong_table], "KB-2920 的期望是什么？", 3,
+    )
+    assert result == [anchor, other, value]
+
+
+def test_local_evidence_respects_headings_while_supplementing_a_limit():
+    def line(number, text):
+        return {"id": number, "index_version_id": "i", "ordinal": number, "section_id": number,
+                "text": text, "locator": {"line": number}}
+
+    anchor = line(167, "stale-if-error = delta-seconds")
+    valid = line(183, "Its value indicates the upper limit to staleness")
+    boundary = line(184, "4.1.  Example")
+    foreign = line(185, "The example must not exceed the upper limit")
+    assert chat._select_local_evidence(
+        [anchor], [valid, boundary, foreign], "stale-if-error 的窗口限制是什么？", 4
+    ) == [anchor, valid]
+
+
+def test_local_evidence_keeps_already_retrieved_value_of_queried_table_row():
+    def row(number, text, locator):
+        return {"id": number, "index_version_id": "i", "ordinal": number, "section_id": number,
+                "text": text, "locator": locator}
+
+    hit = row(1, "The protocol explains this, but", {"line": 1})
+    plain = row(30, "Other original text", {"line": 30})
+    anchor = row(50, "CT-8402", {"table_path": [{"table": 1, "row": 3, "column": 1}]})
+    value = row(51, "Sample validation status 304", {"table_path": [{"table": 1, "row": 3, "column": 2}]})
+    next_line = row(2, "only if there is a matching response", {"line": 2})
+    result = chat._select_local_evidence([hit, anchor, plain, value], [next_line], "CT-8402 的值？", 4)
+    assert result == [hit, anchor, value, next_line]
+
+
+def test_extra_queries_require_a_missing_compound_clause_and_leave_optional_rerank_budget(monkeypatch):
+    monkeypatch.setattr(chat, "get_settings", lambda: SimpleNamespace(rag_query_rewrite_enabled=False))
+    monkeypatch.setattr(chat, "effective_settings", lambda settings: settings or {"rerank_enabled": False})
+    scope = {"index_version_ids": ["index"]}
+    evidence = [
+        {"text": "The stale-while-revalidate extension permits asynchronous cache validation."},
+        {"text": "With stale-while-revalidate enabled, a cache may serve a stale response."},
+    ]
+    question = "stale-while-revalidate 有何作用？stale-if-error 的限制是什么？"
+    assert chat.missing_qa_queries(scope, question, evidence) == ["stale-if-error 的限制是什么"]
+    assert not chat.missing_qa_queries(scope, "stale-if-error 的限制是什么？", evidence)
+    assert not chat.missing_qa_queries(
+        {**scope, "retrieval_settings": {"rerank_enabled": True}}, question, evidence,
+    )
 
 
 def test_cited_chunks_preserves_citation_order_and_indexes_evidence():

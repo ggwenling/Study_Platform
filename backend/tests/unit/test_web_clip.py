@@ -68,6 +68,23 @@ def test_rejects_public_qa_urls_on_fake_ip_dns_with_actionable_hint(monkeypatch,
     assert "直连后重试" in error.value.message
 
 
+def test_clip_recovers_missing_main_paragraph_without_navigation_or_duplicates(monkeypatch):
+    import trafilatura
+
+    repeated = "An existing paragraph that already describes the purpose of this guide."
+    omitted = "Use Tab between components and arrow keys to move inside a composite widget."
+    hidden = "This hidden text is long enough to be mistaken for document content."
+    monkeypatch.setattr(trafilatura, "extract", lambda *args, **kwargs: repeated)
+    markup = f"""
+    <html><main><p>{repeated}</p><h2>Keyboard navigation</h2><p>{omitted}</p>
+    <nav><p>{hidden}</p></nav><div hidden><p>{hidden}</p></div></main></html>
+    """.encode()
+    _, markdown = web_clip._extract(markup, "text/html", "utf-8", "https://example.org/")
+    assert f"## Keyboard navigation\n\n{omitted}" in markdown
+    assert markdown.count(repeated) == 1
+    assert hidden not in markdown
+
+
 def test_dns_resolution_obeys_deadline(monkeypatch):
     import time
 

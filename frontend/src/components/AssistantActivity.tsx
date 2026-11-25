@@ -7,7 +7,7 @@ import './AssistantActivity.css'
 export const activityLabels: Record<ChatPhase, string> = {
   working: '正在处理…',
   searching: '正在检索资料…',
-  solving: '正在深度推理…',
+  solving: '正在补查相关资料…',
   composing: '正在生成回答…',
 }
 

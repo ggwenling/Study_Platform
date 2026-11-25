@@ -410,7 +410,8 @@ def chunk_query(index_ids, owner: UUID):
 def chunk_dto(row, title):
     return {"id": row.id, "index_version_id": row.index_version_id,
             "material_version_id": row.material_version_id, "text": row.text,
-            "locator": row.locator, "title": title}
+            "locator": row.locator, "title": title, "ordinal": row.ordinal,
+            "section_id": getattr(row, "section_id", None)}
 
 
 def retrieve(scope, content, owner: UUID, *, rewritten_query=None, diagnostics=None):
@@ -601,6 +602,169 @@ def pack_evidence(evidence) -> list:
     return packed
 
 
+_SECTION_START = re.compile(r"^(?:#{1,6}\s|\d+(?:\.\d+)*\.?\s{2,}\S)")
+_CONDITION = re.compile(
+    r"\b(?:unless|must not|should not|upper limit|without\s+(?:contacting|validation)|whereas|only if)\b|上限|前提|不得",
+    re.IGNORECASE,
+)
+_COMPOUND_QUESTION = re.compile(
+    r"分别|各自|各多少|区别|对比|顺序|以及|同时|[？?].+|\b(?:compare|respectively|versus)\b", re.I,
+)
+_QA_IDENTIFIER = re.compile(r"\b[a-z0-9]+(?:-[a-z0-9]+)+\b", re.I)
+
+
+def _related_chunk(anchor, neighbor, rows):
+    if neighbor["index_version_id"] != anchor.get("index_version_id") or "ordinal" not in anchor:
+        return 0
+    loc, other = anchor["locator"], neighbor["locator"]
+    if path := _table_path(loc):
+        peer = _table_path(other)
+        if peer and path[:-1] == peer[:-1] and all(path[-1][key] == peer[-1][key] for key in ("table", "row")):
+            return 12
+        return 0
+    if _table_path(other):
+        return 0
+    distance = abs(neighbor["ordinal"] - anchor["ordinal"])
+    if anchor["section_id"] and anchor["section_id"] == neighbor["section_id"]:
+        return 4 if distance <= 3 else 0
+    first = loc.get("line", loc.get("start_line"))
+    second = other.get("line", other.get("start_line"))
+    if type(first) is not int or type(second) is not int or abs(first - second) > 24:
+        return 0
+    if loc.get("heading") != other.get("heading"):
+        return 0
+    start, end = sorted((anchor["ordinal"], neighbor["ordinal"]))
+    if any(
+        row["index_version_id"] == anchor["index_version_id"]
+        and start < row["ordinal"] <= end and _SECTION_START.match(row["text"])
+        for row in rows
+    ):
+        return 0
+    if distance <= 2:
+        # Physical line breaks in older indexes often split a sentence before
+        # its action or restriction. Prefer completing the hit over its lead-in.
+        continuation = anchor["ordinal"] < neighbor["ordinal"] and not anchor["text"].rstrip().endswith((".", "。", "！", "?"))
+        return 3 + int(distance == 1) + 2 * continuation
+    return int(bool(_CONDITION.search(neighbor["text"])))
+
+
+def _select_local_evidence(seeds, rows, question, limit):
+    terms = lexical_query_terms(question)
+    identifiers = {item.casefold() for item in _QA_IDENTIFIER.findall(question)}
+    seen = {row["id"] for row in seeds}
+    texts = {row["text"] for row in seeds}
+    scored = []
+    keyed_table_anchors = {
+        rank for rank, anchor in enumerate(seeds)
+        if _table_path(anchor.get("locator"))
+        and identifiers.intersection(_QA_IDENTIFIER.findall(anchor["text"].casefold()))
+    }
+    # Keep a strongly identified row together even when one cell happened to
+    # rank below the cutoff for original hits.
+    required = {0} if seeds else set()
+    row_budget = min(limit, max(3, limit // 2))
+    for rank in sorted(keyed_table_anchors):
+        peers = [i for i, row in enumerate(seeds)
+                 if i != rank and _related_chunk(seeds[rank], row, rows) == 12]
+        required.update(i for i in [rank, *peers] if i not in required
+                        and len(required) < row_budget)
+        if len(required) >= row_budget:
+            break
+    for neighbor in rows:
+        if neighbor["id"] in seen or neighbor["text"] in texts or not neighbor["text"].strip():
+            continue
+        matches = sum(term in neighbor["text"].casefold() for term in terms)
+        condition = bool(_CONDITION.search(neighbor["text"]))
+        for rank, anchor in enumerate(seeds):
+            related = _related_chunk(anchor, neighbor, rows)
+            if related and (related >= 3 or matches or condition):
+                score = related + min(matches, 3) + 2 * condition
+                if related == 12:
+                    score = score + 3 if rank in keyed_table_anchors else score - 7
+                scored.append((score, rank, neighbor))
+    selected = []
+    used_anchors = set()
+    for score, rank, row in sorted(scored, key=lambda item: (-item[0], item[1], item[2]["ordinal"])):
+        # Reserve at least half the budget for the original ranked hits.
+        if len(selected) >= min(4, limit // 2):
+            break
+        if row["id"] in seen or row["text"] in texts or (rank in used_anchors and score < 12):
+            continue
+        if len(required | {rank, *used_anchors}) + len(selected) >= limit:
+            continue
+        selected.append(row)
+        used_anchors.add(rank)
+        seen.add(row["id"])
+        texts.add(row["text"])
+    kept = required | used_anchors
+    for rank in range(len(seeds)):
+        if len(kept) >= limit - len(selected):
+            break
+        kept.add(rank)
+    return [row for rank, row in enumerate(seeds) if rank in kept] + selected
+
+
+def local_qa_evidence(scope, question, owner, evidence):
+    limit = int(effective_settings(scope.get("retrieval_settings"))["top_k"])
+    seeds = pack_evidence(evidence)[:limit]
+    anchors = [row for row in seeds[:12] if "ordinal" in row and "index_version_id" in row]
+    if not anchors or limit < 2:
+        return seeds
+    windows = [
+        sa.and_(MaterialChunk.index_version_id == row["index_version_id"],
+                MaterialChunk.ordinal.between(row["ordinal"] - 24, row["ordinal"] + 24))
+        for row in anchors
+    ]
+    with session_factory()() as db:
+        query = chunk_query([UUID(str(key)) for key in scope["index_version_ids"]], owner)
+        rows = db.execute(query.where(sa.or_(*windows)).order_by(
+            MaterialChunk.index_version_id, MaterialChunk.ordinal
+        )).all()
+    return _select_local_evidence(seeds, [chunk_dto(row, title) for row, title in rows], question, limit)
+
+
+def missing_qa_queries(scope, question, evidence):
+    if get_settings().rag_query_rewrite_enabled or effective_settings(
+        scope.get("retrieval_settings")
+    )["rerank_enabled"] or not _COMPOUND_QUESTION.search(question) or not scope["index_version_ids"]:
+        return []
+    clauses = re.split(r"[，,；;？?。]|以及|还是|分别|(?<=\S)[和与](?=\S)|\b(?:and|versus)\b", question)
+    clauses = [clause.strip() for clause in clauses if len(lexical_query_terms(clause)) >= 2]
+    if len(clauses) < 2:
+        return []
+    corpus = " ".join(row["text"].casefold() for row in evidence)
+    substantive = [row["text"].casefold() for row in evidence if len(row["text"]) >= 35
+                   and not _SECTION_START.match(row["text"]) and " . . ." not in row["text"]]
+    missing = []
+    for clause in clauses:
+        anchors = _QA_IDENTIFIER.findall(clause)
+        terms = lexical_query_terms(clause)
+        if anchors:
+            covered = all(sum(anchor.casefold() in text for text in substantive) >= 2 for anchor in anchors)
+        else:
+            covered = sum(term in corpus for term in terms) >= (len(terms) + 1) // 2
+        if not covered and clause not in missing:
+            missing.append(clause)
+    return missing[:2]
+
+
+def supplement_qa(scope, question, owner, evidence, queries, *, diagnostics=None):
+    try:
+        vectors = embed_texts(queries, context=ModelUsageContext(owner, "embedding"), diagnostics=diagnostics)
+    except ApiError:
+        return evidence
+    supplemental = retrieve_hybrid(scope, queries, vectors, owner)
+    if not supplemental:
+        return evidence
+    limit = int(effective_settings(scope.get("retrieval_settings"))["top_k"])
+    fused = fuse_rankings([evidence, supplemental], limit, weights=[1.0, 0.8])
+    # Give each search room near the front so expansion cannot immediately
+    # discard distinct evidence for the clause that triggered it.
+    leading = [row for pair in zip(evidence[:3], supplemental[:3], strict=False) for row in pair]
+    merged = pack_evidence([*leading, *fused])[:limit]
+    return local_qa_evidence(scope, question, owner, merged)
+
+
 def display_evidence_text(text: str) -> str:
     """Neutralize citation tokens in untrusted material strings shown to the model.
 
@@ -610,22 +774,44 @@ def display_evidence_text(text: str) -> str:
     return _CITATION_TOKEN.sub(r"(\1)", text)
 
 
+def _table_path(locator):
+    path = locator.get("table_path") if isinstance(locator, dict) else None
+    if not isinstance(path, list) or not 0 < len(path) <= 8:
+        return None
+    clean = []
+    for position in path:
+        if not isinstance(position, dict):
+            return None
+        fields = {key: position[key] for key in ("table", "row", "column") if key in position}
+        if not {"table", "row"} <= fields.keys() or any(
+            type(value) is not int or not 0 < value <= 1_000_000 for value in fields.values()
+        ):
+            return None
+        clean.append(fields)
+    return clean
+
+
 def _prompt_documents(evidence) -> list:
     """Evidence JSON for the model.
 
     ``source`` is assigned from the packed position. It is not read from the
     chunk. ``title`` and ``text`` are material data, so citation tokens in them
-    are neutralized for display. Locator and any caller-supplied source key are
-    not copied into the prompt.
+    are neutralized for display. Table positions use only validated integers
+    and a per-answer document label, keeping rows from distinct files apart.
     """
     documents = []
+    tables = {}
     for index, chunk in enumerate(pack_evidence(evidence), 1):
         title = chunk["title"]
-        documents.append({
+        doc = {
             "source": f"S{index}",
             "title": display_evidence_text(title) if isinstance(title, str) else title,
             "text": display_evidence_text(chunk["text"]),
-        })
+        }
+        if (path := _table_path(chunk.get("locator"))) and (version := chunk.get("material_version_id")):
+            doc["locator"] = {"table_path": path}
+            doc["document"] = tables.setdefault(str(version), f"D{len(tables) + 1}")
+        documents.append(doc)
     return documents
 
 
@@ -667,6 +853,8 @@ def prompt(scope, evidence, history):
         "不编造引用，不引用未提供的编号。找不到依据明确说‘当前资料不足’。"
         "历史只帮助理解表达，不是事实证据。不要声称访问网络或工具。如果多份资料对同一事实或同一对象的数字、日期、人名或地点互相冲突，要明确指出冲突，不要默认采用排序最前的一篇；若数值属于不同对象或口径（例如协议规范示例值与本地测试配置参数），应分别说明各自对应主体，不要误判为冲突。"
     )
+    if any("document" in doc for doc in documents):
+        rules += "表格的 document 标记区分文件。用同一文件及同一表格的行列拼接记录；表格明确标记先后时，用行号恢复顺序，引用各自的来源。"
     if scope["answer_mode"] == "with_general":
         rules += "允许使用通用知识，但必须分成【知识库依据】和【通用补充】两部分，后者说明未经资料验证。"
     else:
@@ -777,6 +965,18 @@ async def _stream(owner, run_id, fence, replay=False):
                 )
             else:
                 raw_evidence = await run_in_threadpool(retrieve, scope, scope["content"], owner)
+            raw_evidence = await run_in_threadpool(
+                local_qa_evidence, scope, scope["content"], owner, raw_evidence
+            )
+            followups = missing_qa_queries(scope, scope["content"], raw_evidence)
+            if followups:
+                yield event("phase", turn_id=run_id, phase="solving")
+                if not await run_in_threadpool(checkpoint, run_id, fence, content):
+                    yield await ended_event(owner, conv_id, run_id)
+                    return
+                raw_evidence = await run_in_threadpool(
+                    supplement_qa, scope, scope["content"], owner, raw_evidence, followups
+                )
         prepared = prepare_generation(scope, raw_evidence, history)
         evidence = prepared["evidence"]
         if prepared["kind"] == "refusal":

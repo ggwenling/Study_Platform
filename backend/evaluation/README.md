@@ -12,3 +12,11 @@
 cd backend
 uv run --no-sync study-eval-rag --dataset evaluation/edge_cases/facts.jsonl
 ```
+
+`long_documents/prepare.py` 生成长文档验收集。它包含三个 150 页 PDF（原生文本、全扫描、混合），350 行 DOCX 表格、1,200 行文本、20 道带证据位置的题及一个 151 页的拒绝样本。
+
+```powershell
+uv run --no-sync python evaluation/long_documents/prepare.py ../.local/long-documents
+```
+
+在隔离客户端上传 `original` 内的资料，等待索引完成，再根据 `questions.jsonl` 核对所有事实、引文和页码或表格位置。用 `over-pages.pdf` 验证超过页数上限时客户端展示明确原因。

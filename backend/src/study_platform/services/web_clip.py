@@ -1,6 +1,7 @@
 """Fetch public static webpages without following unvalidated network targets."""
 
 import ipaddress
+import re
 import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +13,8 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import httpcore
 import httpx
 from httpcore._backends.sync import SyncBackend
+from lxml import etree
+from lxml import html as lxml_html
 
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
@@ -177,6 +180,48 @@ def _client_for_target(target: PublicTarget) -> httpx.Client:
     )
 
 
+def _restore_main_paragraphs(html: str, markdown: str) -> str:
+    """Recover paragraphs dropped by the extractor from an unambiguous main region."""
+    try:
+        document = lxml_html.fromstring(html)
+    except (etree.ParserError, ValueError):
+        return markdown
+    main = document.xpath("//main | //*[@role='main']")
+    if len(main) != 1:
+        return markdown
+    root = main[0]
+    for element in root.xpath(
+        ".//nav | .//header | .//footer | .//aside | .//script | .//style | .//template | "
+        ".//form | .//noscript | .//*[@hidden or @aria-hidden='true' or @role='navigation']"
+    ):
+        element.drop_tree()
+
+    def normalize(value):
+        return " ".join(re.findall(r"\w+", value.casefold()))
+
+    extracted = normalize(markdown)
+    additions = []
+    heading = None
+    for element in root.xpath(".//h1 | .//h2 | .//h3 | .//h4 | .//h5 | .//h6 | .//p"):
+        text = " ".join(element.text_content().split())
+        if element.tag.startswith("h"):
+            heading = f"{'#' * int(element.tag[1])} {text}" if text else None
+            continue
+        normalized = normalize(text)
+        if len(normalized) < 40 or normalized in extracted:
+            continue
+        if heading and (not additions or additions[-1][0] != heading):
+            additions.append((heading, []))
+        elif not additions:
+            additions.append(("", []))
+        additions[-1][1].append(text)
+        extracted += " " + normalized
+    if not additions:
+        return markdown
+    supplemental = "\n\n".join(block for title, paragraphs in additions for block in (title, *paragraphs) if block)
+    return (markdown + "\n\n" + supplemental).strip()
+
+
 def _extract(markup: bytes, content_type: str, encoding: str | None, final_url: str):
     if content_type in ("text/plain", "text/markdown"):
         try:
@@ -199,6 +244,7 @@ def _extract(markup: bytes, content_type: str, encoding: str | None, final_url: 
             include_tables=True,
             output_format="markdown",
         ) or ""
+        text = _restore_main_paragraphs(html, text)
     markdown = text.strip()
     if sum(char.isalnum() for char in markdown) < 40:
         raise ApiError(

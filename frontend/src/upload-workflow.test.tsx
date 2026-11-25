@@ -34,6 +34,7 @@ function SharedQueue({ children }: { children: ReactNode }) {
   const queue = useUploadQueue({
     userId: workspace.value.user?.id,
     maxUploadBytes: workspace.value.capabilities?.max_upload_bytes,
+    maxPdfUploadBytes: workspace.value.capabilities?.max_pdf_upload_bytes,
     refresh: workspace.value.refresh,
     notify: workspace.value.notify,
     report: workspace.value.report,
@@ -64,9 +65,12 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); node.remove(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 it('polls processing stages, announces readiness and stops at terminal state', async () => {
-  vi.mocked(api.materials).mockResolvedValueOnce({ items: [material('ocr')], next_cursor: null }).mockResolvedValue({ items: [material('ready')], next_cursor: null })
+  vi.mocked(api.materials).mockResolvedValueOnce({
+    items: [{ ...material('ocr'), processed_pages: 75, total_pages: 150 }], next_cursor: null,
+  }).mockResolvedValue({ items: [material('ready')], next_cursor: null })
   await render(<CurrentMaterials libraryId="A" name="库A" />)
   expect(node.textContent).toContain('识别文字中')
+  expect(node.textContent).toContain('已处理 75 / 150 页')
   expect(node.textContent).toContain('暂无可问答资料，请等待处理完成')
   await act(async () => { await vi.advanceTimersByTimeAsync(2200) })
   expect(node.textContent).toContain('资料已就绪，可以继续提问')

@@ -65,7 +65,10 @@ export function WorkspaceData({ user, notify, requireLogin, onExpired, children 
 
   const chat = useChat(refresh, report)
   const aiJobs = useAiJobs({ userId: user?.id, notify, report, refresh })
-  const libraryUploadQueue = useUploadQueue({ userId: user?.id, maxUploadBytes: capabilities?.max_upload_bytes, refresh, notify, report })
+  const libraryUploadQueue = useUploadQueue({
+    userId: user?.id, maxUploadBytes: capabilities?.max_upload_bytes,
+    maxPdfUploadBytes: capabilities?.max_pdf_upload_bytes, refresh, notify, report,
+  })
   useEffect(() => {
     if (!user) return
     let active = true

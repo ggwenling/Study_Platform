@@ -195,6 +195,8 @@ async def evaluate_case(
     has_anchored_support = any("alternatives" in item for item in case["support"])
     if strategy == "compare":
         strategy_names = ["baseline", "rewrite"]
+    elif strategy == "product_compare":
+        strategy_names = ["baseline", "candidate"]
     elif strategy == "three_way":
         strategy_names = ["baseline", "hybrid", "rewrite"]
     elif strategy == "hybrid_compare":
@@ -203,7 +205,17 @@ async def evaluate_case(
         strategy_names = [strategy]
     for name in strategy_names:
         started = time.monotonic()
-        if name == "hybrid":
+        supplemental_embedding = {}
+        if name == "candidate":
+            question = case["question"]
+            seeds = chat.retrieve_hybrid(scope, [question], vectors[:1], owner)
+            evidence = chat.local_qa_evidence(scope, question, owner, seeds)
+            followups = chat.missing_qa_queries(scope, question, evidence)
+            if followups:
+                evidence = chat.supplement_qa(
+                    scope, question, owner, evidence, followups, diagnostics=supplemental_embedding,
+                )
+        elif name == "hybrid":
             hybrid_scope = scope
             if strategy == "three_way":
                 hybrid_scope = {**scope, "retrieval_settings": {
@@ -301,6 +313,7 @@ async def evaluate_case(
                 "answer_metrics": {"calls": calls, "elapsed_ms": answer_ms, "usage": usage},
                 "rewrite_metrics": asdict(rewritten) if rewritten and name == "rewrite" else None,
                 "shared_embedding_metrics": embedding,
+                **({"supplemental_embedding_metrics": supplemental_embedding} if name == "candidate" else {}),
             }
         )
     return results

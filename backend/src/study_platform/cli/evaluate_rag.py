@@ -780,7 +780,7 @@ def main():
     parser.add_argument("--preflight", action="store_true", help="verify the full corpus offline without model calls")
     parser.add_argument(
         "--strategy",
-        choices=("baseline", "rewrite", "compare", "hybrid", "hybrid_compare", "three_way"),
+        choices=("baseline", "rewrite", "compare", "hybrid", "hybrid_compare", "three_way", "product_compare"),
         default="compare",
     )
     parser.add_argument("--output", type=Path)

@@ -423,7 +423,13 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       <header className="library-header">
         <Layers size={32} />
         <div><h1>{library.name}</h1>
-          {library.embedding_binding && <p>向量模型 · {library.embedding_binding.model} · {library.embedding_connection_id ? '个人连接' : '平台连接'} · 1024 维</p>}{library.description && <p>{library.description}</p>}</div>
+          {library.embedding_binding && <p>向量模型 · {library.embedding_binding.model} · {library.embedding_connection_id ? '个人连接' : '平台连接'} · 1024 维</p>}
+          {library.description && <p>{library.description}</p>}
+          {capabilities?.max_pdf_pages && capabilities.max_pdf_upload_bytes && <p className="muted">
+            PDF 最多 {capabilities.max_pdf_pages} 页、{capabilities.max_pdf_upload_bytes / 1024 ** 2} MiB
+            {' · '}其他资料最多 {capabilities.max_upload_bytes / 1024 ** 2} MiB
+          </p>}
+        </div>
         <div className="library-header-actions">
           <Button size="sm" variant="secondary" onClick={() => setPanel('edit')}><Pencil size={16} />编辑</Button>
           <Button size="sm" variant="secondary" loading={busy === 'sync'} disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步</Button>
@@ -595,7 +601,10 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
               const inProgress = !['ready', 'failed', 'cancelled'].includes(item.status)
               const sourceUrl = safeExternalUrl(item.source_url)
               return <li key={item.id}>
-                <div><strong>{item.title}</strong><p className="muted">{phases[item.status] ?? item.status}</p>
+                <div><strong>{item.title}</strong><p className="muted">{phases[item.status] ?? item.status}
+                  {inProgress && item.total_pages != null && item.processed_pages != null &&
+                    ` · 已处理 ${item.processed_pages} / ${item.total_pages} 页`}
+                </p>
                   {sourceUrl && <a href={sourceUrl} target="_blank" rel="noopener noreferrer">打开原网页</a>}
                   {item.error_message && <p className="error-text">{item.error_message}</p>}</div>
                 <div className="library-dialog-actions">

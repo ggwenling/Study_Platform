@@ -641,6 +641,8 @@ class CapabilitiesDTO(BaseModel):
     answer_modes: list[str]
     upload_mime_types: list[str]
     max_upload_bytes: int
+    max_pdf_upload_bytes: int
+    max_pdf_pages: int
 
 
 @router.get("/capabilities", response_model=CapabilitiesDTO)
@@ -685,6 +687,8 @@ def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
         "answer_modes": ["knowledge_only", "with_general"],
         "upload_mime_types": sorted(set(MIMES.values())),
         "max_upload_bytes": settings.max_upload_bytes,
+        "max_pdf_upload_bytes": settings.max_pdf_upload_bytes,
+        "max_pdf_pages": settings.max_pdf_pages,
     }
 
 

@@ -351,6 +351,7 @@ def extract(
     path=None,
     settings=None,
     force_pdf_ocr=False,
+    page_progress=None,
 ):
     """Yield text with original page/paragraph/line locators."""
     settings = settings if settings is not None else get_settings()
@@ -382,11 +383,16 @@ def extract(
         try:
             with PDFIUM_LOCK:
                 page_count = len(doc)
-            if page_count > settings.max_pdf_pages or page_count == 0:
+            if page_count > settings.max_pdf_pages:
+                raise ApiError(422, "pdf_page_limit", f"PDF 超过 {settings.max_pdf_pages} 页。")
+            if page_count == 0:
                 raise ValueError("Invalid PDF page count")
             version.page_count = page_count
             for number in range(1, page_count + 1):
-                phase("parsing")
+                if page_progress is None:
+                    phase("parsing")
+                else:
+                    page_progress(number - 1, page_count)
                 with PDFIUM_LOCK:
                     page = doc[number - 1]
                     try:
@@ -532,6 +538,8 @@ def update_phase(db, job_id, fence, phase, **details):
     job = locked_job(db, job_id, fence)
     job.result = {**job.result, "phase": phase, **details}
     job.progress = {"parsing": 10, "ocr": 30, "vision": 30, "indexing": 60}[phase]
+    if phase in ("parsing", "ocr") and job.result.get("total_pages"):
+        job.progress = 10 + 45 * job.result["processed_pages"] // job.result["total_pages"]
     job.lease_expires_at = now() + timedelta(seconds=get_settings().job_lease_seconds)
     owner_id = job.owner_user_id
     db.commit()
@@ -609,11 +617,19 @@ def run_once(claimed=None):
                         source_path(version.id), version.source_mime, phase_changed, owner=owner, saved=vision,
                     )
                 else:
-                    extracted = list(extract(version, staging, phase_changed, pipeline))
+                    options = {}
+                    if version.source_mime == "application/pdf":
+                        options["page_progress"] = lambda processed, total: update_phase(
+                            db, job_id, fence, "parsing", processed_pages=processed, total_pages=total,
+                        )
+                    extracted = list(extract(version, staging, phase_changed, pipeline, **options))
                     page_count = version.page_count
                 if not extracted:
                     raise ApiError(422, "no_text_extracted", "未提取到可用文字")
-                update_phase(db, job_id, fence, "indexing", parsed=True,
+                pdf_progress = {"processed_pages": page_count, "total_pages": page_count} if (
+                    page_count and version.source_mime == "application/pdf"
+                ) else {}
+                update_phase(db, job_id, fence, "indexing", parsed=True, **pdf_progress,
                              ocr_count=sum(bool(locator.get("ocr")) for _, locator in extracted))
                 profile = model_connections.embedding_profile(owner)
                 locked_job(db, job_id, fence)
