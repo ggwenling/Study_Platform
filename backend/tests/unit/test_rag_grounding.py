@@ -214,14 +214,23 @@ def test_supplement_reserves_a_hit_per_query_and_uses_one_embedding_batch(monkey
 
 
 @pytest.mark.parametrize("conjunction", ["和", "与"])
-def test_entity_comparison_preserves_shared_predicate(monkeypatch, conjunction):
+@pytest.mark.parametrize("marker", ["的", ""])
+def test_entity_comparison_preserves_shared_predicate(monkeypatch, conjunction, marker):
     monkeypatch.setattr(chat, "get_settings", lambda: SimpleNamespace(rag_query_rewrite_enabled=False))
     monkeypatch.setattr(chat, "effective_settings", lambda _: {"rerank_enabled": False})
     scope = {"index_version_ids": ["i"]}
-    question = f"苏州{conjunction}上海的公共交通有什么区别？"
-    queries = ["苏州的公共交通有什么区别", "上海的公共交通有什么区别"]
+    question = f"苏州{conjunction}上海{marker}公共交通有什么区别？"
+    queries = [f"{entity}{marker}公共交通有什么区别" for entity in ("苏州", "上海")]
     assert chat.missing_qa_queries(scope, question, []) == queries
+    assert chat.missing_qa_queries(scope, question, [
+        {"text": "苏州和上海都是中国城市，两地有很多区别。"},
+        {"text": "公共交通包括地铁和公交。"},
+    ]) == queries
     assert chat.missing_qa_queries(scope, question, [{"text": "上海的公共交通以轨道交通为主。"}]) == queries[:1]
+    assert not chat.missing_qa_queries(scope, question, [
+        {"text": "苏州的公共交通包含公交和轨道交通。"},
+        {"text": "上海的公共交通以轨道交通为主。"},
+    ])
 
 
 @pytest.mark.parametrize("top_k", [2, 3])
