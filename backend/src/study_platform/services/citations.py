@@ -72,11 +72,15 @@ def citation_dto(db, citation) -> dict:
             "原文",
         )
     if locator.get("table_path"):
-        label = " / ".join(
-            f"表格 {part['table']}，第 {part['row']} 行，第 {part['column']} 列"
-            for part in locator["table_path"]
-        )
-        label += f"，段落 {locator['cell_paragraph']}"
+        parts = []
+        for part in locator["table_path"]:
+            segment = f"表格 {part['table']}，第 {part['row']} 行"
+            if "column" in part:
+                segment += f"，第 {part['column']} 列"
+            parts.append(segment)
+        label = " / ".join(parts)
+        if "cell_paragraph" in locator:
+            label += f"，段落 {locator['cell_paragraph']}"
     if locator.get("extraction") == "vlm":
         label += " · 视觉解析（VLM）"
     base = f"/api/v1/material-versions/{version.id}"
@@ -137,6 +141,9 @@ def message_dto(db, message) -> dict:
         "status": "stopped" if message.status == "cancelled" else message.status,
         "sequence_no": message.sequence_no,
         "turn_id": message.workflow_run_id,
+        "model_profile": message.model_profile if message.role == "assistant" else None,
+        "error_code": run.failure_code if run and message.status == "failed" else None,
+        "failure_stage": snapshot.get("failure_stage") if message.status == "failed" else None,
         "created_at": message.created_at,
         "scope": scope,
         "citations": [citation_dto(db, c) for c in citations],

@@ -1,13 +1,24 @@
 # 维度 C：RAG 检索引擎与底层架构升级需求规格与推进计划
 
-> 状态：需求已确认，待按批次实现｜2026-11-20  
-> 基线：`codex` 分支（紧接维度 B 迁移 `0013` / `0014`）  
+> 状态：需求规格于 2026-11-20 确认。C1–C4 已实现（截至 2026-11-21）。
+> 实现提交：`c43af5b`、`3c82ca5`、`0105d1c`、`97383a6`。`251ee00` 补强历史切分兼容与 PDF 预览错误回退。
 > 适用范围：知循 · KnowLoop（Synapse）RAG 解析切分质量、全站检索相关性、重排与向量演化、以及长耗时任务异步调度（C1–C4）  
 > 参考红线：[产品定位与路线图](product-positioning-and-roadmap.md) · [维度 A 规划](dimension-a-ux-polish-plan.md) · [维度 B 规划](dimension-b-core-expansion-plan.md) · [检索评测说明](../retrieval-evaluation.md) · [模型连接说明](../model-connections.md) · [AGENTS.md](../../AGENTS.md)
 
 ---
 
-## 1. 背景与目标
+## 当前实现状态
+
+| 项目 | 实现状态 | 主要入口 | 已有自动化验证范围 |
+| --- | --- | --- | --- |
+| **C1 PDF OCR 与语义切分** | 已实现。新入库使用 `semantic-v3`。重建索引选择重新切分时使用 `semantic-v3`，仅重向量化时保留原切分档案。稀疏 PDF 页有本地 OCR 兜底。 | `services/ingestion.py`、`services/chunking.py`、`services/reindex.py`、`evaluation/retrieval_mini.jsonl` | `test_pdf_ocr_fallback.py`、`test_chunking.py`、`test_chunking_comparison.py`、`test_rag_evaluation.py` 覆盖 OCR 采纳规则、结构边界与小型检索集。 |
+| **C2 全站相关性搜索** | 已实现。按分词相关性与标题权重排序，支持安全高亮和稳定翻页。 | `services/workspace_search.py`、`api/v1/resources.py`、`SearchPanel.tsx` | `test_workspace_search.py`、`test_resource_api.py`、`search-panel.test.tsx`、`test_migration_roundtrip.py` 覆盖排序、分页、高亮契约及迁移。 |
+| **C3 Rerank 与索引重建** | 已实现。Rerank 可按知识库单独启用和配置。向量绑定变更通过新索引世代构建后切换。 | `services/rerank.py`、`services/retrieval_settings.py`、`services/reindex.py`、`LibraryHitTest.tsx` | `test_rerank.py`、`test_model_connections.py`、`test_rag_workshop.py`、`test_ingestion_db.py`、`library-reindex.test.tsx` 覆盖降级、配置和重建状态。 |
+| **C4 生成异步化与 Worker 双池** | 已实现。工坊笔记、闪卡和测验生成返回 `202` 入队。`study-worker` 将 `ingest/reindex` 与生成任务分派到独立有界池。单题判题仍同步。 | `api/v1/ai_jobs.py`、`services/ai_jobs.py`、`services/worker_runner.py`、`useAiJobs.ts` | `test_ai_jobs_api.py`、`test_worker_runner.py`、`ai-jobs.test.tsx` 覆盖任务入队、查询、取消、刷新恢复和池间隔离。 |
+
+B/C 状态表列出仓库已有的自动化测试范围。第三方模型连通性和个人资料上的效果需单独实测。
+
+## 1. 规划时的背景与目标
 
 经过维度 A（高频体验打磨）与维度 B（URL/PPTX 资料入口、原文对照阅读器、导出与备份、显式可选 VLM）之后，个人知识工作台的功能面已经完整，下一阶段的核心瓶颈集中在**检索精准度、解析切分质量与高负载任务稳定性**：
 

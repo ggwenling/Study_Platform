@@ -23,6 +23,24 @@ export function errorMessage(error: unknown) {
   return '请求失败，请检查连接后重试。'
 }
 
+const chatModelFailure: Record<string, string> = {
+  model_auth_failed: '模型服务拒绝了认证。请检查 Key 和模型访问权限。',
+  model_quota_unavailable: '模型服务额度不足或请求受限。',
+  model_timeout: '模型服务连接超时。',
+  model_service_error: '模型服务暂时不可用。',
+  model_response_invalid: '模型服务返回了无法使用的内容。',
+  model_response_empty: '模型未返回内容。',
+  model_decryption_failed: '凭据无法解密，请检查模型连接设置。',
+  model_test_required: '连接需要重新测试。',
+  model_not_configured: '请配置一个可用的模型。',
+  chat_model_unavailable: '所选个人模型已不可用。',
+  not_found: '原连接或其他资源已不可用。',
+}
+
+export function chatModelError(code?: string | null) {
+  return code ? chatModelFailure[code] : undefined
+}
+
 export function locatorLabel(locator: Record<string, unknown>) {
   const label = locationLabel(locator)
   return locator.extraction === 'vlm' ? `${label} · 视觉解析（VLM）` : label
@@ -37,7 +55,8 @@ function locationLabel(locator: Record<string, unknown>) {
   if (typeof locator.image === 'number') return `图片 ${locator.image}`
   if (typeof locator.paragraph === 'number') return `段落 ${locator.paragraph}`
   if (Array.isArray(locator.table_path) && locator.table_path.length) {
-    const cells = locator.table_path.map(({ table, row, column }) => `表 ${table} · ${row} 行 ${column} 列`)
+    const cells = locator.table_path.map(({ table, row, column }) =>
+      `表 ${table} · ${row} 行${typeof column === 'number' ? ` ${column} 列` : ''}`)
     return cells.join(' / ')
   }
   if (typeof locator.start_line === 'number') return `第 ${locator.start_line} 行`

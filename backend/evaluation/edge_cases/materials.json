@@ -1,0 +1,103 @@
+[
+  {
+    "id": "asset-index",
+    "knowledge_base": "A",
+    "title": "设备登记目录",
+    "format": "txt",
+    "sections": [
+      "登记号为CX-8042的澄星温控器存放在北侧C-17柜。"
+    ]
+  },
+  {
+    "id": "near-id-match",
+    "knowledge_base": "A",
+    "title": "相近编号的替换样机卡",
+    "format": "txt",
+    "sections": [
+      "替换样机CX-8402存放于南侧C-18柜；展柜编号为17。"
+    ]
+  },
+  {
+    "id": "terms-and-counts",
+    "knowledge_base": "A",
+    "title": "记录术语规程",
+    "format": "docx",
+    "sections": [
+      "系统将尚未完成复核、仅供暂时留存的记录状态定义为“待核暂存”。",
+      "“待核保留”仅指复核已经完成、等待签发的记录。",
+      "档案柜有6层，每层可放12盒；登记表每月更新2次。"
+    ]
+  },
+  {
+    "id": "batch-policy",
+    "knowledge_base": "A",
+    "title": "批次入库规范",
+    "format": "txt",
+    "sections": [
+      "青岚批次入库前，质检主管须在检验结论上签字确认。"
+    ]
+  },
+  {
+    "id": "batch-index",
+    "knowledge_base": "A",
+    "title": "批次流转登记要求",
+    "format": "docx",
+    "sections": [
+      "青岚批次入库时，签字检验结论须随流转单提交，并登记批次号QL-62。"
+    ]
+  },
+  {
+    "id": "facility-notes",
+    "knowledge_base": "A",
+    "title": "沧屿设施检查记录",
+    "format": "txt",
+    "sections": [
+      "沧屿储物箱每月5日检查，箱内有2把备用钥匙，钥匙登记编号为SC-8。"
+    ]
+  },
+  {
+    "id": "calibration-schedule",
+    "knowledge_base": "A",
+    "title": "检测仪器排班表",
+    "format": "txt",
+    "sections": [
+      "检测室第2班负责折光仪检校，第4台设备每天核对3次。第2班负责的折光仪校准周期为36天；校准工作通常在每月7日排班。上一周期为30天，记录单号R-36。"
+    ]
+  },
+  {
+    "id": "processing-matrix",
+    "knowledge_base": "A",
+    "title": "批次处理参数",
+    "format": "docx",
+    "sections": [
+      "批次处理参数矩阵\n| 档位 | 冲洗次数 | 静置时长（秒） |\n| --- | ---: | ---: |\n| 快速 | 2 | 11 |\n| 平衡 | 4 | 27 |\n| 精细 | 3 | 42 |"
+    ]
+  },
+  {
+    "id": "batch-formula",
+    "knowledge_base": "A",
+    "title": "合格品批次计算",
+    "format": "docx",
+    "sections": [
+      "$$\n\\text{最终份数}=(\\text{每箱 } 6+\\text{备用 } 2)\\times 4=32\n$$"
+    ]
+  },
+  {
+    "id": "scan-inspection",
+    "knowledge_base": "A",
+    "title": "泵站扫描巡检牌",
+    "format": "pdf",
+    "sections": [
+      "青岚泵站巡检牌（第 2 页）\n备用阀门铭牌为VN-528。周检日期：每周四。\n普通告示：3台泵组，记录编号528，校验频率每45天。"
+    ]
+  },
+  {
+    "id": "near-answer-other-library",
+    "knowledge_base": "B",
+    "title": "另一资料库的钥匙安排",
+    "format": "txt",
+    "sections": [
+      "沧屿储物箱的备用钥匙由当班库管保管。钥匙交接记录单号KC-14，版本3。"
+    ]
+  }
+]

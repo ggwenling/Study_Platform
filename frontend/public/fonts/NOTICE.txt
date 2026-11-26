@@ -1,7 +1,7 @@
 KnowLoop uses MiSans by Xiaomi for Chinese text, Geist for Latin text and Geist Mono for code.
 
-MiSans: official Xiaomi font service, weights 400/500/600, original WOFF2 unicode slices. No glyph modifications.
-https://font.sec.miui.com/font/css?family=MiSans:400,500,600:Chinese_Simplify,Latin&display=swap
+MiSans: official Xiaomi font service, original WOFF2 unicode slices for weights 400 and 600. The site shares the regular face for CSS weights 400 and 500.
+https://font.sec.miui.com/font/css?family=MiSans:400,600:Chinese_Simplify,Latin&display=swap
 License: licenses/MiSans-License.pdf (Xiaomi MiSans Font Intellectual Property License Agreement).
 
 Geist / Geist Mono: Vercel, distributed via @fontsource-variable packages. SIL Open Font License 1.1; full notices in licenses/Geist-OFL.txt and licenses/Geist-Mono-OFL.txt.

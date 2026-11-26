@@ -34,6 +34,7 @@ function SharedQueue({ children }: { children: ReactNode }) {
   const queue = useUploadQueue({
     userId: workspace.value.user?.id,
     maxUploadBytes: workspace.value.capabilities?.max_upload_bytes,
+    maxPdfUploadBytes: workspace.value.capabilities?.max_pdf_upload_bytes,
     refresh: workspace.value.refresh,
     notify: workspace.value.notify,
     report: workspace.value.report,
@@ -58,15 +59,18 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   node = document.body.appendChild(document.createElement('div'))
   root = createRoot(node)
-  workspace.value = { user: { id: 'one' }, libraries: [library('A'), library('B')], revision: 0, capabilities: { rag: true, max_upload_bytes: 1000 }, refresh: vi.fn(), report: vi.fn(), notify: vi.fn(), requireLogin: vi.fn(), chat: { isBusy: () => false, activeFor: () => null, pendingFor: () => null, send: vi.fn() } }
+  workspace.value = { user: { id: 'one' }, libraries: [library('A'), library('B')], revisions: { materials: 0 }, capabilities: { rag: true, max_upload_bytes: 1000 }, refresh: vi.fn(), report: vi.fn(), notify: vi.fn(), requireLogin: vi.fn(), chat: { isBusy: () => false, activeFor: () => null, pendingFor: () => null, send: vi.fn() } }
   vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
 })
 afterEach(async () => { await act(async () => root.unmount()); node.remove(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 it('polls processing stages, announces readiness and stops at terminal state', async () => {
-  vi.mocked(api.materials).mockResolvedValueOnce({ items: [material('ocr')], next_cursor: null }).mockResolvedValue({ items: [material('ready')], next_cursor: null })
+  vi.mocked(api.materials).mockResolvedValueOnce({
+    items: [{ ...material('ocr'), processed_pages: 75, total_pages: 150 }], next_cursor: null,
+  }).mockResolvedValue({ items: [material('ready')], next_cursor: null })
   await render(<CurrentMaterials libraryId="A" name="库A" />)
   expect(node.textContent).toContain('识别文字中')
+  expect(node.textContent).toContain('已处理 75 / 150 页')
   expect(node.textContent).toContain('暂无可问答资料，请等待处理完成')
   await act(async () => { await vi.advanceTimersByTimeAsync(2200) })
   expect(node.textContent).toContain('资料已就绪，可以继续提问')
@@ -136,11 +140,7 @@ it('binds in-flight upload to A after switching to B and preserves the draft', a
   const input = node.querySelector<HTMLInputElement>('input[type=file]')!
   Object.defineProperty(input, 'files', { value: [file] })
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
-  await act(async () => {
-    const select = node.querySelector('select')!
-    select.value = 'B'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+  await render(<Composer preferredLibrary="B" />)
   await act(async () => upload.resolve({ material_id: 'm', version_id: 'v', job_id: 'j', status: 'queued' }))
   expect(uploadMaterial).toHaveBeenCalledWith('A', file, undefined, expect.any(AbortSignal))
   expect(node.textContent).toContain('已提交至「库A」')
@@ -178,7 +178,7 @@ it('creates and selects the first library without leaving chat', async () => {
   expect(api.createKnowledgeBase).toHaveBeenCalledWith({ name: '库C' })
   workspace.value.libraries = [library('A'), library('C')]
   await render(<Composer />)
-  expect(node.querySelector('select')?.value).toBe('C')
+  expect(node.querySelector('[aria-label="当前知识库资料：库C"]')).toBeTruthy()
 })
 
 it('accepts PPTX files and processes the shared queue sequentially with single-item retry', async () => {
@@ -206,30 +206,36 @@ it('accepts PPTX files and processes the shared queue sequentially with single-i
   expect(uploadMaterial).toHaveBeenCalledTimes(3)
 })
 
-it('uses the Composer vision choice once and resets it after the selected upload', async () => {
+it('offers vision only in the import dialog and requires a fresh choice for each batch', async () => {
   workspace.value.capabilities = { ...workspace.value.capabilities, vision: true }
   vi.mocked(uploadMaterial).mockResolvedValue({ material_id: 'm', version_id: 'v', job_id: 'j', status: 'queued' })
   await render(<Composer />)
 
-  const visionSwitch = node.querySelector<HTMLButtonElement>('button[role="switch"]')!
-  expect(visionSwitch.getAttribute('aria-checked')).toBe('false')
-  await act(async () => visionSwitch.click())
-  expect(visionSwitch.getAttribute('aria-checked')).toBe('true')
+  expect(node.querySelector('form.composer [role="switch"]')).toBeNull()
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
 
   const input = node.querySelector<HTMLInputElement>('input[type=file][accept^=".pdf"]')!
   const pdf = new File(['PDF'], '讲义.pdf', { type: 'application/pdf' })
   Object.defineProperty(input, 'files', { value: [pdf], configurable: true })
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('讲义.pdf')
+  expect(uploadMaterial).not.toHaveBeenCalled()
+  await click('使用视觉解析并导入')
   await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
 
-  expect(visionSwitch.getAttribute('aria-checked')).toBe('false')
   expect(uploadMaterial).toHaveBeenNthCalledWith(1, 'A', pdf, undefined, expect.any(AbortSignal), 'vlm')
 
   const nextPdf = new File(['PDF 2'], '下一份.pdf', { type: 'application/pdf' })
   Object.defineProperty(input, 'files', { value: [nextPdf], configurable: true })
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+  expect(uploadMaterial).toHaveBeenCalledTimes(1)
+  await click('常规识别并导入')
   await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
   expect(uploadMaterial).toHaveBeenNthCalledWith(2, 'A', nextPdf, undefined, expect.any(AbortSignal))
+
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+  await click('取消')
+  expect(uploadMaterial).toHaveBeenCalledTimes(2)
 })
 
 it('accepts drag-and-drop files and Ctrl+V pasted screenshots in Composer', async () => {
@@ -269,6 +275,14 @@ it('packages pasted Markdown note with auto-derived filename and formats Markdow
   expect(locatorLabel({ heading: '矩阵特征值总结', start_line: 1 })).toBe('矩阵特征值总结 · 第 1 行')
   expect(locatorLabel({ slide: 3 })).toBe('第 3 页幻灯片')
   expect(locatorLabel({ slide: 3, notes: true })).toBe('第 3 页幻灯片 · 备注')
+})
+
+it('formats table row, cell and nested locators', () => {
+  const row = { table: 1, row: 2 }
+  const cell = { table: 2, row: 3, column: 4 }
+  expect(locatorLabel({ table_path: [row] })).toBe('表 1 · 2 行')
+  expect(locatorLabel({ table_path: [cell] })).toBe('表 2 · 3 行 4 列')
+  expect(locatorLabel({ table_path: [cell, row] })).toBe('表 2 · 3 行 4 列 / 表 1 · 2 行')
 })
 
 it('only exposes absolute HTTP(S) source links and accepts PPTX queue extensions', () => {

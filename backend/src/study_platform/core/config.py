@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     max_pptx_ocr_images: int = 10
     max_web_clip_bytes: int = 5 * 1024 * 1024
     web_clip_timeout_seconds: float = 15
-    max_pdf_page_preview: int = 50
+    max_pdf_page_preview: int = 150
     login_detailed_errors: bool = False
     auth_jwt_secret: SecretStr = SecretStr("")
     auth_public_url: str = "http://127.0.0.1:5173"
@@ -58,7 +58,8 @@ class Settings(BaseSettings):
     embedding_model: str = "qwen3.7-text-embedding-flash"
     embedding_dimensions: Literal[1024] = 1024
     max_upload_bytes: int = 20 * 1024 * 1024
-    max_pdf_pages: int = 50
+    max_pdf_upload_bytes: int = 50 * 1024 * 1024
+    max_pdf_pages: int = 150
     pdf_ocr_min_effective_chars: int = 40
     pdf_ocr_image_page_max_chars: int = 120
     max_vlm_pages_per_material: int = Field(default=20, ge=1)
@@ -79,6 +80,7 @@ class Settings(BaseSettings):
     # 0.4 is the best-tested value when enabling it.
     retrieval_lexical_weight: float = 0.0
     retrieval_lexical_scoring: str = "idf"
+    ingest_pipeline_profile: Literal["semantic-v3", "semantic-v4"] = "semantic-v3"
     rerank_timeout_seconds: float = 15.0
     rag_query_rewrite_enabled: bool = False
     learning_confidence_threshold: float = 0.85
@@ -86,6 +88,9 @@ class Settings(BaseSettings):
     learning_llm_timeout_seconds: float = 45
     learning_llm_max_output_tokens: int = 2048
     learning_llm_max_retries: int = 2
+
+    def upload_limit_for_mime(self, mime: str) -> int:
+        return self.max_pdf_upload_bytes if mime == "application/pdf" else self.max_upload_bytes
 
 
 @lru_cache

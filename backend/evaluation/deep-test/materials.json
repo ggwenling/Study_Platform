@@ -1,0 +1,153 @@
+[
+  {
+    "id": "ops-core",
+    "knowledge_base": "A",
+    "title": "运维核心纪要",
+    "format": "docx",
+    "sections": [
+      "凌云数据中心机柜编号为LY-9041。",
+      "玄武备份窗口固定在每周三02:15 UTC。",
+      "玉衡监控告警静音最短间隔为11分钟。",
+      "紫宸VPN会话空闲超时为25分钟。"
+    ]
+  },
+  {
+    "id": "ops-schedule",
+    "knowledge_base": "A",
+    "title": "排班表",
+    "format": "txt",
+    "sections": [
+      "夜班负责人：韩方舟；联系电话尾号5821。",
+      "周末巡检队组代号为WJ-3。"
+    ]
+  },
+  {
+    "id": "deep-tables",
+    "knowledge_base": "A",
+    "title": "指标对照表",
+    "format": "docx",
+    "sections": [
+      "| 模块 | 键名 | 上限 | 备注 |",
+      "| --- | --- | --- | --- |",
+      "| 缓存层 | CACHE_TTL | 120秒 | 超时后需刷新 |",
+      "| 导出器 | EXPORT_ROW_LIMIT | 5000行 | 超出需分批 |",
+      "| OCR队列 | OCR_PAGE_CAP | 48页 | 单任务上限 |",
+      "| 检索池 | RETRIEVAL_POOL_K | 80条 | 候选池大小 |",
+      "| 学习卡 | FLASHCARD_BATCH | 25张 | 单次生成上限 |"
+    ]
+  },
+  {
+    "id": "multilingual-mix",
+    "knowledge_base": "A",
+    "title": "Multilingual Brief / 多语言摘要",
+    "format": "txt",
+    "sections": [
+      "Project codename: AURORA-7. 项目负责人为顾清岚。",
+      "Maximum concurrent ingest workers: 6 (six). 同时运行的采集 worker 不得超过6个。",
+      "Failover region code: CN-EAST-2. 故障切换区域代码为 CN-EAST-2。"
+    ]
+  },
+  {
+    "id": "cross-doc-a",
+    "knowledge_base": "A",
+    "title": "采购单A",
+    "format": "docx",
+    "sections": [
+      "订单号 PO-8821 的供应商为「北川精工」。"
+    ]
+  },
+  {
+    "id": "cross-doc-b",
+    "knowledge_base": "A",
+    "title": "物流回执B",
+    "format": "txt",
+    "sections": [
+      "PO-8821 的到货签收人为「沈若谷」。"
+    ]
+  },
+  {
+    "id": "policy-v2024",
+    "knowledge_base": "A",
+    "title": "差旅政策2024版",
+    "format": "docx",
+    "sections": [
+      "版本：2024-12。国内经济舱报销上限为2800元。"
+    ]
+  },
+  {
+    "id": "policy-v2025",
+    "knowledge_base": "A",
+    "title": "差旅政策2025版",
+    "format": "docx",
+    "sections": [
+      "版本：2025-03。国内经济舱报销上限为3100元。"
+    ]
+  },
+  {
+    "id": "misleading-trivia",
+    "knowledge_base": "A",
+    "title": "闲聊摘录",
+    "format": "txt",
+    "sections": [
+      "有人开玩笑说月球仓库温度是零下200度——此为调侃，非正式政策。"
+    ]
+  },
+  {
+    "id": "ocr-yard",
+    "knowledge_base": "A",
+    "title": "堆场公告",
+    "format": "png",
+    "sections": [
+      "南巷堆场最大堆高为4.2米。"
+    ]
+  },
+  {
+    "id": "scan-bulletin",
+    "knowledge_base": "A",
+    "title": "扫描公告",
+    "format": "pdf",
+    "sections": [
+      "霜华实验楼的准入证编号为SH-7712。"
+    ]
+  },
+  {
+    "id": "web-clip",
+    "knowledge_base": "A",
+    "title": "网页剪藏",
+    "format": "txt",
+    "sections": [
+      "Source: https://example.invalid/clip/deep-test-001",
+      "摘抄：公开资料写明北斗试吃活动的报名截止日为2026-08-01。"
+    ]
+  },
+  {
+    "id": "noise-empty",
+    "knowledge_base": "A",
+    "title": "空白占位",
+    "format": "txt",
+    "sections": [
+      "   ",
+      "\t"
+    ]
+  },
+  {
+    "id": "interference",
+    "knowledge_base": "B",
+    "title": "干扰库摘要",
+    "format": "docx",
+    "sections": [
+      "凌云数据中心机柜编号为LY-0000。",
+      "玄武备份窗口固定在每周一00:00 UTC。",
+      "国内经济舱报销上限为9999元。"
+    ]
+  },
+  {
+    "id": "canary-private",
+    "knowledge_base": "B",
+    "title": "仅B库可见",
+    "format": "txt",
+    "sections": [
+      "内部代号 NIGHTJAR-3 仅用于用户B验收，不得出现在用户A的答案中。"
+    ]
+  }
+]

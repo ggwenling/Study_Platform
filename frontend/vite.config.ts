@@ -9,16 +9,11 @@ export default defineConfig({
       output: {
         codeSplitting: {
           minSize: 16_000,
+          // Automatic splitting keeps shared Markdown dependencies out of the optional plugin chunks.
           groups: [
             { name: 'vendor-motion', test: /node_modules[\\/]motion/ },
             { name: 'vendor-three', test: /node_modules[\\/](three|thinking-orbs)/ },
             { name: 'vendor-metal', test: /node_modules[\\/]metal-fx/ },
-            { name: 'vendor-highlight', test: /node_modules[\\/](highlight\.js|rehype-highlight)/ },
-            { name: 'vendor-katex', test: /node_modules[\\/](katex|rehype-katex)/ },
-            {
-              name: 'vendor-markdown',
-              test: /node_modules[\\/](react-markdown|remark-|rehype-|unified|micromark|mdast|vfile|bail|trough)/,
-            },
           ],
         },
       },

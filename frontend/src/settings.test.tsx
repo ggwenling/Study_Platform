@@ -6,7 +6,7 @@ import { api } from './api/client'
 import type { ModelUsageSummary, User } from './api/types'
 import { Settings } from './components/Settings'
 
-vi.mock('./WorkspaceData', () => ({ useWorkspace: () => ({ revision: 0 }) }))
+vi.mock('./WorkspaceData', () => ({ useWorkspace: () => ({ revisions: { usage: 0 } }) }))
 vi.mock('./components/ModelConnections', () => ({ ModelConnectionsPanel: () => <section aria-label="模型连接" /> }))
 vi.mock('./api/client', () => ({ api: { modelUsage: vi.fn() } }))
 const user: User = { id: 'one', display_name: '测试用户', email: 'test@example.test', avatar_url: null }

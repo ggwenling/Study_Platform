@@ -49,7 +49,7 @@ export function FlashcardPanel({
   onOverviewRefresh?: () => void
 }) {
   const navigate = useNavigate()
-  const { aiJobs, revision } = useWorkspace()
+  const { aiJobs, revisions } = useWorkspace()
   const [kbId, setKbId] = useState(defaultKbId || knowledgeBases[0]?.id || '')
   const [cardCount, setCardCount] = useState('8')
   const [deckTitle, setDeckTitle] = useState('')
@@ -98,7 +98,7 @@ export function FlashcardPanel({
     } catch (error) {
       if (error instanceof ApiError) notify(errorMessage(error))
     }
-  }, [notify, onDeckCountChange, revision])
+  }, [notify, onDeckCountChange, revisions.learning])
 
   const setDeckQueue = useCallback((detail: FlashcardDeckDetail, mode: 'deck-due' | 'deck-all') => {
     setActiveDeck(detail)
@@ -165,7 +165,7 @@ export function FlashcardPanel({
       },
     )
     return () => controller.abort()
-  }, [kbId, materialsRetry])
+  }, [kbId, revisions.materials, materialsRetry])
 
   const readyMaterials = materialsStatus.kbId === kbId && materialsStatus.ready ? materials : []
   const invalidMaterialScope = scoped && (

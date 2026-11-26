@@ -63,6 +63,9 @@ const countOptions = [
   { value: '15', label: '15 题' },
 ]
 
+const learningTabs = ['practice', 'flashcards', 'history', 'wrong'] as const
+type LearningTab = typeof learningTabs[number]
+
 function SourceList({ sources, onOpenSource, disabled = false }: {
   sources?: LearningSource[]
   onOpenSource: (source: LearningSource) => void
@@ -91,11 +94,11 @@ function SourceList({ sources, onOpenSource, disabled = false }: {
 }
 
 export function Learning({ knowledgeBases, notify, overview, refreshOverview }: Props) {
-  const { capabilities, aiJobs, revision } = useWorkspace()
+  const { capabilities, aiJobs, revisions } = useWorkspace()
   const navigate = useNavigate()
   const location = useLocation()
   const historyState = location.state as {
-    tab?: 'practice' | 'history' | 'wrong' | 'flashcards'
+    tab?: LearningTab
     deckId?: string
     kbId?: string
     attemptId?: string
@@ -111,6 +114,11 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   const [materialsStatus, setMaterialsStatus] = useState<{ kbId: string; ready: boolean }>({ kbId: '', ready: false })
   const [materialsError, setMaterialsError] = useState('')
   const [materialsRetry, setMaterialsRetry] = useState(0)
+  const materialsReady = materialsStatus.kbId === kbId && materialsStatus.ready
+  const canGenerateQuiz = Boolean(kbId && materialsReady && materials.length > 0 && (!scoped || (
+    selectedMaterialIds.length > 0 && selectedMaterialIds.length <= 50 &&
+    selectedMaterialIds.every((id) => materials.some((row) => row.id === id))
+  )))
   const [attempt, setAttempt] = useState<LearningAttempt | null>(null)
   const [pendingQuizzes, setPendingQuizzes] = useState<PendingQuiz[]>([])
   const [pendingError, setPendingError] = useState('')
@@ -123,6 +131,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   const [index, setIndex] = useState(0)
   const [textDrafts, setTextDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  const answerImageInput = useRef<HTMLInputElement>(null)
   const [useVisionForImage, setUseVisionForImage] = useState(false)
   const [wrongs, setWrongs] = useState<WrongQuestionItem[]>([])
   const dailyOverview = overview
@@ -131,7 +140,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   const [startDueQueue, setStartDueQueue] = useState(Boolean(historyState?.startDueQueue))
   const [expandedWrongIds, setExpandedWrongIds] = useState<string[]>([])
   const [readerTarget, setReaderTarget] = useState<SourceReaderTarget | null>(null)
-  const [tab, setTab] = useState<'practice' | 'flashcards' | 'history' | 'wrong'>(historyState?.tab ?? 'practice')
+  const [tab, setTab] = useState<LearningTab>(historyState?.tab ?? 'practice')
 
   function openSource(source: LearningSource) {
     if (source.availability !== 'available') return
@@ -220,7 +229,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
       if (!controller.signal.aborted) setPendingError(errorMessage(error))
     })
     return () => controller.abort()
-  }, [revision, pendingRetry])
+  }, [revisions.learning, pendingRetry])
 
   useEffect(() => {
     const state = location.state as typeof historyState
@@ -256,7 +265,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
       },
     )
     return () => controller.abort()
-  }, [kbId, materialsRetry])
+  }, [kbId, revisions.materials, materialsRetry])
 
   function applyResponseUpdate(responseId: string, result: LearningResponseResult) {
     setAttempt((prev) => {
@@ -316,14 +325,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
   }
 
   async function startPractice() {
-    if (!kbId) {
-      notify('请先选择知识库')
-      return
-    }
-    if (scoped && (materialsStatus.kbId !== kbId || !materialsStatus.ready || !selectedMaterialIds.length || selectedMaterialIds.length > 50 || selectedMaterialIds.some((id) => !materials.some((row) => row.id === id)))) {
-      notify('所选资料范围尚未确认，请检查资料状态或选择使用全库。')
-      return
-    }
+    if (busy || !canGenerateQuiz) return
     setBusy(true)
     try {
       const job = await api.learning.generateQuiz(kbId, Number(quizCount) || 5, {
@@ -496,7 +498,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
     <div className="learning-page">
       <header className="learning-header">
         <h1>学习</h1>
-        <p>基于所选知识库出题练习，支持在线选择/文字作答、拍照判题与错题复盘。</p>
+        <p>用知识库资料生成练习，或用闪卡复习已学内容。</p>
       </header>
 
       <section className="learning-daily-overview" aria-label="今日复习概览">
@@ -529,50 +531,39 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
       />
 
       <div className="learning-tabs" role="tablist" aria-label="学习视图">
-        <button
-          type="button"
-          role="tab"
-          id="learning-tab-practice"
-          aria-selected={tab === 'practice'}
-          aria-controls="learning-panel-practice"
-          className={tab === 'practice' ? 'active' : ''}
-          onClick={() => setTab('practice')}
-        >
-          练习
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="learning-tab-flashcards"
-          aria-selected={tab === 'flashcards'}
-          aria-controls="learning-panel-flashcards"
-          className={tab === 'flashcards' ? 'active' : ''}
-          onClick={() => setTab('flashcards')}
-        >
-          闪卡复习{deckCount > 0 ? ` (${deckCount})` : ''}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="learning-tab-history"
-          aria-selected={tab === 'history'}
-          aria-controls="learning-panel-history"
-          className={tab === 'history' ? 'active' : ''}
-          onClick={() => setTab('history')}
-        >
-          历史练习 ({attempts.length})
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="learning-tab-wrong"
-          aria-selected={tab === 'wrong'}
-          aria-controls="learning-panel-wrong"
-          className={tab === 'wrong' ? 'active' : ''}
-          onClick={() => setTab('wrong')}
-        >
-          错题本 ({wrongs.length})
-        </button>
+        {learningTabs.map((view, index) => (
+          <button
+            key={view}
+            type="button"
+            role="tab"
+            id={`learning-tab-${view}`}
+            aria-selected={tab === view}
+            aria-controls={`learning-panel-${view}`}
+            tabIndex={tab === view ? 0 : -1}
+            className={tab === view ? 'active' : ''}
+            onClick={() => setTab(view)}
+            onKeyDown={(event) => {
+              let next: LearningTab
+              switch (event.key) {
+                case 'ArrowRight': next = learningTabs[(index + 1) % learningTabs.length]; break
+                case 'ArrowLeft': next = learningTabs[(index + learningTabs.length - 1) % learningTabs.length]; break
+                case 'Home': next = 'practice'; break
+                case 'End': next = 'wrong'; break
+                default: return
+              }
+              event.preventDefault()
+              setTab(next)
+              event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`#learning-tab-${next}`)?.focus()
+            }}
+          >
+            {{
+              practice: '练习',
+              flashcards: deckCount > 0 ? `闪卡复习 (${deckCount})` : '闪卡复习',
+              history: `历史练习 (${attempts.length})`,
+              wrong: `错题本 (${wrongs.length})`,
+            }[view]}
+          </button>
+        ))}
       </div>
 
       <section
@@ -615,6 +606,9 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
           </div>
 
           {materialsError && <div role="alert">资料状态读取失败：{materialsError} <Button type="button" size="sm" variant="ghost" onClick={() => setMaterialsRetry((value) => value + 1)}>重新读取资料</Button></div>}
+          {kbId && materialsReady && materials.length === 0 && !scoped && <p className="muted">
+            当前库暂无就绪资料。可以切换知识库，或等待资料处理完成。
+          </p>}
           {(materials.length > 0 || scoped) && (
             <Accordion
               defaultOpen={-1}
@@ -645,7 +639,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
                                 type="checkbox"
                                 className="material-scope-checkbox"
                                 checked={selectedMaterialIds.includes(mat.id)}
-                                disabled={materialsStatus.kbId !== kbId || !materialsStatus.ready || (!selectedMaterialIds.includes(mat.id) && selectedMaterialIds.length >= 50)}
+                                disabled={!materialsReady || (!selectedMaterialIds.includes(mat.id) && selectedMaterialIds.length >= 50)}
                                 onChange={(e) => {
                                   if (e.target.checked) { setScoped(true); setSelectedMaterialIds((prev) => prev.length < 50 ? [...prev, mat.id] : prev) }
                                   else setSelectedMaterialIds((prev) => prev.filter((id) => id !== mat.id))
@@ -664,13 +658,9 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
           )}
 
           <div className="learning-config-actions">
-            <Button type="button" loading={busy} disabled={busy || !kbId} onClick={() => void startPractice()}>
-              从当前库出题
-            </Button>
             {resumableAttempt && (
               <Button
                 type="button"
-                variant="secondary"
                 disabled={busy}
                 onClick={() => void openAttemptById(resumableAttempt.id)}
               >
@@ -678,13 +668,16 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
                 继续上次练习（已答 {resumableAttempt.answered_count}/{resumableAttempt.item_count}）
               </Button>
             )}
+            <Button type="button" variant={resumableAttempt ? "secondary" : undefined} loading={busy} disabled={busy || !canGenerateQuiz} onClick={() => void startPractice()}>
+              从当前库出题
+            </Button>
           </div>
         </div>
 
         {!attempt ? (
           <EmptyState
             title="尚未开始练习"
-            description="选择题库、题型与题量后点击「从当前库出题」，或从历史记录恢复上次练习。"
+            description="先选择有就绪资料的知识库，再选择题型和题量。也可以从历史记录继续练习。"
             icon={<BookOpen aria-hidden />}
           />
         ) : current ? (
@@ -758,27 +751,35 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
                   <Button
                     type="button"
                     variant="secondary"
+                    className="learning-upload"
+                    disabled={busy}
+                    onClick={() => answerImageInput.current?.click()}
+                  >
+                    <Camera aria-hidden size={17} />
+                    <span>拍照 / 上传手写图片</span>
+                  </Button>
+                  <input
+                    ref={answerImageInput}
+                    type="file"
+                    accept="image/png,image/jpeg"
+                    capture="environment"
+                    hidden
+                    disabled={busy}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0]
+                      if (file) void onImage(file)
+                      event.target.value = ''
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
                     loading={busy}
                     disabled={busy || !currentDraft.trim()}
                     onClick={() => void submitText(currentDraft)}
                   >
                     提交文字作答
                   </Button>
-                  <label className="learning-upload">
-                    <Camera aria-hidden size={17} />
-                    <span>拍照 / 上传手写图片</span>
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg"
-                      capture="environment"
-                      disabled={busy}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0]
-                        if (file) void onImage(file)
-                        e.target.value = ''
-                      }}
-                    />
-                  </label>
                   {capabilities?.vision && (
                     <label>
                       <input

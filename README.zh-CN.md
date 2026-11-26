@@ -1,41 +1,48 @@
 # 知循 · KnowLoop
 
-**面向个人的知识工作台。整理资料，提出有引用的问题，再用自己的材料学习。**
+**面向个人的知识工作台。把资料整理进知识库，提问后回查引用原文，再把所得做成笔记、测验或闪卡。**
+
+[![React 19](https://img.shields.io/badge/React-19-087EA4?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-5B45D0?style=flat-square&logo=vite&logoColor=white)](https://vite.dev/)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-007A70?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![PostgreSQL 与 pgvector](https://img.shields.io/badge/PostgreSQL-pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1F5C54?style=flat-square&logo=langgraph&logoColor=white)](https://docs.langchain.com/oss/python/langgraph/overview)
 
 [English](README.md) · 简体中文
 
-[桌面截图](#桌面截图) · [核心功能](#核心功能) · [快速开始](#快速开始) · [技术架构](#技术架构) · [测试与验收](#测试与验收)
+[快速开始](#快速开始) · [桌面截图](#桌面截图) · [核心功能](#核心功能) · [技术架构](#技术架构) · [测试与验收](#测试与验收)
 
-## 项目简介
+[![知循桌面问答页面，回答标有引用编号，右侧显示来源片段](docs/screenshots/01-cited-chat.png)](docs/screenshots/01-cited-chat.png)
 
-知循把三个日常任务接在一起。把资料导入私有知识库，提问并核对引用，再把结论保存为研究笔记，或用原始资料进行练习。只记得一个短句或资料编号时，也能用全文搜索把原文找回来。
-
-![知循桌面会话页面，回答标有引用编号，右侧显示原文依据](docs/screenshots/01-cited-chat.png)
-
-*以上是实际运行的桌面网页。演示使用虚构资料，回答与引用由应用调用已配置的模型生成。*
+*知循本地运行截图。演示使用虚构的海棠阅读室项目，问答、笔记和闪卡来自已保存的演示数据。*
 
 ## 桌面截图
 
-| 知识库详情 | 工作区搜索 |
+| 知识库详情 | 原文阅读器 |
 | --- | --- |
-| ![浅色主题的桌面知识库详情，展示已索引的资料、活动和知识工坊](docs/screenshots/02-knowledge-base.png) | ![桌面 Ctrl+K 搜索窗口，展示命中的资料正文片段](docs/screenshots/03-search.png) |
-| 查看处理进度、文件结构、片段和近期索引活动。 | 搜索资料正文、笔记标题和正文、知识库名称和会话标题。 |
+| [![知识库详情，展示已索引资料和知识工坊入口](docs/screenshots/02-knowledge-base.png)](docs/screenshots/02-knowledge-base.png) | [![原文阅读器显示引用片段及其上下文](docs/screenshots/06-source-reader.png)](docs/screenshots/06-source-reader.png) |
+| 导入资料、查看索引状态，或打开知识工坊。 | 在上下文中核对引用，也可以带着出处摘录到笔记。 |
 
 | 研究笔记 | 学习 |
 | --- | --- |
-| ![已保存的研究笔记，包含对应的资料引用](docs/screenshots/04-research-note.png) | ![桌面学习页面，展示基于演示资料生成的闪卡](docs/screenshots/05-study.png) |
-| 把回答与来源一起保存，随时回查依据。 | 用选定的知识库出题、生成闪卡并复习。 |
+| [![原文摘录保存为研究笔记，保留出处和所在行](docs/screenshots/04-research-note.png)](docs/screenshots/04-research-note.png) | [![闪卡背面显示答案、来源和掌握程度选项](docs/screenshots/05-study.png)](docs/screenshots/05-study.png) |
+| 保存原文片段，保留资料名和定位信息。 | 翻看答案和来源，再标记掌握程度。 |
+
+[查看工作区搜索截图](docs/screenshots/03-search.png)，了解如何用 `Ctrl+K` 找到原文片段或已有笔记。
 
 ## 核心功能
 
 | 使用流程 | 你可以做什么 |
 | --- | --- |
-| **收集与建立索引** | 上传 PDF、DOCX、Markdown、UTF-8 TXT、PNG 或 JPEG，或直接粘贴文本。后台 worker 解析资料，对符合条件的扫描件和图片做 OCR，再建立索引。可以查看进度和重试失败任务。 |
-| **提问与核对** | 接收带引用的流式回答，把单轮问题限定到指定资料，对已就绪资料生成摘要。可以查看引用片段和可用的原页预览，也可以用检索命中测试检查片段匹配情况。 |
+| **收集与建立索引** | 上传 PDF、DOCX、PPTX、Markdown、UTF-8 TXT、PNG 或 JPEG，粘贴文本，或按 URL 导入可公开访问的网页。PPTX 会提取幻灯片文字、表格和演讲者备注。后台 worker 解析资料，对符合条件的扫描件和图片做 OCR，再建立索引。可以查看进度并重试失败任务。 |
+| **提问与核对** | 接收带引用的流式回答，把单轮问题限定到指定资料，对已就绪资料生成摘要。点击引用可打开原文阅读器，查看相邻片段和已有的 PDF 页面预览。检索命中测试可查看问题匹配了哪些片段。 |
 | **查找与整理** | 按 `Ctrl+K` 找回资料片段或研究笔记，直接打开命中位置。用项目组织会话，导出 Markdown，在历史中恢复已归档会话。 |
-| **沉淀研究资料** | 创建笔记或将回答存为笔记。用知识工坊生成学习指南、知识导图或公式速查，也可以把选定笔记回写为资料。 |
-| **练习与复习** | 从知识库生成测验和闪卡，使用文本或照片作答，回顾练习记录和错题。 |
-| **配置模型** | 使用平台默认模型，或配置兼容的语言和向量连接。各知识库拥有独立的向量连接绑定，向量维度为 1024。 |
+| **沉淀研究资料** | 把问答或原文摘录保存到新笔记或已有笔记。用知识工坊生成学习指南、知识导图或公式速查，也可以把选定笔记回写为资料。 |
+| **练习与复习** | 从知识库生成测验和闪卡，按间隔重复复习到期闪卡，用文本或照片作答并回顾错题。视觉模型辅助需显式开启。 |
+| **导出与备份** | 笔记可导出为 ZIP，闪卡可导出为 Anki TSV 或 Markdown，筛选后的错题可导出为 Markdown。Windows 备份与恢复覆盖 `study` schema 和配置的存储目录。 |
+| **配置模型** | 使用平台默认模型，或配置兼容的语言和向量连接。可按知识库启用兼容的 Rerank 连接。各知识库拥有独立的向量连接绑定，向量维度为 1024。 |
 
 ## 快速开始
 
@@ -88,7 +95,7 @@ uv run study-setup-checkpointer
 | 进程 | 命令 | 用途 |
 | --- | --- | --- |
 | API | `cd backend`，再执行 `uv run study-api` | 监听 `127.0.0.1:8000`，OpenAPI 文档位于 `/docs`。 |
-| Worker | `cd backend`，再执行 `uv run study-worker` | 处理上传资料并更新索引。 |
+| Worker | `cd backend`，再执行 `uv run study-worker` | 用独立的有界线程池处理资料入库与索引重建，以及笔记、闪卡和测验生成任务。 |
 | Web | `cd frontend`，再执行 `npm run dev` | 监听 `127.0.0.1:5173`，将 API 请求代理到 8000。 |
 
 打开[本机应用](http://127.0.0.1:5173/)，注册账号，创建知识库并上传一份小型 TXT 或 PDF。待资料就绪后，提出一个文件中能找到答案的问题，再打开引用核对。[后端就绪检查](http://127.0.0.1:8000/health/ready)可确认结构迁移与存储配置，供应商连接会在实际建立索引或提问时使用。
@@ -102,7 +109,7 @@ flowchart LR
     Browser["React 19 · Vite 前端"] --> API["FastAPI · HTTP 与 SSE"]
     API --> DB[("PostgreSQL · study schema")]
     API --> Files["本机资料存储"]
-    DB --> Worker["后台资料处理 worker"]
+    DB --> Worker["study-worker · 资料处理与生成双池"]
     Worker --> Files
     Worker --> Index["文本提取 · OCR · 切分"]
     Index --> DB
@@ -110,7 +117,7 @@ flowchart LR
     API --> Models
 ```
 
-前端使用 React、TypeScript 和 Vite。FastAPI 提供认证、检索、笔记、学习和流式问答，独立 worker 处理资料入库、索引重建和生成任务。PostgreSQL 通过 pgvector 和内建的文本搜索能力存储应用数据及索引。Alembic 管理 `study` schema，LangGraph checkpointer 使用单独的 `study_graph`。[架构说明](docs/architecture/README.md) · [API 接入](docs/api-integration.md)
+前端使用 React、TypeScript 和 Vite。FastAPI 提供认证、检索、笔记、学习和流式问答。`study-worker` 将资料入库与索引重建、生成任务分到独立的有界线程池。笔记、闪卡和测验等长任务会入队，并提供任务状态和粗粒度进度。PostgreSQL 通过 pgvector 和内建的文本搜索能力存储应用数据及索引。Alembic 管理 `study` schema，LangGraph checkpointer 使用单独的 `study_graph`。[架构说明](docs/architecture/README.md) · [API 接入](docs/api-integration.md)
 
 ## 测试与验收
 
@@ -120,10 +127,10 @@ flowchart LR
 
 ## 使用边界
 
-- 默认单文件上限为 20 MiB，PDF 最多 50 页，图片最多 2000 万像素。扫描质量会影响 OCR 结果。
-- 原件与应用记录保存在配置的主机上。使用托管模型连接时，建立向量或回答所需的输入会发送给对应供应商。请按资料性质选择供应商。
+- PDF 默认最多 50 MiB、150 页。其他文件默认最多 20 MiB，图片最多 2000 万像素。网页导入适用于可公开访问的页面，登录墙和重度 JavaScript 页面可能影响正文提取。扫描件和幻灯片图片质量会影响 OCR 结果。
+- 原件与应用记录保存在配置的主机上。使用托管模型服务时，用于向量化或回答的输入会发送给供应商。启用托管 Rerank 时，问题和候选资料片段也会发送给对应供应商。请按资料性质选择供应商。
 - 全文搜索基于已保存的正文。模型问答和学习产物依赖已配置的模型服务和原始资料质量。
-- 已提供 Windows 启停和故障恢复说明。整库备份与恢复属于后续工作，Markdown 导出面向单篇笔记或单条会话。[本地运行与恢复](docs/local-runtime.md)
+- Windows 备份与恢复只包含 PostgreSQL `study` schema 和配置的 `STORAGE_DIR`（默认为 `.local/storage`），不包含 `.env` 或单独管理的 `study_graph` checkpointer schema。恢复前请阅读脚本检查和恢复步骤。[本地运行与恢复](docs/local-runtime.md)
 
 ## 更多文档
 

@@ -31,8 +31,8 @@ function UsageBreakdown({ title, rows }: { title: string; rows: ModelUsageBucket
   </section>
 }
 
-export function Settings({ user, requireLogin }: { user: User | null; requireLogin: () => void }) {
-  const { revision } = useWorkspace()
+export function Settings({ user, requireLogin, openSetup }: { user: User | null; requireLogin: () => void; openSetup?: boolean }) {
+  const { revisions } = useWorkspace()
   const [summary, setSummary] = useState<ModelUsageSummary | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -52,7 +52,7 @@ export function Settings({ user, requireLogin }: { user: User | null; requireLog
       },
     ).finally(() => { if (active) setBusy(false) })
     return () => { active = false }
-  }, [user, revision, attempt])
+  }, [user, revisions.usage, attempt])
 
   if (!user) return <div className="placeholder-page">
     <EmptyState title="登录后查看设置" description="管理个人模型连接，查看自己的调用用量。" action={<Button onClick={requireLogin}>登录</Button>} />
@@ -63,7 +63,7 @@ export function Settings({ user, requireLogin }: { user: User | null; requireLog
       <h1>设置</h1>
       <p>管理当前使用的模型连接，查看个人用量。</p>
     </header>
-    <ModelConnectionsPanel key={user.id} />
+    <ModelConnectionsPanel key={user.id} openSetup={openSetup} />
     <section className="settings-card settings-usage" aria-labelledby="usage-title" aria-busy={busy}>
       <header className="usage-heading">
         <h2 id="usage-title"><BarChart3 size={19} aria-hidden="true" />用量概览</h2>

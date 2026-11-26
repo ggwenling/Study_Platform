@@ -15,6 +15,7 @@ export interface SelectProps extends Omit<ComponentPropsWithoutRef<typeof Select
   placeholder?: string;
   id?: string;
   className?: string;
+  compact?: boolean;
   formatValue?: (label: string) => string;
   valueAlign?: "center";
   options: { value: string; label: string; disabled?: boolean }[];
@@ -30,7 +31,7 @@ const valueRoll: Variants = {
 const valueFade: Variants = { enter: { opacity: 0 }, center: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: motionTokens.duration.instant } }, exit: { opacity: 0, transition: { duration: motionTokens.duration.instant } } };
 
 export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select(
-  { label, description, placeholder = "Select an option", options, id, className, formatValue, valueAlign, disabled, onValueChange, ...rootProps },
+  { label, description, placeholder = "Select an option", options, id, className, compact, formatValue, valueAlign, disabled, onValueChange, ...rootProps },
   ref,
 ) {
   const generatedId = useId();
@@ -48,7 +49,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
 
   return (
     <div className={styles.field}>
-      <label htmlFor={controlId}>{label}</label>
+      <label className={compact ? styles.srOnly : undefined} htmlFor={controlId}>{label}</label>
       <SelectPrimitive.Root {...rootProps} disabled={disabled} onValueChange={(next) => { setUncontrolledValue(next); onValueChange?.(next); }}>
         <SelectPrimitive.Trigger
           ref={ref}
@@ -71,6 +72,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
         </SelectPrimitive.Trigger>
         <SelectPrimitive.Portal>
           <SelectPrimitive.Content className={styles.content} data-compact-trigger={formatValue ? "" : undefined} position="popper" sideOffset={4} collisionPadding={12}>
+            {compact && description && <p className={styles.menuHint} aria-hidden="true">{description}</p>}
             <SelectPrimitive.ScrollUpButton className={styles.scrollButton}>
               <ChevronUp size={16} strokeWidth={1.75} aria-hidden="true" />
             </SelectPrimitive.ScrollUpButton>
@@ -90,7 +92,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
           </SelectPrimitive.Content>
         </SelectPrimitive.Portal>
       </SelectPrimitive.Root>
-      {description && <span id={hintId} className={styles.hint}>{description}</span>}
+      {description && <span id={hintId} className={compact ? styles.srOnly : styles.hint}>{description}</span>}
     </div>
   );
 });

@@ -152,6 +152,50 @@ def learning_env(tmp_path, monkeypatch):
     engine.dispose()
 
 
+def test_quiz_fallback_preserves_short_document_after_sql_limit(learning_env, monkeypatch):
+    _, db, owner, kb_id = learning_env
+    short_indexes = [UUID(index_id) for index_id in chat.visible_indices(db, owner, kb_id)]
+    short, short_title = db.execute(chat.chunk_query(short_indexes, owner)).one()
+    short_material_id = db.get(MaterialVersion, short.material_version_id).material_id
+    material = Material(
+        id=UUID(int=short_material_id.int // 2), owner_user_id=owner, knowledge_base_id=kb_id,
+        course_id=kb_id, title="Long", kind="other", status="active",
+    )
+    version = MaterialVersion(
+        id=uuid4(), material_id=material.id, version_no=1, is_current=True,
+        source_mime="text/plain", source_sha256=hashlib.sha256(b"long").hexdigest(),
+        byte_size=4, object_key=str(uuid4()), parse_status="ready",
+    )
+    index = IndexVersion(
+        id=uuid4(), material_version_id=version.id, generation=1, pipeline_profile="test",
+        embedding_profile="qwen3.7-text-embedding-flash:1024", status="ready", is_active=True,
+        chunk_count=60, ready_at=datetime.now(UTC),
+    )
+    for row in (material, version, index):
+        db.add(row)
+        db.flush()
+    for ordinal in range(60):
+        text = " \t\n" if ordinal == 0 else f"Long document clause {ordinal}"
+        db.add(MaterialChunk(
+            id=uuid4(), index_version_id=index.id, material_version_id=version.id,
+            ordinal=ordinal, text=text, text_sha256=hashlib.sha256(text.encode()).hexdigest(), locator={},
+        ))
+    db.flush()
+    monkeypatch.setattr(learning, "retrieve", lambda *_: [])
+    scope_ids = [str(index.id), str(short.index_version_id)]
+    hits = learning._collect_quiz_hits(
+        db, {"index_version_ids": scope_ids}, scope_ids, owner, count=3, stub_mode=False,
+    )
+    assert len(hits) == 12
+    assert [(row["title"], row["ordinal"]) for row in hits[:3]] == [
+        ("Long", 1), (short_title, short.ordinal), ("Long", 2),
+    ]
+    restricted = learning._sample_scoped_chunks(
+        db, [str(short.index_version_id)], owner, 2, exclude_ids={short.id},
+    )
+    assert restricted == []
+
+
 def _png_with_text(text: str) -> bytes:
     img = Image.new("RGB", (320, 100), color="white")
     draw = ImageDraw.Draw(img)

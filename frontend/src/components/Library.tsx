@@ -8,6 +8,7 @@ import { allPages, errorMessage, locatorLabel, safeExternalUrl } from '@/api/ui'
 import { ApiError } from '@/api/stream'
 import { PasteTextDialog } from './PasteTextDialog'
 import { WebClipDialog } from './WebClipDialog'
+import { FileImportDialog, useFileImport } from './FileImportDialog'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
@@ -15,7 +16,6 @@ import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { Input } from '@/components/arc/input/input'
 import { Stepper } from '@/components/arc/stepper/stepper'
-import { Switch } from '@/components/arc/switch/switch'
 import { Textarea } from '@/components/arc/textarea/textarea'
 import { TreeView } from '@/components/arc/tree-view/tree-view'
 import type { TreeNode } from '@/components/arc/tree-view/tree-view'
@@ -67,7 +67,7 @@ export default function Library({ preferredId }: { preferredId?: string }) {
       const item = await api.createKnowledgeBase({ name, description: String(form.get('description')).trim() || null })
       setCreated(item)
       setCreating(false)
-      refresh()
+      refresh('libraries', 'overview')
       notify('知识库已创建。')
       select(item.id)
     } catch (error) { report(error) } finally { setCreateBusy(false) }
@@ -108,7 +108,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   library: KnowledgeBase; libraries: KnowledgeBase[]; select: (id: string) => void; create: () => void; onDeleted: () => void;
   fragmentId: string | null; noteId: string | null; closeSearchResult: () => void;
 }) {
-  const { revision, refresh, notify, report, capabilities, libraryUploadQueue: uploadQueue } = useWorkspace()
+  const { revisions, refresh, notify, report, capabilities, libraryUploadQueue: uploadQueue } = useWorkspace()
   const navigate = useNavigate()
   const id = library.id
   const [overview, setOverview] = useState<LibraryOverview>()
@@ -121,7 +121,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   const [pasteOpen, setPasteOpen] = useState(false)
   const [webClipOpen, setWebClipOpen] = useState(false)
   const [reindexOpen, setReindexOpen] = useState(false)
-  const [visionForNextUpload, setVisionForNextUpload] = useState(false)
+  const fileImport = useFileImport(capabilities?.vision, uploadQueue.enqueue)
   const [dragging, setDragging] = useState(false)
   const [confirmMaterial, setConfirmMaterial] = useState<Material | null>(null)
   const [visionMaterial, setVisionMaterial] = useState<Material | null>(null)
@@ -189,7 +189,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       if (finished.length) {
         setVisionJobs((current) => current.filter((job) => !finished.includes(job.jobId)))
         reloadData()
-        refresh()
+        refresh('materials', 'overview', 'usage')
       }
       if (pending) timer = window.setTimeout(pollVisionJob, 2200)
     }
@@ -222,7 +222,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     }
     void load()
     return () => { controller.abort(); window.clearTimeout(timer) }
-  }, [id, revision, reload])
+  }, [id, revisions.materials, reload])
 
   useEffect(() => {
     for (const material of materials) {
@@ -237,15 +237,9 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     }
   }, [expanded, id, locations, materials])
 
-  useEffect(() => {
-    if (!capabilities?.vision) setVisionForNextUpload(false)
-  }, [capabilities?.vision])
-
   const reloadData = () => setReload((value) => value + 1)
-  const addFiles = (files: FileList | File[]) => {
-    uploadQueue.enqueue(files, { id, name: library.name }, visionForNextUpload && capabilities?.vision ? 'vlm' : 'ocr')
-    setVisionForNextUpload(false)
-  }
+  const addFiles = (files: FileList | File[]) => fileImport.addFiles(files, { id, name: library.name })
+  const chooseFiles = () => fileInput.current?.click()
   const failedUploads = uploadQueue.items.filter((row) => row.status === 'failed')
 
   function onDragOver(event: DragEvent<HTMLElement>) {
@@ -287,7 +281,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     try {
       await api.updateKnowledgeBase(id, { name, description: String(form.get('description')).trim() || null })
       setPanel(undefined)
-      refresh()
+      refresh('libraries')
       notify('知识库已更新。')
     } catch (error) { report(error) } finally { setBusy(undefined) }
   }
@@ -306,7 +300,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       const result = await api.reparseMaterial(material.id, 'vlm')
       setVisionJobs((current) => [...current.filter((job) => job.jobId !== result.job_id), { title: material.title, jobId: result.job_id }])
       reloadData()
-      refresh()
+      refresh('materials', 'overview')
       notify('已提交视觉理解重新解析，完成后会通知你。')
     } finally { setBusy(undefined) }
   }
@@ -317,7 +311,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     try {
       await api.cancelJob(material.job_id)
       reloadData()
-      refresh()
+      refresh('materials', 'overview')
       notify('已取消资料处理。')
     } catch (error) { report(error) } finally { setBusy(undefined) }
   }
@@ -331,7 +325,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       setLocations((current) => { const next = { ...current }; delete next[material.id]; return next })
       setConfirmMaterial(null)
       reloadData()
-      refresh()
+      refresh('materials', 'overview')
       notify('资料已删除。')
     } catch (error) { report(error) } finally { setBusy(undefined) }
   }
@@ -342,7 +336,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     try {
       await api.deleteKnowledgeBase(id)
       setPanel(undefined)
-      refresh()
+      refresh('libraries', 'conversations', 'materials', 'notes', 'learning', 'overview')
       notify('知识库已删除。')
       onDeleted()
     } catch (error) { report(error) } finally { setBusy(undefined) }
@@ -423,13 +417,19 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       <header className="library-header">
         <Layers size={32} />
         <div><h1>{library.name}</h1>
-          {library.embedding_binding && <p>向量模型 · {library.embedding_binding.model} · {library.embedding_connection_id ? '个人连接' : '平台连接'} · 1024 维</p>}{library.description && <p>{library.description}</p>}</div>
+          {library.embedding_binding && <p>向量模型 · {library.embedding_binding.model} · {library.embedding_connection_id ? '个人连接' : '平台连接'} · 1024 维</p>}
+          {library.description && <p>{library.description}</p>}
+          {capabilities?.max_pdf_pages && capabilities.max_pdf_upload_bytes && <p className="muted">
+            PDF 最多 {capabilities.max_pdf_pages} 页、{capabilities.max_pdf_upload_bytes / 1024 ** 2} MiB
+            {' · '}其他资料最多 {capabilities.max_upload_bytes / 1024 ** 2} MiB
+          </p>}
+        </div>
         <div className="library-header-actions">
+          <Button type="button" size="sm" onClick={chooseFiles}><Upload size={16} aria-hidden="true" />导入资料</Button>
+          <Button size="sm" variant="secondary" onClick={() => setWebClipOpen(true)}><Globe size={16} />导入网页</Button>
           <Button size="sm" variant="secondary" onClick={() => setPanel('edit')}><Pencil size={16} />编辑</Button>
           <Button size="sm" variant="secondary" loading={busy === 'sync'} disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步</Button>
-          <Button size="sm" variant="secondary" onClick={() => setWebClipOpen(true)}><Globe size={16} />导入网页</Button>
           <DropdownMenu label="知识库操作" icon={<Ellipsis size={17} />} iconOnly disabled={Boolean(busy)} items={[
-            { label: '导入资料', icon: <Upload size={16} />, onSelect: () => fileInput.current?.click() },
             { label: '随手贴文本', icon: <FilePlus2 size={16} />, onSelect: () => setPasteOpen(true) },
             { label: '管理资料', icon: <FileText size={16} />, onSelect: () => { setConfirmMaterial(null); setPanel('files') } },
             { label: '重建索引', icon: <RefreshCw size={16} />, onSelect: () => setReindexOpen(true) },
@@ -447,12 +447,8 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       <LibraryReindex library={library} open={reindexOpen} onOpenChange={setReindexOpen} onPublished={() => {
         setFragmentRevision((value) => value + 1)
         reloadData()
-        refresh()
+        refresh('materials', 'overview')
       }} />
-      {capabilities?.vision && <p className="muted library-upload-note">
-        <Switch aria-label="本次导入的图片或 PDF 使用视觉解析（可能产生费用）" label="本次导入的图片或 PDF 使用视觉解析（可能产生费用）"
-          checked={visionForNextUpload} onCheckedChange={setVisionForNextUpload} />
-      </p>}
       {dragging && <p className="library-processing-banner" role="status">松开鼠标，将文件批量导入「{library.name}」。</p>}
       {overview && overview.processing_count > 0 && (
         <p className="library-processing-banner" role="status">
@@ -482,7 +478,10 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
               {materials.length > 0 && <Button size="sm" variant="ghost" onClick={() => { setConfirmMaterial(null); setPanel('files') }}>管理资料</Button>}
             </h3>
             {materials.length ? <TreeView density="compact" nodes={roots} expandedIds={expanded} onExpandedChange={setExpanded} onSelect={chooseNode} aria-label="文档层级" />
-              : <p className="muted library-empty">{overview ? '暂无资料。可从页头菜单导入。' : '正在读取资料…'}</p>}
+              : <div className="library-import-empty">
+                <p>选择本机文件，或将文件拖到此页。</p>
+                <Button type="button" size="sm" variant="secondary" onClick={chooseFiles}>选择文件</Button>
+              </div>}
           </div>
           <div className="library-metrics">
             {cards.map((card) => <Button key={card.label} variant="secondary" className="library-metric" onClick={card.action}>
@@ -595,7 +594,10 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
               const inProgress = !['ready', 'failed', 'cancelled'].includes(item.status)
               const sourceUrl = safeExternalUrl(item.source_url)
               return <li key={item.id}>
-                <div><strong>{item.title}</strong><p className="muted">{phases[item.status] ?? item.status}</p>
+                <div><strong>{item.title}</strong><p className="muted">{phases[item.status] ?? item.status}
+                  {inProgress && item.total_pages != null && item.processed_pages != null &&
+                    ` · 已处理 ${item.processed_pages} / ${item.total_pages} 页`}
+                </p>
                   {sourceUrl && <a href={sourceUrl} target="_blank" rel="noopener noreferrer">打开原网页</a>}
                   {item.error_message && <p className="error-text">{item.error_message}</p>}</div>
                 <div className="library-dialog-actions">
@@ -612,6 +614,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         </>}
       </DialogContent>}
     </Dialog>
+    {fileImport.dialog && <FileImportDialog {...fileImport.dialog} />}
     <PasteTextDialog
       open={pasteOpen}
       onOpenChange={setPasteOpen}

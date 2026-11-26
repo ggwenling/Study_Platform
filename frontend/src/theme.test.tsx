@@ -26,6 +26,9 @@ let root: Root
 let node: HTMLDivElement
 let media: EventTarget & { matches: boolean }
 const bootstrap = page.match(/<script>([\s\S]*?)<\/script>/)![1]
+const colorSchemeSelector = 'meta[name="color-scheme"]'
+const colorSchemeMeta = new DOMParser().parseFromString(page, 'text/html').querySelector<HTMLMetaElement>(colorSchemeSelector)
+const colorScheme = () => document.querySelector<HTMLMetaElement>(colorSchemeSelector)?.content
 const selected = (name: string) => document.querySelector(`[role="menuitemradio"][aria-label="${name}"]`)
 async function openMenu() {
   const trigger = node.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!
@@ -49,6 +52,7 @@ function expectTheme(theme: string) {
 
 beforeEach(() => {
   localStorage.clear()
+  if (colorSchemeMeta) document.head.append(colorSchemeMeta.cloneNode())
   media = Object.assign(new EventTarget(), { matches: false })
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('scrollTo', vi.fn())
@@ -62,6 +66,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   node.remove()
   localStorage.clear()
+  document.querySelector(colorSchemeSelector)?.remove()
   delete document.documentElement.dataset.theme
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -73,11 +78,13 @@ it('shows the account theme choices, applies light/dark globally and restores th
   expect(selected('System')?.getAttribute('aria-checked')).toBe('true')
   await choose('Dark')
   expectTheme('dark')
+  expect(colorScheme()).toBe('dark')
   expect(localStorage.getItem('knowloop-theme')).toBe('dark')
   expect(selected('Dark')?.getAttribute('aria-checked')).toBe('true')
   await systemTheme(true)
   await choose('Light')
   expectTheme('light')
+  expect(colorScheme()).toBe('light')
   await systemTheme(false)
   await systemTheme(true)
   expectTheme('light')
@@ -99,17 +106,20 @@ it('follows live system changes, resumes following after an explicit choice, and
   await openMenu()
   await choose('Light')
   expectTheme('light')
-  await choose('System')
-  expectTheme('dark')
-  expect(localStorage.getItem('knowloop-theme')).toBe('system')
   await systemTheme(false)
+  await choose('System')
   expectTheme('light')
+  expect(colorScheme()).toBe('light dark')
+  expect(localStorage.getItem('knowloop-theme')).toBeNull()
+  await systemTheme(true)
+  expectTheme('dark')
+  expect(colorScheme()).toBe('light dark')
   await act(async () => root.unmount())
   expect(remove).toHaveBeenCalledWith('change', expect.any(Function))
   root = createRoot(node)
-  await systemTheme(true)
+  await systemTheme(false)
   await render()
-  expectTheme('dark')
+  expectTheme('light')
   await openMenu()
   expect(selected('System')?.getAttribute('aria-checked')).toBe('true')
 })
@@ -117,21 +127,45 @@ it('follows live system changes, resumes following after an explicit choice, and
 it.each([null, 'invalid', 'system', 'light', 'dark'])('resolves %s before React mounts and agrees with the application', async (saved) => {
   if (saved) localStorage.setItem('knowloop-theme', saved)
   media.matches = true
+  expect(colorScheme()).toBe('light dark')
   window.eval(bootstrap)
+  const scheme = saved === 'light' || saved === 'dark' ? saved : 'light dark'
+  expect(colorScheme()).toBe(scheme)
   expect(document.documentElement.dataset.theme).toBe(saved === 'light' ? 'light' : 'dark')
   await render()
   expectTheme(saved === 'light' ? 'light' : 'dark')
+  expect(colorScheme()).toBe(scheme)
+})
+
+it('updates the theme when another tab changes or clears the saved preference', async () => {
+  await render()
+  await act(async () => {
+    localStorage.setItem('knowloop-theme', 'dark')
+    window.dispatchEvent(new StorageEvent('storage', { storageArea: localStorage, key: 'knowloop-theme', newValue: 'dark' }))
+  })
+  expectTheme('dark')
+  expect(colorScheme()).toBe('dark')
+  await act(async () => {
+    localStorage.clear()
+    window.dispatchEvent(new StorageEvent('storage', { storageArea: localStorage }))
+  })
+  expectTheme('light')
+  expect(colorScheme()).toBe('light dark')
+  expect(localStorage.getItem('knowloop-theme')).toBeNull()
 })
 
 it('keeps switching and following the system when browser storage is unavailable', async () => {
   vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError') })
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError') })
+  vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError') })
   window.eval(bootstrap)
   expect(document.documentElement.dataset.theme).toBe('light')
+  expect(colorScheme()).toBe('light dark')
   await render()
   await openMenu()
   await choose('Dark')
   expectTheme('dark')
+  expect(colorScheme()).toBe('dark')
   await choose('System')
   await systemTheme(true)
   expectTheme('dark')

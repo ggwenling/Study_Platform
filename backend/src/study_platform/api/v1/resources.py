@@ -34,7 +34,7 @@ from study_platform.persistence.models import (
 from study_platform.services.citations import citation_dto, message_dto
 from study_platform.services.learning import count_due_wrong_questions
 from study_platform.services.lexical import lexical_query_terms, plain_tsquery
-from study_platform.services.studio import count_due_flashcards
+from study_platform.services.model_connections import selected_llm
 from study_platform.services.workspace_search import (
     body_score_expression,
     body_search_expression,
@@ -94,6 +94,7 @@ class ConversationDTO(BaseModel):
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None
+    llm_connection_id: UUID | None = None
 
 
 class ConversationPage(BaseModel):
@@ -141,6 +142,9 @@ class MessageDTO(BaseModel):
     created_at: datetime
     scope: ScopeDTO | None
     citations: list[CitationDTO]
+    model_profile: str | None = None
+    error_code: str | None = None
+    failure_stage: Literal["retrieval", "generation"] | None = None
 
 
 class MessagePage(BaseModel):
@@ -154,11 +158,17 @@ def kb_dto(kb):
 
 
 def conversation_dto(row):
-    return {k: getattr(row, k) for k in ("id", "title", "project_knowledge_base_id", "created_at", "updated_at", "archived_at")}
+    return {k: getattr(row, k) for k in ("id", "title", "project_knowledge_base_id", "created_at", "updated_at",
+                                        "archived_at", "llm_connection_id")}
 
 
 class CreateConversationBody(ConversationBody):
     project_knowledge_base_id: UUID | None = None
+    llm_connection_id: UUID | None = None
+
+
+class UpdateConversationBody(ConversationBody):
+    llm_connection_id: UUID | None = None
 
 
 def owned_conversation(db, user, conversation_id, *, lock=False):
@@ -346,9 +356,12 @@ def create_conversation(
 ):
     if body.project_knowledge_base_id:
         owned_kb(db, user, body.project_knowledge_base_id, lock=True)
+    if body.llm_connection_id is not None:
+        selected_llm(db, user.id, body.llm_connection_id)
     row = Conversation(
         owner_user_id=user.id, course_id=None, title=body.title, mode="normal", scope_snapshot=[],
         project_knowledge_base_id=body.project_knowledge_base_id,
+        llm_connection_id=body.llm_connection_id,
     )
     db.add(row)
     db.commit()
@@ -365,12 +378,17 @@ def get_conversation(
 @router.patch("/conversations/{conversation_id}", response_model=ConversationDTO)
 def rename_conversation(
     conversation_id: UUID,
-    body: ConversationBody,
+    body: UpdateConversationBody,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    row = owned_conversation(db, user, conversation_id)
-    row.title = body.title
+    row = owned_conversation(db, user, conversation_id, lock=True)
+    if "title" in body.model_fields_set or "llm_connection_id" not in body.model_fields_set:
+        row.title = body.title
+    if "llm_connection_id" in body.model_fields_set:
+        if body.llm_connection_id is not None:
+            selected_llm(db, user.id, body.llm_connection_id)
+        row.llm_connection_id = body.llm_connection_id
     db.commit()
     return conversation_dto(row)
 
@@ -428,6 +446,7 @@ def list_messages(
     cursor: UUID | None = None,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
+    order: Literal["asc", "desc"] = "asc",
 ):
     owned_conversation(db, user, conversation_id)
     stmt = sa.select(Message).where(Message.conversation_id == conversation_id)
@@ -439,8 +458,12 @@ def list_messages(
         )
         if not anchor:
             raise ApiError(400, "invalid_cursor", "Invalid cursor")
-        stmt = stmt.where(Message.sequence_no > anchor.sequence_no)
-    rows = db.scalars(stmt.order_by(Message.sequence_no).limit(limit + 1)).all()
+        if order == "desc":
+            stmt = stmt.where(Message.sequence_no < anchor.sequence_no)
+        else:
+            stmt = stmt.where(Message.sequence_no > anchor.sequence_no)
+    sequence = Message.sequence_no.desc() if order == "desc" else Message.sequence_no.asc()
+    rows = db.scalars(stmt.order_by(sequence).limit(limit + 1)).all()
     return {
         "items": [message_dto(db, r) for r in rows[:limit]],
         "next_cursor": rows[limit - 1].id if len(rows) > limit else None,
@@ -632,9 +655,22 @@ def search(
     }
 
 
+class ChatModelDTO(BaseModel):
+    id: UUID
+    name: str
+    model: str
+    status: str
+    is_default: bool
+    error_code: str | None
+
+
 class CapabilitiesDTO(BaseModel):
     rag: bool
     library_rag: dict[str, bool] = Field(default_factory=dict)
+    library_embedding: dict[str, bool] = Field(default_factory=dict)
+    has_personal_models: bool = False
+    chat_models: list[ChatModelDTO] = Field(default_factory=list)
+    platform_chat_model: str | None = None
     ocr: bool
     vision: bool
     rerank: bool
@@ -642,6 +678,8 @@ class CapabilitiesDTO(BaseModel):
     answer_modes: list[str]
     upload_mime_types: list[str]
     max_upload_bytes: int
+    max_pdf_upload_bytes: int
+    max_pdf_pages: int
 
 
 @router.get("/capabilities", response_model=CapabilitiesDTO)
@@ -668,11 +706,22 @@ def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
         rerank = bool(default_snapshot(db, user.id, "rerank").get("id"))
     except ApiError:
         rerank = False
-    library_rag = {str(kb): available["llm"] and (status == "ready" if connection else bool(settings.embedding_api_key.get_secret_value()))
-                   for kb, connection, status in libraries}
+    library_embedding = {str(kb): status == "ready" if connection else bool(settings.embedding_api_key.get_secret_value())
+                         for kb, connection, status in libraries}
+    library_rag = {kb: available["llm"] and ready for kb, ready in library_embedding.items()}
+    models = db.scalars(sa.select(ModelConnection).where(
+        ModelConnection.owner_user_id == user.id, ModelConnection.deleted_at.is_(None),
+    ).order_by(ModelConnection.created_at)).all()
     return {
         "rag": available["llm"] and (available["embedding"] or any(library_rag.values())),
         "library_rag": library_rag,
+        "library_embedding": library_embedding,
+        "has_personal_models": bool(models),
+        "chat_models": [ChatModelDTO(
+            id=row.id, name=row.name, model=row.versions[str(row.revision)]["model"],
+            status=row.status, is_default=row.is_default, error_code=row.error_code,
+        ) for row in models if row.kind == "llm"],
+        "platform_chat_model": settings.chat_model if settings.deepseek_api_key.get_secret_value() else None,
         "ocr": True,
         "vision": vision,
         "rerank": rerank,
@@ -686,6 +735,8 @@ def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
         "answer_modes": ["knowledge_only", "with_general"],
         "upload_mime_types": sorted(set(MIMES.values())),
         "max_upload_bytes": settings.max_upload_bytes,
+        "max_pdf_upload_bytes": settings.max_pdf_upload_bytes,
+        "max_pdf_pages": settings.max_pdf_pages,
     }
 
 
@@ -702,6 +753,7 @@ class DashboardDTO(BaseModel):
     due_flashcard_count: int
     due_wrong_question_count: int
     activity: list[ActivityDTO]
+    recent_chat_library_id: UUID | None = None
 
 
 def activity_days(events, today):
@@ -719,6 +771,10 @@ def activity_days(events, today):
 
 @router.get("/dashboard/overview", response_model=DashboardDTO)
 def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Local import: services.studio loads this package, and a module-level import
+    # reads count_due_flashcards before that module finishes initializing.
+    from study_platform.services.studio import count_due_flashcards
+
     now = datetime.now(UTC)
     kb_count = db.scalar(
         sa.select(sa.func.count())
@@ -738,6 +794,16 @@ def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
     )
     conv_filter = [Conversation.owner_user_id == user.id, Conversation.deleted_at.is_(None)]
     conv_count = db.scalar(sa.select(sa.func.count()).select_from(Conversation).where(*conv_filter))
+    recent_chat_library_id = db.scalar(
+        sa.select(AiWorkflowRun.knowledge_base_id)
+        .join(Conversation, Conversation.id == AiWorkflowRun.conversation_id)
+        .join(KnowledgeBase, KnowledgeBase.id == AiWorkflowRun.knowledge_base_id)
+        .where(*conv_filter, AiWorkflowRun.owner_user_id == user.id,
+               KnowledgeBase.owner_user_id == user.id, KnowledgeBase.deleted_at.is_(None),
+               AiWorkflowRun.source_scope["intent"].astext.in_(("qa", "summary")))
+        .order_by(AiWorkflowRun.created_at.desc(), AiWorkflowRun.id.desc())
+        .limit(1)
+    )
     # One event per ingested version, irrespective of retry/index generations.
     versions = db.execute(
         sa.select(MaterialVersion.id, sa.func.min(IndexVersion.ready_at))
@@ -767,6 +833,7 @@ def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
         "due_flashcard_count": count_due_flashcards(db, user.id, now),
         "due_wrong_question_count": count_due_wrong_questions(db, user.id, now),
         "activity": activity_days(events, now.astimezone(ZoneInfo("Asia/Shanghai")).date()),
+        "recent_chat_library_id": recent_chat_library_id,
     }
 
 

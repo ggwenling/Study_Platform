@@ -63,6 +63,20 @@ uv run --no-sync study-eval-rag --strategy compare --live --output ../.local/rag
 }
 ```
 
+## 版本化真实语料
+
+从任意目录运行时，显式指定题集和清单。清单目录是相对语料路径的基准。预检核对冻结散列、页数、非空分块和必要证据的静态可达性，过程不调用模型或连接数据库。
+
+```powershell
+uv run --no-sync study-eval-rag --dataset <questions.jsonl> --manifest <evaluation_manifest.json> --profile native --preflight
+```
+
+可用 `--output <新目录>` 保存预检。版本化清单允许仅在隔离评测中提高 PDF 页数上限。OCR 专项配置对明确指定的整份 PDF 重新识别，并仅用实际采用 OCR 的片段证明预检可达性。两种配置各自出报告。正式运行将使用同次预检产生的原件副本和片段。
+
+- `support` 各项都是必需命题。每项的 `alternatives` 可列多个等价来源，一种来源的 `parts` 均须命中。每段记录独立的物理页或行范围。文档级指标按每项首选来源计算，另报可接受文档覆盖和完整证据命中。不可答题单独计数。版本化题集不以字面别名判断答案，拒答词也只供后续复核。
+- `READY_TO_RUN` 表示所选配置的预检通过，且两份独立 AI 复核记录覆盖整个冻结题集并绑定数据和答案散列。报告保留 AI 审定标签。现有面向产品默认策略的人工启用门禁继续使用独立的结果审核流程。
+- 正式对照经连接和预算确认后，使用隔离 PostgreSQL `*_test` 数据库，将预检参数改为 `--live --strategy three_way`。同次运行共享原问题向量及索引。候选 20、Top‑K 10、相似度阈值 0.35，混合权重 0.4。比较时读取 `retrieval_metrics.json` 的 `by_strategy`，其中各策略又按 Calibration 和 Heldout 汇总。重排留作单独候选回放对照。
+
 ## 单元测试基线
 
 `tests/unit/test_retrieval_metrics.py` 含手算用例（多相关项、无相关项、k 大于结果长度、重复 ID）。固定排序的汇总预期见 `tests/unit/test_rag_evaluation.py::test_retrieval_summary_from_mock_report`，不依赖外部 API。

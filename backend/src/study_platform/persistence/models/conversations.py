@@ -62,6 +62,10 @@ class Conversation(Base):
     owner_user_id = sa.Column("owner_user_id", postgresql.UUID(as_uuid=True), nullable=False)
     course_id = sa.Column("course_id", postgresql.UUID(as_uuid=True), nullable=True)
     project_knowledge_base_id = sa.Column(postgresql.UUID(as_uuid=True), nullable=True)
+    llm_connection_id = sa.Column(
+        postgresql.UUID(as_uuid=True),
+        sa.ForeignKey("study.model_connections.id", name="fk_conversations_llm_connection", ondelete="RESTRICT"),
+    )
     title = sa.Column("title", sa.String(200), nullable=True)
     mode = sa.Column("mode", sa.String(16), nullable=False, server_default=sa.text("'normal'"))
     scope_snapshot = sa.Column(

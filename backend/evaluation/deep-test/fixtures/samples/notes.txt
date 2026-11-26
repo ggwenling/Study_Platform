@@ -1,0 +1,2 @@
+Synthetic deep-test fixture. Not confidential.
+KNOWLOOP-DEEP-FIXTURE-001：该文件仅用于离线导入烟测。

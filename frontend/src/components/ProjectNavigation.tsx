@@ -113,19 +113,19 @@ export function ProjectNavigation() {
           event.preventDefault(); if (busy) return
           const name = String(new FormData(event.currentTarget).get('name')).trim()
           setBusy(true); setError('')
-          try { await api.createKnowledgeBase({ name }); refresh(); setCreateOpen(false) } catch (failure) { setError(errorMessage(failure)); report(failure) } finally { setBusy(false) }
+          try { await api.createKnowledgeBase({ name }); refresh('libraries', 'overview'); setCreateOpen(false) } catch (failure) { setError(errorMessage(failure)); report(failure) } finally { setBusy(false) }
         }}><Input label="项目名称" name="name" required maxLength={200} />{error && <p className="error-text" role="alert">{error}</p>}<Button type="submit" loading={busy}>创建项目</Button></form>
       </DialogContent>
     </Dialog>
     <ConversationDialogs
       target={dialogTarget}
       onClose={() => setDialogTarget(null)}
-      onRenamed={() => refresh()}
-      onArchived={() => refresh()}
+      onRenamed={() => refresh('conversations', 'messages')}
+      onArchived={() => refresh('conversations', 'overview')}
       onBeforeDelete={(deletedId) => chat?.evictConversation?.(deletedId)}
       onDeleted={(deletedId) => {
         chat?.evictConversation?.(deletedId)
-        refresh()
+        refresh('conversations', 'overview')
         if (pathname === `/chat/${deletedId}`) void navigate('/', { replace: true })
       }}
       report={report}
@@ -135,7 +135,7 @@ export function ProjectNavigation() {
 }
 
 function ProjectFolder({ kb, openDialog }: { kb: KnowledgeBase; openDialog: (target: ConversationDialogTarget) => void }) {
-  const { user, revision, refresh, report, notify } = useWorkspace()
+  const { user, revisions, refresh, report, notify } = useWorkspace()
   const [open, setOpen] = useDisclosurePreference(`knowloop:${user!.id}:project:${kb.id}`, false)
   const [page, setPage] = useState<Page<Conversation> | null>(null)
   const [error, setError] = useState('')
@@ -150,7 +150,7 @@ function ProjectFolder({ kb, openDialog }: { kb: KnowledgeBase; openDialog: (tar
     setPage(null); setError('')
     void api.conversations(undefined, kb.id).then((value) => { if (current) setPage(value) }, (failure) => { if (current) { setError(errorMessage(failure)); report(failure) } })
     return () => { current = false }
-  }, [open, kb.id, revision, attempt])
+  }, [open, kb.id, revisions.conversations, attempt])
   async function createConversation() {
     if (createPending.current) return
     createPending.current = true
@@ -158,7 +158,7 @@ function ProjectFolder({ kb, openDialog }: { kb: KnowledgeBase; openDialog: (tar
     try {
       const row = await api.createConversation({ project_knowledge_base_id: kb.id })
       setOpen(true)
-      refresh()
+      refresh('conversations', 'overview')
       void navigate(`/chat/${row.id}`)
     } catch (failure) {
       report(failure)

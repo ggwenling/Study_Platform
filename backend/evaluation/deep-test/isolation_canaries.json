@@ -1,0 +1,26 @@
+[
+  {
+    "id": "ISO-01",
+    "area": "auth_isolation",
+    "description": "用户A不得读取用户B知识库素材元数据",
+    "severity": "P0",
+    "review_status": "synthetic_not_human_curated",
+    "automated": "backend/tests/integration/test_material_api.py (pattern)"
+  },
+  {
+    "id": "ISO-02",
+    "area": "rag_isolation",
+    "description": "用户A检索不得返回NIGHTJAR-3",
+    "severity": "P0",
+    "review_status": "synthetic_not_human_curated",
+    "automated": "MOCK: deep-test/harness/run_offline_gate.py --label integration"
+  },
+  {
+    "id": "ISO-03",
+    "area": "ssrf",
+    "description": "模型连接测试仅允许 mock 本地目标",
+    "severity": "P0",
+    "review_status": "synthetic_not_human_curated",
+    "automated": "BLOCKED until dedicated SSRF mock server"
+  }
+]

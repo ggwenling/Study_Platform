@@ -43,7 +43,8 @@ function draftsFor(userId: string): DraftMap {
         if (!row || typeof row !== 'object' || !Number.isFinite(row.updatedAt)) continue
         drafts[id] = {
           text: typeof row.text === 'string' ? row.text : '',
-          libraryId: typeof row.libraryId === 'string' ? row.libraryId : undefined,
+          libraryId: typeof row.libraryId === 'string' && (id !== 'home' || row.text || row.scoped === true)
+            ? row.libraryId : undefined,
           materialIds: Array.isArray(row.materialIds) ? row.materialIds.filter((item) => typeof item === 'string') : [],
           scoped: row.scoped === true,
           supplement: row.supplement === true,
@@ -72,7 +73,10 @@ export function clearAcceptedChatDraftText(userId: string | undefined, conversat
   if (!userId) return
   const draftId = conversationId ?? 'home'
   const draft = draftsFor(userId)[draftId]
-  if (draft && draft.text === sentText) writeDraft(userId, draftId, { ...draft, text: '' })
+  if (draft && draft.text === sentText) {
+    const scope = conversationId ? {} : { libraryId: undefined, materialIds: [], scoped: false, scopeRequired: false }
+    writeDraft(userId, draftId, { ...draft, ...scope, text: '' })
+  }
 }
 
 export function clearAllChatDrafts(keepUserId?: string) {

@@ -101,11 +101,36 @@ def ensure_ooxml_uncompressed_limit(path):
             raise ValueError("OOXML uncompressed payload too large")
 
 
-def extract_docx(path, *, legacy_columns=False):
+def extract_docx(path, *, legacy_columns=False, group_table_rows=False):
     ensure_ooxml_uncompressed_limit(path)
     from docx import Document
+    from docx.oxml.ns import qn
     from docx.table import Table
     from docx.text.paragraph import Paragraph
+
+    def _row_has_nested_table(row, seen_cells):
+        for cell in row.cells:
+            if cell._tc in seen_cells:
+                continue
+            for item in cell.iter_inner_content():
+                if isinstance(item, Table):
+                    return True
+        return False
+
+    def _flat_row_cells(row, columns_before, seen_cells):
+        cells = []
+        for column_number, cell in enumerate(row.cells, columns_before + 1):
+            if cell._tc in seen_cells:
+                continue
+            seen_cells.add(cell._tc)
+            parts = [
+                item.text.strip()
+                for item in cell.iter_inner_content()
+                if isinstance(item, Paragraph) and item.text.strip()
+            ]
+            if parts:
+                cells.append((column_number, " ".join(parts)))
+        return cells
 
     def blocks(container, table_path=()):
         paragraph_number = table_number = 0
@@ -123,10 +148,33 @@ def extract_docx(path, *, legacy_columns=False):
             elif isinstance(block, Table):
                 table_number += 1
                 seen_cells = set()
+                headers: dict[int, str] = {}
                 for row_number, row in enumerate(block.rows, 1):
                     columns_before = 0 if legacy_columns else row.grid_cols_before
                     if columns_before < 0:
                         raise ValueError("DOCX table row has a negative leading column count")
+                    if group_table_rows and not _row_has_nested_table(row, seen_cells):
+                        row_cells = _flat_row_cells(row, columns_before, seen_cells)
+                        if not row_cells:
+                            continue
+                        row_locator = {
+                            "table_path": [*table_path, {"table": table_number, "row": row_number}]
+                        }
+                        if row_number == 1 and any(
+                            flag.get(qn("w:val"), "true") in {"1", "true", "on"}
+                            for flag in row._tr.xpath("./w:trPr/w:tblHeader")
+                        ):
+                            headers = {col: text for col, text in row_cells}
+                            yield " | ".join(text for _, text in row_cells), row_locator
+                        elif headers:
+                            formatted = " | ".join(
+                                f"{headers[col]}：{text}" if col in headers else text
+                                for col, text in row_cells
+                            )
+                            yield formatted, row_locator
+                        else:
+                            yield " | ".join(text for _, text in row_cells), row_locator
+                        continue
                     for column_number, cell in enumerate(row.cells, columns_before + 1):
                         if cell._tc in seen_cells:
                             continue
@@ -271,20 +319,58 @@ def extract_pptx(path, version=None):
             yield notes, {"slide": slide_no, "notes": True}
 
 
-def extract(version, output_dir, phase):
+def extract_text(path):
+    lines = []
+    start = end = 0
+    with path.open(encoding="utf-8-sig") as stream:
+        for number, raw in enumerate(stream, 1):
+            segments = raw.rstrip("\r\n").split("\f")
+            for index, segment in enumerate(segments):
+                if segment.strip():
+                    if not lines:
+                        start = number
+                    end = number
+                    lines.append(segment)
+                if lines and (not segment.strip() or index + 1 < len(segments)):
+                    locator = {"line": start} if start == end else {"start_line": start, "end_line": end}
+                    yield "\n".join(lines).strip(), locator
+                    lines.clear()
+    if lines:
+        locator = {"line": start} if start == end else {"start_line": start, "end_line": end}
+        yield "\n".join(lines).strip(), locator
+
+
+def extract(
+    version,
+    output_dir,
+    phase,
+    pipeline_profile=None,
+    *,
+    path=None,
+    settings=None,
+    force_pdf_ocr=False,
+    page_progress=None,
+):
     """Yield text with original page/paragraph/line locators."""
-    settings = get_settings()
-    path = source_path(version.id)
+    settings = settings if settings is not None else get_settings()
+    path = path if path is not None else source_path(version.id)
     mime = version.source_mime
     if mime == "text/plain":
-        with path.open(encoding="utf-8-sig") as f:
-            for number, line in enumerate(f, 1):
-                if line.strip():
-                    yield line.strip(), {"line": number}
+        profile = chunking.resolve_pipeline_profile(pipeline_profile)
+        if profile == chunking.SEMANTIC_V4_PROFILE:
+            yield from chunking.plain_text_units(path.read_text(encoding="utf-8-sig"), profile)
+        else:
+            with path.open(encoding="utf-8-sig") as f:
+                for number, line in enumerate(f, 1):
+                    if line.strip():
+                        yield line.strip(), {"line": number}
     elif mime == "text/markdown":
         yield from extract_markdown(path)
     elif mime.endswith("wordprocessingml.document"):
-        yield from extract_docx(path)
+        profile = chunking.resolve_pipeline_profile(pipeline_profile)
+        yield from extract_docx(
+            path, group_table_rows=(profile == chunking.SEMANTIC_V4_PROFILE)
+        )
     elif mime.endswith("presentationml.presentation"):
         yield from extract_pptx(path, version)
     elif mime == "application/pdf":
@@ -295,11 +381,16 @@ def extract(version, output_dir, phase):
         try:
             with PDFIUM_LOCK:
                 page_count = len(doc)
-            if page_count > settings.max_pdf_pages or page_count == 0:
+            if page_count > settings.max_pdf_pages:
+                raise ApiError(422, "pdf_page_limit", f"PDF 超过 {settings.max_pdf_pages} 页。")
+            if page_count == 0:
                 raise ValueError("Invalid PDF page count")
             version.page_count = page_count
             for number in range(1, page_count + 1):
-                phase("parsing")
+                if page_progress is None:
+                    phase("parsing")
+                else:
+                    page_progress(number - 1, page_count)
                 with PDFIUM_LOCK:
                     page = doc[number - 1]
                     try:
@@ -309,7 +400,7 @@ def extract(version, output_dir, phase):
                         finally:
                             textpage.close()
                         effective_len = effective_char_count(text)
-                        should_ocr = effective_len < settings.pdf_ocr_min_effective_chars or (
+                        should_ocr = force_pdf_ocr or effective_len < settings.pdf_ocr_min_effective_chars or (
                             effective_len < settings.pdf_ocr_image_page_max_chars
                             and _has_large_image(page, pdfium)
                         )
@@ -340,7 +431,7 @@ def extract(version, output_dir, phase):
                             ocr_text = "\n".join(line["text"] for line in lines)
                             ocr_effective_len = effective_char_count(ocr_text)
                             use_ocr = ocr_effective_len > 0 and (
-                                effective_len == 0 or ocr_effective_len
+                                force_pdf_ocr or effective_len == 0 or ocr_effective_len
                                 >= max(int(effective_len * 1.5), effective_len + 20)
                             )
                         except (LostLease, DBAPIError):
@@ -445,6 +536,8 @@ def update_phase(db, job_id, fence, phase, **details):
     job = locked_job(db, job_id, fence)
     job.result = {**job.result, "phase": phase, **details}
     job.progress = {"parsing": 10, "ocr": 30, "vision": 30, "indexing": 60}[phase]
+    if phase in ("parsing", "ocr") and job.result.get("total_pages"):
+        job.progress = 10 + 45 * job.result["processed_pages"] // job.result["total_pages"]
     job.lease_expires_at = now() + timedelta(seconds=get_settings().job_lease_seconds)
     owner_id = job.owner_user_id
     db.commit()
@@ -508,7 +601,12 @@ def run_once(claimed=None):
                     update_phase(db, job_id, fence, phase)
 
                 parser_profile = "document-v1"
-                pipeline = chunking.SEMANTIC_PROFILE
+                try:
+                    pipeline = chunking.resolve_pipeline_profile(
+                        (job.payload or {}).get("pipeline_profile")
+                    )
+                except ValueError:
+                    raise ApiError(422, "pipeline_profile_unknown", "未知的索引切分配置。") from None
                 if job.payload.get("extraction_mode") == "vlm":
                     if not vision:
                         raise ApiError(409, "vision_not_configured", "当前任务没有就绪的视觉模型连接。")
@@ -517,11 +615,19 @@ def run_once(claimed=None):
                         source_path(version.id), version.source_mime, phase_changed, owner=owner, saved=vision,
                     )
                 else:
-                    extracted = list(extract(version, staging, phase_changed))
+                    options = {}
+                    if version.source_mime == "application/pdf":
+                        options["page_progress"] = lambda processed, total: update_phase(
+                            db, job_id, fence, "parsing", processed_pages=processed, total_pages=total,
+                        )
+                    extracted = list(extract(version, staging, phase_changed, pipeline, **options))
                     page_count = version.page_count
                 if not extracted:
                     raise ApiError(422, "no_text_extracted", "未提取到可用文字")
-                update_phase(db, job_id, fence, "indexing", parsed=True,
+                pdf_progress = {"processed_pages": page_count, "total_pages": page_count} if (
+                    page_count and version.source_mime == "application/pdf"
+                ) else {}
+                update_phase(db, job_id, fence, "indexing", parsed=True, **pdf_progress,
                              ocr_count=sum(bool(locator.get("ocr")) for _, locator in extracted))
                 profile = model_connections.embedding_profile(owner)
                 locked_job(db, job_id, fence)
@@ -548,9 +654,9 @@ def run_once(claimed=None):
                 db.commit()
                 index_id = index.id
                 chunk_rows = [
-                    (part, locator, ordinal)
+                    (part, narrowed, ordinal)
                     for ordinal, (text, locator) in enumerate(extracted)
-                    for part in chunking.semantic_chunks(text)
+                    for part, narrowed in chunking.segment_unit(text, locator, pipeline)
                 ]
                 vectors = []
                 for offset in range(0, len(chunk_rows), 20):

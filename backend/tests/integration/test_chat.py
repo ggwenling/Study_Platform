@@ -132,6 +132,42 @@ def test_first_send_idempotency_and_per_conversation_concurrency(chat_db):
     assert "conversation_busy" in results
 
 
+def test_message_history_paginates_backward_and_preserves_the_default_order(chat_db):
+    from study_platform.api.v1.resources import list_messages
+
+    owner = SimpleNamespace(id=chat_db.owner)
+    conversation_id, other_id = uuid4(), uuid4()
+    with chat_db.factory.begin() as db:
+        db.add_all(Conversation(id=id_, owner_user_id=owner.id) for id_ in (conversation_id, other_id))
+        db.flush()
+        db.add_all(
+            Message(conversation_id=conversation_id, role="user", content=str(index),
+                    status="completed", sequence_no=index)
+            for index in range(1, 7)
+        )
+        foreign_cursor = Message(
+            conversation_id=other_id, role="user", content="Other", status="completed", sequence_no=1,
+        )
+        db.add(foreign_cursor)
+        db.flush()
+        foreign_cursor_id = foreign_cursor.id
+
+    with chat_db.factory() as db:
+        first = list_messages(conversation_id, 3, None, db, owner, order="desc")
+        second = list_messages(conversation_id, 3, first["next_cursor"], db, owner, order="desc")
+        assert [row["sequence_no"] for row in first["items"]] == [6, 5, 4]
+        assert [row["sequence_no"] for row in second["items"]] == [3, 2, 1]
+        assert second["next_cursor"] is None
+        ascending = list_messages(conversation_id, 3, None, db, owner)
+        assert [row["sequence_no"] for row in ascending["items"]] == [1, 2, 3]
+        with pytest.raises(ApiError) as error:
+            list_messages(conversation_id, 3, foreign_cursor_id, db, owner, order="desc")
+        assert error.value.code == "invalid_cursor"
+        with pytest.raises(ApiError) as error:
+            list_messages(conversation_id, 3, None, db, SimpleNamespace(id=chat_db.outsider), order="desc")
+        assert error.value.status_code == 404
+
+
 def test_chunk_query_rejects_foreign_owner_index(chat_db):
     s = chat_db
     evidence = seed_evidence(s)
@@ -853,6 +889,34 @@ def test_provider_stream_failure_preserves_partial_and_error_event(chat_db, monk
     state = chat.turn(s.owner, conversation_for(s, run), run)
     assert state["status"] == "failed"
     assert state["messages"][-1]["content"] == "Partial answer"
+    assert state["messages"][-1]["failure_stage"] == "generation"
+
+
+def test_embedding_failure_keeps_original_model_snapshots_for_retry(chat_db, monkeypatch):
+    s = chat_db
+
+    def failed_retrieval(*_args, **_kwargs):
+        raise ApiError(504, "model_timeout", "Test timeout", retryable=True)
+
+    monkeypatch.setattr(chat, "retrieve", failed_retrieval)
+    run, fence, _ = chat.prepare(s.owner, request(s.kb_a), uuid4().hex)
+    conversation = conversation_for(s, run)
+
+    async def consume():
+        return [event async for event in chat.stream(s.owner, run, fence)]
+
+    assert any("event: error" in item and "model_timeout" in item for item in asyncio.run(consume()))
+    state = chat.turn(s.owner, conversation, run)
+    assert state["error_code"] == "model_timeout"
+    assert state["messages"][-1]["failure_stage"] == "retrieval"
+    with s.factory() as db:
+        saved_scope = db.get(AiWorkflowRun, run).source_scope
+    retried, _, replay = chat.retry(s.owner, conversation, run)
+    assert retried == run and not replay
+    with s.factory() as db:
+        new_scope = db.get(AiWorkflowRun, run).source_scope
+    assert new_scope == {key: value for key, value in saved_scope.items() if key != "failure_stage"}
+    assert chat.turn(s.owner, conversation, run)["messages"][-1]["failure_stage"] is None
 
 
 def test_cancel_during_actual_stream_fences_late_tokens(chat_db, monkeypatch):

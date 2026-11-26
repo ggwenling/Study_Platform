@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { api, editTurn, retryTurn, streamChat } from '@/api/client'
+import { ApiError } from '@/api/stream'
 import type { ChatPhase, ChatRequest, Citation, Message, Scope, Turn } from '@/api/types'
 
 type Active = { conversationId: string; turnId: string; assistantId: string; phase: ChatPhase | null }
@@ -8,11 +9,12 @@ type Pending = { body: ChatRequest; key: string }
 type Recovery = { conversationId: string; abort: AbortController; promise: Promise<void> }
 type RunAction =
   | { kind: 'send'; request: Pending }
-  | { kind: 'retry'; conversationId: string; turnId: string }
+  | { kind: 'retry'; conversationId: string; turnId: string; useCurrentModel?: boolean }
   | { kind: 'edit'; conversationId: string; turnId: string; content: string }
 
 const homeKey = '__new__'
 const terminal = (status: string) => ['completed', 'failed', 'stopped', 'cancelled'].includes(status)
+const selectionErrors = new Set(['chat_model_unavailable', 'model_test_required', 'model_connection_kind_mismatch'])
 
 function turnMessages(turn: Turn): Message[] {
   const status = turn.status === 'cancelled' ? 'stopped' : turn.status
@@ -50,8 +52,18 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
   const [acceptedMessages, setAcceptedMessages] = useState<Record<string, Message[]>>({})
   const [pendingByConversation, setPendingByConversation] = useState<Record<string, Pending>>({})
   const [recoveryErrors, setRecoveryErrors] = useState<Record<string, boolean>>({})
+  const [selectionFailures, setSelectionFailures] = useState<Record<string, string>>({})
   const callbacks = useRef({ refresh, report })
   callbacks.current = { refresh, report }
+
+  function clearSelectionFailure(key: string) {
+    setSelectionFailures((current) => {
+      if (!(key in current)) return current
+      const next = { ...current }
+      delete next[key]
+      return next
+    })
+  }
 
   useEffect(() => () => {
     for (const controller of controllers.current.values()) controller.abort()
@@ -169,6 +181,7 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
     const waiting = pendingByConversation[startKey]
     if (waiting && (!request || waiting.key !== request.key)) return false
 
+    clearSelectionFailure(startKey)
     const abort = new AbortController()
     let operationKey = startKey
     controllers.current.set(operationKey, abort)
@@ -274,7 +287,9 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
 
     try {
       const events = action.kind === 'retry'
-        ? retryTurn(action.conversationId, action.turnId, abort.signal)
+        ? action.useCurrentModel
+          ? retryTurn(action.conversationId, action.turnId, abort.signal, true)
+          : retryTurn(action.conversationId, action.turnId, abort.signal)
         : action.kind === 'edit'
           ? editTurn(action.conversationId, action.turnId, action.content, abort.signal)
           : streamChat(action.request.body, action.request.key, abort.signal)
@@ -341,7 +356,9 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
       if (abort.signal.aborted) return Boolean(current)
       if (controllers.current.get(operationKey) !== abort) return true
       phase(null)
-      callbacks.current.report(error)
+      if (!current && error instanceof ApiError && selectionErrors.has(error.code)) {
+        setSelectionFailures((previous) => ({ ...previous, [startKey]: error.message }))
+      } else callbacks.current.report(error)
       if (current) {
         const recovery = startRecovery(current.conversationId, current.turnId, acceptedAction)
         const cancel = () => recovery.abort.abort()
@@ -414,7 +431,10 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
     activeFor: (conversationId?: string) => activeByConversation[conversationId ?? homeKey] ?? null,
     isBusy: (conversationId?: string) => Boolean(busyByConversation[conversationId ?? homeKey]),
     pendingFor: (conversationId?: string) => pendingByConversation[conversationId ?? homeKey] ?? null,
+    selectionFailureFor: (conversationId?: string) => selectionFailures[conversationId ?? homeKey],
+    clearSelectionFailure: (conversationId?: string) => clearSelectionFailure(conversationId ?? homeKey),
     evictConversation: (conversationId: string) => {
+      clearSelectionFailure(conversationId)
       const evictedTurns: string[] = []
       for (const [turnId, recovery] of recoveries.current.entries()) {
         if (recovery.conversationId === conversationId) {
@@ -473,7 +493,8 @@ export function useChat(refresh: () => void, report: (error: unknown) => void) {
       const request = pendingByConversation[conversationId ?? homeKey]
       return request ? run({ kind: 'send', request }, onAccepted) : Promise.resolve(false)
     },
-    retry: (conversationId: string, turnId: string) => run({ kind: 'retry', conversationId, turnId }),
+    retry: (conversationId: string, turnId: string, useCurrentModel?: boolean) =>
+      run({ kind: 'retry', conversationId, turnId, useCurrentModel }),
     edit: (conversationId: string, turnId: string, content: string, onAccepted?: () => void) =>
       run({ kind: 'edit', conversationId, turnId, content }, onAccepted),
   }

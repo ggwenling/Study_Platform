@@ -10,6 +10,8 @@ import { useWorkspace } from '../WorkspaceData'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
 import { useDisclosurePreference } from '../useDisclosurePreference'
 
+const compactOverviewQuery = '(max-width: 1080px)'
+
 const shortcuts = [
   { label: '基于资料提问', description: '从知识库查找答案', icon: MessageCircle },
   { label: '总结与提炼', description: '整理重点，提炼要点', icon: FileText },
@@ -63,21 +65,41 @@ export function Home() {
     void navigate(location.pathname + location.search + location.hash, { replace: true, state: null })
   }, [location.pathname, location.search, location.hash, navigate])
   const composer = useRef<ComposerHandle>(null)
-  const { overview, user, loading, requireLogin } = useWorkspace()
-  const [panelOpen, setPanelOpen] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:overview`, true)
+  const [modelId, setModelId] = useState<string | null>(null)
+  const { overview, user, capabilities, loading, requireLogin } = useWorkspace()
+  const [desktopPanelOpen, setDesktopPanelOpen] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:overview`, true)
+  const [compact, setCompact] = useState(() => window.matchMedia(compactOverviewQuery).matches)
+  const [compactPanelOpen, setCompactPanelOpen] = useState(false)
+  const panelOpen = compact ? compactPanelOpen : desktopPanelOpen
+  const setPanelOpen = compact ? setCompactPanelOpen : setDesktopPanelOpen
+  const [showModelSetup, setShowModelSetup] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:model-setup`, true)
   const panelContent = useRef<HTMLDivElement>(null)
+  const panelToggle = useRef<HTMLButtonElement>(null)
   const [panelWidth, setPanelWidth] = useState(224)
+  useEffect(() => {
+    const media = window.matchMedia(compactOverviewQuery)
+    const update = () => setCompact(media.matches)
+    media.addEventListener('change', update)
+    update()
+    return () => media.removeEventListener('change', update)
+  }, [])
   useLayoutEffect(() => {
+    if (compact) return
     const node = panelContent.current!
     const measure = () => setPanelWidth(node.getBoundingClientRect().width)
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(node)
     return () => observer.disconnect()
-  }, [])
+  }, [compact])
 
   return (
-    <div className="home" data-overview={panelOpen}>
+    <div className="home" onKeyDown={(event) => {
+      if (event.defaultPrevented || event.key !== 'Escape' || !compact || !panelOpen) return
+      event.preventDefault()
+      if (panelContent.current?.contains(document.activeElement)) panelToggle.current?.focus()
+      setCompactPanelOpen(false)
+    }}>
       <div className="home-hero">
         <HomeOrbit />
         <div className="home-content">
@@ -85,8 +107,15 @@ export function Home() {
             <h1>欢迎使用 知循</h1>
             <p>你的个人多知识库 RAG 工具，基于自己的资料获得更可靠的答案与洞察。</p>
           </header>
+          {user && capabilities?.has_personal_models === false && showModelSetup && <section className="home-model-setup" aria-labelledby="home-model-setup-title">
+            <div><h2 id="home-model-setup-title">接入你的模型</h2><p>从供应商预设开始，配置聊天、向量、视觉和重排模型。</p></div>
+            <div><Link to="/settings?configure=models">开始配置</Link>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setShowModelSetup(false)}>暂时跳过</Button></div>
+          </section>}
           <Composer
             ref={composer}
+            modelId={modelId}
+            onModelChange={setModelId}
             preferredLibrary={navState?.preferredLibrary}
             initialDraft={navState?.initialDraft}
             initialMaterialIds={navState?.initialMaterialIds}
@@ -112,9 +141,9 @@ export function Home() {
           </div>
         </div>
       </div>
-      <motion.aside initial={false} animate={{ width: panelOpen ? panelWidth : 36 }} transition={{ duration: reduced ? 0 : .28, ease: [.22, 1, .36, 1] }} className="home-panel" aria-label="资料概况">
-        <Button className="overview-toggle" variant="ghost" size="sm" aria-label={panelOpen ? '收起资料概况' : '展开资料概况'} aria-expanded={panelOpen} aria-controls="home-overview" onClick={() => setPanelOpen(!panelOpen)}><PanelRight size={18} /></Button>
-        <motion.div ref={panelContent} className="home-panel-inner" id="home-overview" inert={!panelOpen} aria-hidden={!panelOpen} initial={false} animate={{ opacity: panelOpen ? 1 : 0, x: panelOpen ? 0 : 12 }} transition={{ duration: reduced ? 0 : .2 }}>
+      <motion.aside initial={false} animate={{ width: compact ? '100%' : panelOpen ? panelWidth : 46 }} transition={{ duration: compact || reduced ? 0 : .28, ease: [.22, 1, .36, 1] }} className="home-panel" aria-label="资料概况">
+        <Button ref={panelToggle} className="overview-toggle" variant="ghost" size="sm" aria-label={panelOpen ? '收起资料概况' : '展开资料概况'} aria-expanded={panelOpen} aria-controls="home-overview" onClick={() => setPanelOpen(!panelOpen)}><PanelRight size={18} />{compact && <span>资料概况</span>}</Button>
+        <motion.div ref={panelContent} className="home-panel-inner" id="home-overview" hidden={compact && !panelOpen} inert={!panelOpen} aria-hidden={!panelOpen} initial={false} animate={{ opacity: panelOpen ? 1 : 0, x: panelOpen || compact ? 0 : 12 }} transition={{ duration: compact || reduced ? 0 : .2 }}>
         <section>
           <h2><Link to="/history">资料活动 <ChevronRight size={16} /></Link></h2>
           {overview?.activity.some((day) => day.count > 0)

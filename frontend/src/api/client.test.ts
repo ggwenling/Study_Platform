@@ -38,6 +38,51 @@ describe('chat stream', () => {
 })
 
 describe('HTTP client', () => {
+  it('shares material reads while cancelling each caller independently', async () => {
+    let finish!: (response: Response) => void
+    const pending = new Promise<Response>((resolve) => { finish = resolve })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(auth('access'))
+      .mockReturnValueOnce(pending)
+      .mockResolvedValueOnce(Response.json({ items: [], next_cursor: null }))
+    vi.stubGlobal('fetch', fetchMock)
+    await api.login({ email: 'a', password: 'b' })
+    const firstController = new AbortController()
+    const first = api.materials('kb', undefined, firstController.signal)
+    const second = api.materials('kb')
+    firstController.abort()
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[1][1].signal.aborted).toBe(false)
+    finish(Response.json({ items: [{ id: 'material' }], next_cursor: null }))
+    await expect(second).resolves.toMatchObject({ items: [{ id: 'material' }] })
+    await expect(api.materials('kb')).resolves.toMatchObject({ items: [] })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('shares conversation reads within a revision and rejects a late response after account switch', async () => {
+    let finish!: (response: Response) => void
+    const previous = new Promise<Response>((resolve) => { finish = resolve })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(auth('access'))
+      .mockReturnValueOnce(previous)
+      .mockResolvedValueOnce(Response.json({ items: [{ id: 'fresh' }], next_cursor: null }))
+      .mockResolvedValueOnce(Response.json({ user: { id: 'other' }, access_token: 'other-token', csrf_token: 'other-csrf' }))
+      .mockResolvedValueOnce(Response.json({ items: [{ id: 'other-account' }], next_cursor: null }))
+    vi.stubGlobal('fetch', fetchMock)
+    await api.login({ email: 'a', password: 'b' })
+    const first = api.conversations()
+    const second = api.conversations()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    api.invalidateWorkspaceReads(['conversations'])
+    await expect(api.conversations()).resolves.toMatchObject({ items: [{ id: 'fresh' }] })
+    await api.login({ email: 'other', password: 'b' })
+    await expect(api.conversations()).resolves.toMatchObject({ items: [{ id: 'other-account' }] })
+    finish(Response.json({ items: [{ id: 'previous-account' }], next_cursor: null }))
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(second).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
   it('does not restore a session from a refresh completed after logout', async () => {
     vi.stubGlobal('document', { cookie: 'study_csrf=token' })
     let finish!: (response: Response) => void

@@ -166,7 +166,7 @@ beforeEach(() => {
     notify: vi.fn(),
     report: vi.fn(),
     refresh: vi.fn(),
-    revision: 0,
+    revisions: { notes: 0, learning: 0, materials: 0 },
     aiJobs: { jobs: [], track: vi.fn(), cancel: vi.fn() },
   }
   vi.mocked(api.materials).mockResolvedValue({ items: readyMaterials, next_cursor: null })
@@ -235,7 +235,7 @@ describe('Studio notes & Flashcard SM-2 review', () => {
     await render(renderStudio())
     expect(api.studio.notes).not.toHaveBeenCalled()
 
-    workspace.value.revision += 1
+    workspace.value.revisions.notes += 1
     await render(renderStudio())
 
     expect(api.studio.notes).toHaveBeenCalledWith('kb-1', expect.any(AbortSignal))
@@ -252,7 +252,7 @@ describe('Studio notes & Flashcard SM-2 review', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(api.studio.flashcardDecks).toHaveBeenCalledOnce()
 
-    workspace.value.revision += 1
+    workspace.value.revisions.notes += 1
     await render(renderPanel())
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 

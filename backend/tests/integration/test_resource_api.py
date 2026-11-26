@@ -91,6 +91,32 @@ def signup(http):
     return UUID(result.json()["user"]["id"])
 
 
+def test_dashboard_recent_chat_library_uses_turn_scope_and_skips_deleted_libraries(resource_client):
+    http, db = resource_client
+    owner = signup(http)
+    assert http.get("/dashboard/overview").json()["recent_chat_library_id"] is None
+
+    def library(name):
+        return UUID(http.post("/knowledge-bases", json={"name": name}).json()["id"])
+
+    first, latest, unused = (library(name) for name in ("first", "latest", "unused"))
+    conversation = UUID(http.post("/conversations", json={"project_knowledge_base_id": str(first)}).json()["id"])
+    now = datetime.now(UTC)
+    db.add_all([
+        AiWorkflowRun(owner_user_id=owner, conversation_id=conversation, knowledge_base_id=kb,
+                      status="failed", source_scope={"intent": intent}, created_at=now + timedelta(seconds=offset))
+        for kb, intent, offset in ((first, "qa", 0), (latest, "summary", 1), (unused, "other", 2))
+    ])
+    db.commit()
+    assert http.get("/dashboard/overview").json()["recent_chat_library_id"] == str(latest)
+    assert http.delete(f"/knowledge-bases/{latest}").status_code == 204
+    assert http.get("/dashboard/overview").json()["recent_chat_library_id"] == str(first)
+    assert http.delete(f"/conversations/{conversation}").status_code == 204
+    assert http.get("/dashboard/overview").json()["recent_chat_library_id"] is None
+    signup(http)
+    assert http.get("/dashboard/overview").json()["recent_chat_library_id"] is None
+
+
 def test_reader_keeps_historical_index_context_and_caches_pdf_pages(resource_client, tmp_path, monkeypatch):
     http, db = resource_client
     monkeypatch.setenv("STORAGE_DIR", str(tmp_path))
