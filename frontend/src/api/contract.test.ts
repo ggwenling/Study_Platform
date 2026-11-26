@@ -99,6 +99,7 @@ it('publishes the fields consumed by the frontend', () => {
     expect(contract.components.schemas[name]?.required, name).toEqual(expect.arrayContaining(fields))
   }
   const optional = {
+    DashboardDTO: ['recent_chat_library_id'],
     MessageDTO: ['model_profile', 'error_code'],
     ConversationDTO: ['llm_connection_id'],
     CapabilitiesDTO: ['chat_models', 'library_embedding', 'has_personal_models'],

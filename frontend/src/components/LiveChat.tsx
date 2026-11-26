@@ -14,7 +14,6 @@ import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { Textarea } from '@/components/arc/textarea/textarea'
 import { useWorkspace } from '../WorkspaceData'
 import { Composer, type ComposerHandle } from './Composer'
-import { ChatModelSelect } from './ChatModelSelect'
 import { ConversationDialogs, type ConversationDialogTarget } from './ConversationDialogs'
 import { MarkdownContent } from './MarkdownContent'
 import { AssistantActivity, activityLabels } from './AssistantActivity'
@@ -316,8 +315,6 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
         <header className="chat-header">
           <h1>{displayTitle}</h1>
           <span className="pill chat-privacy">仅限个人使用</span>
-          <ChatModelSelect conversationId={id} modelId={conversation ? conversation.llm_connection_id ?? null : undefined}
-            saving={savingModel} onChange={(modelId) => void chooseModel(modelId)} />
           {searchButton}
           <DropdownMenu
             label="会话操作"
@@ -448,6 +445,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
         </div>
         <div className="chat-footer"><Composer ref={composer} conversationId={id}
           modelId={conversation ? conversation.llm_connection_id ?? null : undefined} savingModel={savingModel}
+          onModelChange={(modelId) => void chooseModel(modelId)}
           preferredLibrary={latest?.scope?.knowledge_base_id ?? conversation?.project_knowledge_base_id ?? undefined} /></div>
       </section>
       {mobile ? (

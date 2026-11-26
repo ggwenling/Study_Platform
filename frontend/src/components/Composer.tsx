@@ -14,22 +14,15 @@ import { clearAcceptedChatDraftText, useChatDrafts } from '../useChatDrafts'
 import { useWorkspace } from '../WorkspaceData'
 import { Button } from '@/components/arc/button/button'
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
-import { Select } from '@/components/arc/select/select'
 import { Tooltip } from '@/components/arc/tooltip/tooltip'
 import { FadingTextarea } from './FadingTextarea'
 import { CurrentMaterials } from './CurrentMaterials'
 import { PasteTextDialog } from './PasteTextDialog'
 import { WebClipDialog } from './WebClipDialog'
 import { FileImportDialog, useFileImport } from './FileImportDialog'
+import { ChatModelSelect } from './ChatModelSelect'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { Input } from '@/components/arc/input/input'
-
-const demoLibrary = [{ value: 'product', label: '产品资料库' }]
-const emptyLibrary = [{ value: 'empty', label: '暂无可用知识库', disabled: true }]
-
-function libraryButtonLabel(name: string) {
-  return name.replace(/^【(?:演示|模拟)】\s*/, '') || name
-}
 
 export type ComposerHandle = {
   focus: () => void
@@ -38,11 +31,12 @@ export type ComposerHandle = {
   editAsNew: (content: string, scope: Scope | null) => void
 }
 
-export function Composer({ demo = false, conversationId, modelId, savingModel,
+export function Composer({ demo = false, conversationId, modelId, onModelChange, savingModel,
   preferredLibrary, initialDraft, initialMaterialIds, onInitialDraftApplied, ref }: {
   demo?: boolean
   conversationId?: string
   modelId?: string | null
+  onModelChange?: (id: string | null) => void
   savingModel?: boolean
   preferredLibrary?: string
   initialDraft?: string
@@ -50,7 +44,7 @@ export function Composer({ demo = false, conversationId, modelId, savingModel,
   onInitialDraftApplied?: () => void
   ref?: Ref<ComposerHandle>
 }) {
-  const { user, libraries, capabilities, chat, notify, report, requireLogin, refresh, uploadQueue } = useWorkspace()
+  const { user, libraries, overview, loading, capabilities, chat, notify, report, requireLogin, refresh, uploadQueue } = useWorkspace()
   const { lastUploaded } = uploadQueue
   const uploadAtMount = useRef(lastUploaded)
   const { value: draftState, setValue: setDraftState } = useChatDrafts(demo ? undefined : user?.id, conversationId)
@@ -70,14 +64,20 @@ export function Composer({ demo = false, conversationId, modelId, savingModel,
   const form = useRef<HTMLFormElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const imageInput = useRef<HTMLInputElement>(null)
-  const libraryControl = useRef<HTMLButtonElement>(null)
+  const modelControl = useRef<HTMLButtonElement>(null)
   const reducedMotion = useReducedMotion() ?? false
   const enableMetal = !reducedMotion
-  const requestedLibrary = draftState.scopeRequired ? undefined : draftState.libraryId || preferredLibrary
-  const currentLibrary = requestedLibrary
+  const requestedLibrary = draftState.libraryId || preferredLibrary
+  const recentLibrary = conversationId ? undefined : overview?.recent_chat_library_id
+  const loadingLibrary = Boolean(!requestedLibrary && !conversationId && overview == null && loading)
+  const defaultLibrary = preferredLibrary ? libraries.find((library) => library.id === preferredLibrary)
+    : libraries.find((library) => library.id === recentLibrary) ?? libraries[0]
+  const currentLibrary = draftState.scopeRequired || loadingLibrary ? undefined : requestedLibrary
     ? libraries.find((library) => library.id === requestedLibrary)
-    : draftState.scopeRequired ? undefined : libraries[0]
+    : defaultLibrary
   const libraryId = currentLibrary?.id
+  const scopeIssue = draftState.scopeRequired ? '历史问题缺少可恢复的资料范围。'
+    : !loading && requestedLibrary && !libraryId ? '原知识库不可用。' : undefined
   const models = capabilities?.chat_models
   const accountDefault = models?.find((model) => model.is_default)
   const explicitModel = models?.find((model) => model.id === modelId)
@@ -93,7 +93,7 @@ export function Composer({ demo = false, conversationId, modelId, savingModel,
   ))
   const active = demo ? null : chat.activeFor(conversationId)
   const pending = !demo && chat.pendingFor(conversationId)
-  const sendDisabled = !draft.trim() || (!demo && (savingModel || awaitingModel || chat.isBusy(conversationId)))
+  const sendDisabled = !draft.trim() || (!demo && (savingModel || awaitingModel || loadingLibrary || chat.isBusy(conversationId)))
 
   useEffect(() => {
     if (!initialDraft || !user) return
@@ -124,11 +124,12 @@ export function Composer({ demo = false, conversationId, modelId, savingModel,
   function submit() {
     const sentText = draft
     const content = sentText.trim()
-    if (!content || savingModel || awaitingModel) return
+    if (!content || savingModel || awaitingModel || loadingLibrary) return
     if (demo) return notify('这是示例会话。请从首页发起真实问答。')
     if (!user) return requireLogin()
-    if (draftState.scopeRequired) return notify('请先显式选择知识库，再决定是否限定资料范围。')
-    if (requestedLibrary && !currentLibrary) return notify('原知识库不可用，请重新选择知识库。')
+    if (draftState.scopeRequired || (requestedLibrary && !currentLibrary)) {
+      return notify('请先确认本轮使用的资料范围。')
+    }
     if (!libraryId) return notify('请先创建或选择知识库。')
     if (modelReady === false) return notify('请选择可用的文本模型，或前往设置修复连接。')
     if (embeddingReady === false) return notify('当前知识库的向量模型不可用，请检查知识库绑定。')
@@ -231,9 +232,13 @@ export function Composer({ demo = false, conversationId, modelId, savingModel,
         submit()
       }}
     >
-      {!demo && user && libraries.length === 0 && <Button type="button" variant="ghost" size="sm" onClick={() => { setCreateError(''); setCreating(true) }}>创建知识库并导入资料</Button>}
-      {!demo && draftState.scopeRequired && <p className="composer-hint">历史问题没有可恢复的知识库范围，请显式选择知识库。</p>}
-      {!demo && requestedLibrary && !libraryId && <p className="composer-hint">原知识库不可用，请重新选择。</p>}
+      {!demo && user && !loading && libraries.length === 0 && <Button type="button" variant="ghost" size="sm" onClick={() => { setCreateError(''); setCreating(true) }}>创建知识库并导入资料</Button>}
+      {!demo && scopeIssue && <p className="composer-hint">
+        {scopeIssue}
+        {defaultLibrary && !loadingLibrary
+          ? <Button type="button" variant="ghost" size="sm" onClick={() => chooseLibrary(defaultLibrary.id)}>使用「{defaultLibrary.name}」的资料</Button>
+          : '请从知识库项目发起新对话。'}
+      </p>}
       {!demo && modelIssue && <p className="composer-hint" role="status">{modelIssue} 可切换模型或 <Link to="/settings#model-settings-title">检查并测试连接</Link>。</p>}
       {!demo && embeddingReady === false && <p className="composer-hint" role="status">当前知识库的向量模型不可用，请检查知识库绑定。</p>}
       {dragging && <p className="composer-hint" role="status">松开鼠标，将文件导入当前知识库</p>}
@@ -299,17 +304,8 @@ export function Composer({ demo = false, conversationId, modelId, savingModel,
               <Globe size={18} aria-hidden="true" />
             </Button>
           </Tooltip>
-          <Select
-            ref={libraryControl}
-            label="知识库"
-            className="composer-select"
-            formatValue={libraryButtonLabel}
-            valueAlign="center"
-            options={demo ? demoLibrary : libraries.length ? libraries.map(({ id, name }) => ({ value: id, label: name })) : emptyLibrary}
-            value={demo ? 'product' : libraryId ?? ''}
-            onValueChange={chooseLibrary}
-            placeholder="选知识库"
-          />
+          {!demo && onModelChange && <ChatModelSelect modelId={modelId} conversationId={conversationId}
+            saving={savingModel} onChange={onModelChange} triggerRef={modelControl} />}
         </div>
         {enableMetal ? (
           <Suspense fallback={
@@ -317,7 +313,7 @@ export function Composer({ demo = false, conversationId, modelId, savingModel,
               {active ? <Button type="button" variant="secondary" className="send-button" aria-label="停止生成" onClick={() => void chat.stop(active.conversationId, active.turnId)}><Square size={16} /></Button> : <Button type="submit" variant="secondary" className="send-button" aria-label="发送" disabled={sendDisabled}><ArrowUp size={21} /></Button>}
             </div>
           }>
-            <ComposerMetalSend reflectionTarget={libraryControl}>
+            <ComposerMetalSend reflectionTarget={modelControl}>
               {active ? <Button type="button" variant="secondary" className="send-button" aria-label="停止生成" onClick={() => void chat.stop(active.conversationId, active.turnId)}><Square size={16} /></Button> : <Button type="submit" variant="secondary" className="send-button" aria-label="发送" disabled={sendDisabled}><ArrowUp size={21} /></Button>}
             </ComposerMetalSend>
           </Suspense>

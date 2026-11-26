@@ -44,6 +44,7 @@ export interface Dashboard {
   due_flashcard_count: number
   due_wrong_question_count: number
   activity: { date: string; count: number }[]
+  recent_chat_library_id?: string | null
 }
 export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; library_embedding?: Record<string, boolean>; has_personal_models?: boolean; chat_models?: ChatModel[]; platform_chat_model?: string | null; ocr: boolean; vision?: boolean; rerank?: boolean; retrieval_defaults?: Omit<RetrievalSettings, 'rerank_connection_id'>; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number; max_pdf_upload_bytes?: number; max_pdf_pages?: number }
 export interface ModelUsageBucket { key: string; label?: string | null; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }

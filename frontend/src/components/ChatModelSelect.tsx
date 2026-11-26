@@ -1,13 +1,15 @@
+import type { Ref } from 'react'
 import { Select } from '@/components/arc/select/select'
 import { useWorkspace } from '../WorkspaceData'
 
 const accountModel = 'account-default'
 
-export function ChatModelSelect({ modelId, conversationId, saving, onChange }: {
+export function ChatModelSelect({ modelId, conversationId, saving, onChange, triggerRef }: {
   modelId?: string | null
   conversationId?: string
   saving?: boolean
   onChange: (id: string | null) => void
+  triggerRef: Ref<HTMLButtonElement>
 }) {
   const { capabilities, chat, user } = useWorkspace()
   const models = capabilities?.chat_models
@@ -17,7 +19,7 @@ export function ChatModelSelect({ modelId, conversationId, saving, onChange }: {
   const selected = models.find((model) => model.id === modelId)
 
   return <div className="chat-model-control" aria-busy={saving || undefined}>
-    <Select compact label="聊天模型" value={modelId ?? accountModel}
+    <Select ref={triggerRef} className="composer-select" compact label="聊天模型" value={modelId ?? accountModel}
       disabled={saving || (!conversationId && Boolean(chat.pendingFor()))}
       description={conversationId ? '生成后续回复所需的会话上下文会发送给所选模型。' : undefined}
       formatValue={(label) => modelId ? selected?.model ?? label : defaultModel ?? '账户默认'}

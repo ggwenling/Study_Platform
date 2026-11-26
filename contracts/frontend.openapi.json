@@ -6719,6 +6719,18 @@
             },
             "type": "array",
             "title": "Activity"
+          },
+          "recent_chat_library_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Chat Library Id"
           }
         },
         "type": "object",

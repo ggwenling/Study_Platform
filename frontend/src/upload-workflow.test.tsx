@@ -140,11 +140,7 @@ it('binds in-flight upload to A after switching to B and preserves the draft', a
   const input = node.querySelector<HTMLInputElement>('input[type=file]')!
   Object.defineProperty(input, 'files', { value: [file] })
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
-  await act(async () => {
-    const select = node.querySelector('select')!
-    select.value = 'B'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+  await render(<Composer preferredLibrary="B" />)
   await act(async () => upload.resolve({ material_id: 'm', version_id: 'v', job_id: 'j', status: 'queued' }))
   expect(uploadMaterial).toHaveBeenCalledWith('A', file, undefined, expect.any(AbortSignal))
   expect(node.textContent).toContain('已提交至「库A」')
@@ -182,7 +178,7 @@ it('creates and selects the first library without leaving chat', async () => {
   expect(api.createKnowledgeBase).toHaveBeenCalledWith({ name: '库C' })
   workspace.value.libraries = [library('A'), library('C')]
   await render(<Composer />)
-  expect(node.querySelector('select')?.value).toBe('C')
+  expect(node.querySelector('[aria-label="当前知识库资料：库C"]')).toBeTruthy()
 })
 
 it('accepts PPTX files and processes the shared queue sequentially with single-item retry', async () => {

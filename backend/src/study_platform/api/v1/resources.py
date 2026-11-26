@@ -752,6 +752,7 @@ class DashboardDTO(BaseModel):
     due_flashcard_count: int
     due_wrong_question_count: int
     activity: list[ActivityDTO]
+    recent_chat_library_id: UUID | None = None
 
 
 def activity_days(events, today):
@@ -792,6 +793,16 @@ def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
     )
     conv_filter = [Conversation.owner_user_id == user.id, Conversation.deleted_at.is_(None)]
     conv_count = db.scalar(sa.select(sa.func.count()).select_from(Conversation).where(*conv_filter))
+    recent_chat_library_id = db.scalar(
+        sa.select(AiWorkflowRun.knowledge_base_id)
+        .join(Conversation, Conversation.id == AiWorkflowRun.conversation_id)
+        .join(KnowledgeBase, KnowledgeBase.id == AiWorkflowRun.knowledge_base_id)
+        .where(*conv_filter, AiWorkflowRun.owner_user_id == user.id,
+               KnowledgeBase.owner_user_id == user.id, KnowledgeBase.deleted_at.is_(None),
+               AiWorkflowRun.source_scope["intent"].astext.in_(("qa", "summary")))
+        .order_by(AiWorkflowRun.created_at.desc(), AiWorkflowRun.id.desc())
+        .limit(1)
+    )
     # One event per ingested version, irrespective of retry/index generations.
     versions = db.execute(
         sa.select(MaterialVersion.id, sa.func.min(IndexVersion.ready_at))
@@ -821,6 +832,7 @@ def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
         "due_flashcard_count": count_due_flashcards(db, user.id, now),
         "due_wrong_question_count": count_due_wrong_questions(db, user.id, now),
         "activity": activity_days(events, now.astimezone(ZoneInfo("Asia/Shanghai")).date()),
+        "recent_chat_library_id": recent_chat_library_id,
     }
 
 

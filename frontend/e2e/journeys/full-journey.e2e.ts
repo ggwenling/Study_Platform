@@ -173,8 +173,8 @@ test.describe.serial('isolated synthetic user journey', () => {
       await expect(page.getByRole('heading', { level: 1, name: emptyLibraryName, exact: true })).toBeVisible()
       state.emptyKbId = new URL(page.url()).searchParams.get('id') || ''
       const before = await mockStats(request)
-      await page.goto('/')
-      await chooseSelect(page, '知识库', emptyLibraryName)
+      await page.getByRole('button', { name: `在「${emptyLibraryName}」中新建对话` }).click()
+      await expect(page.getByRole('region', { name: `当前知识库资料：${emptyLibraryName}` })).toBeVisible()
       const field = page.getByLabel('提问')
       await field.fill('这份空白库里有什么？')
       const namedSend = await page.getByRole('button', { name: '发送' }).count()
@@ -189,8 +189,14 @@ test.describe.serial('isolated synthetic user journey', () => {
 
   test('ask a question and open the cited source', async ({}, info) => {
     await runStep(info, 'chat-and-citation', async () => {
-      await page.goto('/')
-      await chooseSelect(page, '知识库', libraryName)
+      await page.getByRole('button', { name: `在「${libraryName}」中新建对话` }).click()
+      await expect(page.getByRole('region', { name: `当前知识库资料：${libraryName}` })).toBeVisible()
+      await page.getByRole('button', { name: '会话操作' }).click()
+      await page.getByRole('menuitem', { name: '重命名会话' }).click()
+      const rename = page.getByRole('dialog', { name: '重命名会话' })
+      await rename.getByLabel('会话标题').fill(question)
+      await rename.getByRole('button', { name: '保存' }).click()
+      await expect(rename).toBeHidden()
       const field = page.getByLabel('提问')
       await field.fill(question)
       const namedSend = await page.getByRole('button', { name: '发送' }).count()
@@ -208,6 +214,18 @@ test.describe.serial('isolated synthetic user journey', () => {
       await shot(page, '06-citation-reader')
       return `conversation=${state.conversationId}; accessible 发送 buttons=${namedSend}; answer is the local stub, not a real model`
     })
+  })
+
+  test('new chat uses the recently queried library in a fresh tab', async () => {
+    const fresh = await context.newPage()
+    try {
+      await fresh.goto('/')
+      await expect(fresh.getByRole('region', { name: `当前知识库资料：${libraryName}` })).toBeVisible()
+      await expect(fresh.locator('.composer-actions').getByRole('combobox', { name: '聊天模型' })).toBeVisible()
+      await expect(fresh.locator('.composer-actions').getByRole('combobox', { name: '知识库', exact: true })).toHaveCount(0)
+    } finally {
+      await fresh.close()
+    }
   })
 
   test('save a note and find it again after reload', async ({}, info) => {
@@ -240,7 +258,9 @@ test.describe.serial('isolated synthetic user journey', () => {
       const nav = page.getByRole('navigation', { name: '工作区' })
       await nav.getByRole('link', { name: '历史' }).click()
       await expect(page.getByRole('heading', { name: '会话历史' })).toBeVisible()
-      await expect(page.getByRole('button', { name: `会话：${question}`, exact: true })).toBeVisible()
+      const historyLink = page.locator('.history-page').getByRole('link', { name: question, exact: true })
+      await expect(historyLink).toBeVisible()
+      await expect(historyLink).toHaveAttribute('href', `/chat/${state.conversationId}`)
       await nav.getByRole('link', { name: '学习' }).click()
       await expect(page.getByRole('tab', { name: '练习', exact: true })).toBeVisible()
       await nav.getByRole('link', { name: '设置' }).click()
