@@ -246,6 +246,51 @@ it('uses the recent library on the home composer and keeps project and source sc
   expect(node.querySelector('[aria-label="当前知识库资料：库A"]')).toBeTruthy()
 })
 
+it('skips a recent library with unavailable embeddings only for automatic selection', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  workspace.value.overview = { recent_chat_library_id: 'B' }
+  workspace.value.capabilities.library_embedding = { A: true, B: false }
+  await render(<Composer />)
+  expect(node.querySelector('[aria-label="当前知识库资料：库A"]')).toBeTruthy()
+  await enterText('默认使用可用库')
+  const submit = async () => act(async () => node.querySelector('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  await submit()
+  expect(workspace.value.chat.send).toHaveBeenCalledWith(expect.objectContaining({ knowledge_base_id: 'A' }), expect.any(Function))
+
+  await render(<Composer conversationId="conv-1" preferredLibrary="B" />)
+  expect(node.querySelector('[aria-label="当前知识库资料：库B"]')).toBeTruthy()
+  await enterText('保留明确的资料范围')
+  await submit()
+  expect(workspace.value.chat.send).toHaveBeenCalledTimes(1)
+  expect(workspace.value.notify).toHaveBeenCalledWith('当前知识库的向量模型不可用，请检查知识库绑定。')
+})
+
+it('continues the same conversation after explicitly replacing a deleted library', async () => {
+  vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
+  const composer = { current: null as ComposerHandle | null }
+  await render(<Composer conversationId="conv-1" preferredLibrary="deleted" ref={(value) => { composer.current = value }} />)
+  await act(async () => composer.current!.editAsNew('保留原问题', {
+    knowledge_base_id: 'deleted', knowledge_base_name: '已删除库', answer_mode: 'knowledge_only',
+    intent: 'qa', selected_material_ids: ['old-material'], index_version_ids: [],
+  }))
+  const submit = async () => act(async () => node.querySelector('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  await submit()
+  expect(workspace.value.chat.send).not.toHaveBeenCalled()
+  const recovery = node.querySelector<HTMLSelectElement>('select[aria-label="选择替代知识库"]')!
+  expect([...recovery.options].map(({ value }) => value)).toEqual(['A', 'B'])
+  await act(async () => {
+    recovery.value = 'B'
+    recovery.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  expect(node.querySelector('textarea')!.value).toBe('保留原问题')
+  expect(node.querySelector('[aria-label="当前知识库资料：库B"]')).toBeTruthy()
+  expect(workspace.value.chat.send).not.toHaveBeenCalled()
+  await submit()
+  expect(workspace.value.chat.send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    conversation_id: 'conv-1', knowledge_base_id: 'B', material_ids: null, content: '保留原问题',
+  }), expect.any(Function))
+})
+
 it('only opens materials for uploads observed during the current Composer visit', async () => {
   vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
   const trigger = () => node.querySelector<HTMLButtonElement>('.current-materials button[aria-expanded]')!

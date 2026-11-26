@@ -8357,6 +8357,21 @@
               }
             ],
             "title": "Error Code"
+          },
+          "failure_stage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "retrieval",
+                  "generation"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Stage"
           }
         },
         "type": "object",

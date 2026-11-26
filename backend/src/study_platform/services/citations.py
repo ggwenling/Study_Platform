@@ -143,6 +143,7 @@ def message_dto(db, message) -> dict:
         "turn_id": message.workflow_run_id,
         "model_profile": message.model_profile if message.role == "assistant" else None,
         "error_code": run.failure_code if run and message.status == "failed" else None,
+        "failure_stage": snapshot.get("failure_stage") if message.status == "failed" else None,
         "created_at": message.created_at,
         "scope": scope,
         "citations": [citation_dto(db, c) for c in citations],

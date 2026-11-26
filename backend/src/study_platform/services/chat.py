@@ -311,6 +311,8 @@ def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None,
                 raise ApiError(409, "retry_not_allowed", "仅失败的轮次可以切换模型重试。")
             saved, run.model_profile = chat_model(db, owner, conv.llm_connection_id)
             run.source_scope = {**run.source_scope, "llm_connection": saved}
+        if "failure_stage" in run.source_scope:
+            run.source_scope = {key: value for key, value in run.source_scope.items() if key != "failure_stage"}
         run.status = "running"
         run.fencing += 1
         run.failure_code = None
@@ -327,7 +329,7 @@ def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None,
         return run.id, run.fencing, False
 
 
-def checkpoint(run_id, fence, content, status=None, citations=None, failure=None, usage=None):
+def checkpoint(run_id, fence, content, status=None, citations=None, failure=None, usage=None, *, failure_stage=None):
     """Short transaction; lock order matches knowledge-base deletion."""
     with session_factory()() as db:
         original = db.get(AiWorkflowRun, run_id)
@@ -342,6 +344,7 @@ def checkpoint(run_id, fence, content, status=None, citations=None, failure=None
             status, failure = "cancelled", "scope_unavailable"
         elif original.lease_expires_at < now():
             status, failure = "failed", "turn_interrupted"
+            failure_stage = None
         elif status in (None, "completed"):
             expected = original.source_scope["index_version_ids"]
             current = visible_indices(
@@ -358,6 +361,8 @@ def checkpoint(run_id, fence, content, status=None, citations=None, failure=None
         if status:
             original.status, original.failure_code, original.finished_at = status, failure, now()
             assistant.status, assistant.usage, original.usage = status, usage, usage
+            if status == "failed" and failure_stage:
+                original.source_scope = {**original.source_scope, "failure_stage": failure_stage}
             if status == "completed":
                 conv.updated_at = now()
                 for chunk in citations or []:
@@ -1014,6 +1019,7 @@ async def _stream(owner, run_id, fence, replay=False):
     usage = None
     pending = None
     iterator = None
+    failure_stage = None
     try:
         yield meta
         yield event("phase", turn_id=run_id, phase="working")
@@ -1021,6 +1027,7 @@ async def _stream(owner, run_id, fence, replay=False):
         if scope["intent"] == "summary":
             raw_evidence = chunks
         else:
+            failure_stage = "retrieval"
             yield event("phase", turn_id=run_id, phase="searching")
             if get_settings().rag_query_rewrite_enabled and scope["index_version_ids"]:
                 if not await run_in_threadpool(checkpoint, run_id, fence, content):
@@ -1048,6 +1055,7 @@ async def _stream(owner, run_id, fence, replay=False):
                 raw_evidence = await run_in_threadpool(
                     supplement_qa, scope, scope["content"], owner, raw_evidence, followups
                 )
+        failure_stage = None
         prepared = prepare_generation(scope, raw_evidence, history)
         evidence = prepared["evidence"]
         if prepared["kind"] == "refusal":
@@ -1057,6 +1065,7 @@ async def _stream(owner, run_id, fence, replay=False):
             if not await run_in_threadpool(checkpoint, run_id, fence, content):
                 yield await ended_event(owner, conv_id, run_id)
                 return
+            failure_stage = "generation"
             yield event("phase", turn_id=run_id, phase="composing")
             iterator = astream_chat(
                 prepared["messages"],
@@ -1086,6 +1095,7 @@ async def _stream(owner, run_id, fence, replay=False):
         yield event("phase", turn_id=run_id, phase="working")
         if not content.strip():
             raise ApiError(502, "model_response_empty", "模型未返回内容", retryable=True)
+        failure_stage = None
         citations = cited_chunks(content, evidence)
         if scope["intent"] == "summary" and (
             {c["material_version_id"] for c in citations}
@@ -1107,7 +1117,8 @@ async def _stream(owner, run_id, fence, replay=False):
         raise
     except Exception as exc:
         error = exc if isinstance(exc, ApiError) else provider_error(exc)
-        await run_in_threadpool(checkpoint, run_id, fence, content, "failed", None, error.code)
+        await run_in_threadpool(checkpoint, run_id, fence, content, "failed", None, error.code,
+                                failure_stage=failure_stage)
         yield event("error", turn_id=run_id, **error.payload())
     finally:
         if pending is not None:

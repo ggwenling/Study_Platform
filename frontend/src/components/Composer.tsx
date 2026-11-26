@@ -14,6 +14,7 @@ import { clearAcceptedChatDraftText, useChatDrafts } from '../useChatDrafts'
 import { useWorkspace } from '../WorkspaceData'
 import { Button } from '@/components/arc/button/button'
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
+import { Select } from '@/components/arc/select/select'
 import { Tooltip } from '@/components/arc/tooltip/tooltip'
 import { FadingTextarea } from './FadingTextarea'
 import { CurrentMaterials } from './CurrentMaterials'
@@ -69,15 +70,18 @@ export function Composer({ demo = false, conversationId, modelId, onModelChange,
   const enableMetal = !reducedMotion
   const requestedLibrary = draftState.libraryId || preferredLibrary
   const recentLibrary = conversationId ? undefined : overview?.recent_chat_library_id
-  const loadingLibrary = Boolean(!requestedLibrary && !conversationId && overview == null && loading)
+  const loadingLibrary = Boolean(!requestedLibrary && !conversationId && loading && (overview == null || capabilities == null))
+  const usableLibraries = libraries.filter(({ id }) => capabilities?.library_embedding?.[id] !== false)
   const defaultLibrary = preferredLibrary ? libraries.find((library) => library.id === preferredLibrary)
-    : libraries.find((library) => library.id === recentLibrary) ?? libraries[0]
+    : usableLibraries.find((library) => library.id === recentLibrary) ?? usableLibraries[0]
   const currentLibrary = draftState.scopeRequired || loadingLibrary ? undefined : requestedLibrary
     ? libraries.find((library) => library.id === requestedLibrary)
     : defaultLibrary
   const libraryId = currentLibrary?.id
   const scopeIssue = draftState.scopeRequired ? '历史问题缺少可恢复的资料范围。'
     : !loading && requestedLibrary && !libraryId ? '原知识库不可用。' : undefined
+  const usableDefault = usableLibraries.find(({ id }) => id === defaultLibrary?.id)
+  const noAutoLibrary = !loadingLibrary && !requestedLibrary && libraries.length > 0 && usableLibraries.length === 0
   const models = capabilities?.chat_models
   const accountDefault = models?.find((model) => model.is_default)
   const explicitModel = models?.find((model) => model.id === modelId)
@@ -130,6 +134,7 @@ export function Composer({ demo = false, conversationId, modelId, onModelChange,
     if (draftState.scopeRequired || (requestedLibrary && !currentLibrary)) {
       return notify('请先确认本轮使用的资料范围。')
     }
+    if (noAutoLibrary) return notify('当前没有可用于问答的知识库，请检查向量模型连接。')
     if (!libraryId) return notify('请先创建或选择知识库。')
     if (modelReady === false) return notify('请选择可用的文本模型，或前往设置修复连接。')
     if (embeddingReady === false) return notify('当前知识库的向量模型不可用，请检查知识库绑定。')
@@ -153,6 +158,11 @@ export function Composer({ demo = false, conversationId, modelId, onModelChange,
   function chooseLibrary(id: string) {
     setDraftState((current) => ({ ...current, libraryId: id, materialIds: [], scoped: false, scopeRequired: false }))
     setScopeStatus(undefined)
+  }
+
+  function recoverLibrary(id: string) {
+    chooseLibrary(id)
+    requestAnimationFrame(() => form.current?.querySelector('textarea')?.focus())
   }
 
   function editAsNew(content: string, scope: Scope | null) {
@@ -233,14 +243,18 @@ export function Composer({ demo = false, conversationId, modelId, onModelChange,
       }}
     >
       {!demo && user && !loading && libraries.length === 0 && <Button type="button" variant="ghost" size="sm" onClick={() => { setCreateError(''); setCreating(true) }}>创建知识库并导入资料</Button>}
-      {!demo && scopeIssue && <p className="composer-hint">
-        {scopeIssue}
-        {defaultLibrary && !loadingLibrary
-          ? <Button type="button" variant="ghost" size="sm" onClick={() => chooseLibrary(defaultLibrary.id)}>使用「{defaultLibrary.name}」的资料</Button>
-          : '请从知识库项目发起新对话。'}
-      </p>}
+      {!demo && scopeIssue && <div className="composer-hint">
+        <span role="status">{scopeIssue}</span>
+        {usableDefault && !loadingLibrary
+          ? <Button type="button" variant="ghost" size="sm" onClick={() => recoverLibrary(usableDefault.id)}>使用「{usableDefault.name}」的资料</Button>
+          : !loading && usableLibraries.length > 0
+            ? <Select compact label="选择替代知识库" placeholder="选择替代知识库" value="" onValueChange={recoverLibrary}
+              options={usableLibraries.map(({ id, name }) => ({ value: id, label: name }))} />
+            : '请检查知识库与向量连接。'}
+      </div>}
       {!demo && modelIssue && <p className="composer-hint" role="status">{modelIssue} 可切换模型或 <Link to="/settings#model-settings-title">检查并测试连接</Link>。</p>}
       {!demo && embeddingReady === false && <p className="composer-hint" role="status">当前知识库的向量模型不可用，请检查知识库绑定。</p>}
+      {!demo && noAutoLibrary && <p className="composer-hint" role="status">当前没有可用于问答的知识库，请检查向量模型连接。</p>}
       {dragging && <p className="composer-hint" role="status">松开鼠标，将文件导入当前知识库</p>}
       <div className="composer-field">
         <FadingTextarea

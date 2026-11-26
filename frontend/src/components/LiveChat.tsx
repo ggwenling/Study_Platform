@@ -353,7 +353,9 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
             {messages.map((message) => {
               const isUser = message.role === 'user'
               const stopped = message.status === 'stopped' || message.status === 'failed'
-              const modelFailure = message.status === 'failed' ? chatModelError(message.error_code) : undefined
+              const retrievalFailure = message.status === 'failed' && message.failure_stage === 'retrieval'
+              const modelFailure = message.status === 'failed' && !retrievalFailure ? chatModelError(message.error_code) : undefined
+              const failureHint = retrievalFailure ? '知识库检索未完成，请重试或检查向量连接。' : modelFailure ?? '请检查后重试。'
               const phase = !isUser && ['pending', 'streaming'].includes(message.status)
                 && active?.assistantId === message.id ? active.phase : null
               const status = phase ? activityLabels[phase] : ['pending', 'streaming'].includes(message.status)
@@ -400,7 +402,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                         {message.content && <ChatAnswerMarkdown message={message} onSelectCitation={openCitations} />}
                         {message.turn_id && chat.recoveryErrors[message.turn_id] && ['pending', 'streaming'].includes(message.status)
                           ? <p className="muted" role="status">暂时无法确认生成状态。<Button size="sm" variant="secondary" onClick={() => chat.recover(id, message.turn_id!)}>重新查询状态</Button></p>
-                          : <p className="muted activity-status" role="status" aria-live="polite">{status}{message.status === 'failed' && `。${modelFailure ?? '请检查后重试。'}`}</p>}
+                          : <p className="muted activity-status" role="status" aria-live="polite">{status}{message.status === 'failed' && `。${failureHint}`}</p>}
                         {message.model_profile && <small className="muted">本轮配置模型 · {message.model_profile}</small>}
                       </div>
                       <div className="citation-list">
@@ -427,7 +429,8 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                             <BookmarkPlus size={15} />存为笔记
                           </Button>
                         )}
-                        {message === latest && message.turn_id && !modelFailure && (stopped || message.status === 'completed') && <Button size="sm" variant="secondary" disabled={busy}
+                        {message === latest && message.turn_id && (stopped || message.status === 'completed')
+                          && !(modelFailure && message.failure_stage === 'generation') && <Button size="sm" variant="secondary" disabled={busy}
                           onClick={() => void chat.retry(id, message.turn_id!)}>{stopped ? '重试本轮' : '重新生成'}</Button>}
                         {message === latest && message.turn_id && modelFailure && <>
                           <Button size="sm" variant="secondary" disabled={busy || savingModel || !conversation}

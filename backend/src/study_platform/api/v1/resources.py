@@ -144,6 +144,7 @@ class MessageDTO(BaseModel):
     citations: list[CitationDTO]
     model_profile: str | None = None
     error_code: str | None = None
+    failure_stage: Literal["retrieval", "generation"] | None = None
 
 
 class MessagePage(BaseModel):

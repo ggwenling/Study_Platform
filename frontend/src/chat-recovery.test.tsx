@@ -297,6 +297,23 @@ describe('disconnected chat recovery', () => {
     expect(retryTurn).not.toHaveBeenCalled()
   })
 
+  it.each([
+    { stage: 'retrieval' as const, hint: '知识库检索未完成', label: '重试本轮', current: false },
+    { stage: 'generation' as const, hint: '模型服务连接超时', label: '用当前模型重试', current: true },
+  ])('offers the appropriate retry for a $stage timeout', async ({ stage, hint, label, current }) => {
+    view = true
+    const failed = { ...message('failed'), error_code: 'model_timeout', failure_stage: stage }
+    vi.mocked(api.messages).mockResolvedValue({ items: [failed], next_cursor: null })
+    vi.mocked(retryTurn).mockImplementation(async function* () { /* no accepted retry in this test */ })
+    await render()
+    expect(node.textContent).toContain(hint)
+    const button = (text: string) => [...node.querySelectorAll('button')].find((item) => item.textContent === text)
+    expect(button(current ? '重试本轮' : '用当前模型重试')).toBeUndefined()
+    await act(async () => button(label)!.click())
+    const args = ['c', 't', expect.any(AbortSignal)]
+    expect(retryTurn).toHaveBeenCalledExactlyOnceWith(...args, ...(current ? [true] : []))
+  })
+
   it('lets canonical saved completion replace stale cached streaming content', async () => {
     view = true
     vi.mocked(api.messages).mockResolvedValue({ items: [message('streaming', '旧快照')], next_cursor: null })
