@@ -631,8 +631,9 @@ _CONDITION = re.compile(
     re.IGNORECASE,
 )
 _QA_CONJUNCTION = r"以及|还是|分别|\b(?:and|versus)\b"
+_QA_COMPARISON = r"区别|对比|差异|不同|异同"
 _COMPOUND_QUESTION = re.compile(
-    rf"{_QA_CONJUNCTION}|各自|各多少|区别|对比|顺序|同时|[？?].+|\b(?:compare|respectively)\b", re.I,
+    rf"{_QA_CONJUNCTION}|{_QA_COMPARISON}|各自|各多少|顺序|同时|[？?].+|\b(?:compare|respectively)\b", re.I,
 )
 _QA_CLAUSE_SEPARATOR = re.compile(rf"[，,；;？?。]|{_QA_CONJUNCTION}", re.I)
 _QA_IDENTIFIER = re.compile(r"\b[a-z0-9]+(?:-[a-z0-9]+)+\b", re.I)
@@ -761,7 +762,7 @@ def missing_qa_queries(scope, question, evidence):
             term.casefold() for term in jieba.cut(predicate)
             if term.casefold() in predicate_terms and not _COMPOUND_QUESTION.fullmatch(term)
         }
-        if entity_terms and topic:
+        if entity_terms and (topic or re.search(_QA_COMPARISON, predicate)):
             shared[left] = (left + marker + predicate, left_terms, topic)
             shared[right] = (right, entity_terms, topic)
     marked = list(question)
@@ -780,7 +781,10 @@ def missing_qa_queries(scope, question, evidence):
         query = clause
         if clause in shared:
             query, terms, topic = shared[clause]
-            covered = any(all(term in text for term in terms) and any(word in text for word in topic) for text in texts)
+            covered = any(
+                all(term in text for term in terms) and (not topic or any(word in text for word in topic))
+                for text in (texts if topic else substantive)
+            )
         elif anchors := _QA_IDENTIFIER.findall(clause):
             covered = all(sum(anchor.casefold() in text for text in substantive) >= 2 for anchor in anchors)
         else:
