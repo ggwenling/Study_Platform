@@ -34,7 +34,6 @@ from study_platform.persistence.models import (
 from study_platform.services.citations import citation_dto, message_dto
 from study_platform.services.learning import count_due_wrong_questions
 from study_platform.services.lexical import lexical_query_terms, plain_tsquery
-from study_platform.services.studio import count_due_flashcards
 from study_platform.services.workspace_search import (
     body_score_expression,
     body_search_expression,
@@ -428,6 +427,7 @@ def list_messages(
     cursor: UUID | None = None,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
+    order: Literal["asc", "desc"] = "asc",
 ):
     owned_conversation(db, user, conversation_id)
     stmt = sa.select(Message).where(Message.conversation_id == conversation_id)
@@ -439,8 +439,12 @@ def list_messages(
         )
         if not anchor:
             raise ApiError(400, "invalid_cursor", "Invalid cursor")
-        stmt = stmt.where(Message.sequence_no > anchor.sequence_no)
-    rows = db.scalars(stmt.order_by(Message.sequence_no).limit(limit + 1)).all()
+        if order == "desc":
+            stmt = stmt.where(Message.sequence_no < anchor.sequence_no)
+        else:
+            stmt = stmt.where(Message.sequence_no > anchor.sequence_no)
+    sequence = Message.sequence_no.desc() if order == "desc" else Message.sequence_no.asc()
+    rows = db.scalars(stmt.order_by(sequence).limit(limit + 1)).all()
     return {
         "items": [message_dto(db, r) for r in rows[:limit]],
         "next_cursor": rows[limit - 1].id if len(rows) > limit else None,
@@ -642,6 +646,8 @@ class CapabilitiesDTO(BaseModel):
     answer_modes: list[str]
     upload_mime_types: list[str]
     max_upload_bytes: int
+    max_pdf_upload_bytes: int
+    max_pdf_pages: int
 
 
 @router.get("/capabilities", response_model=CapabilitiesDTO)
@@ -686,6 +692,8 @@ def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
         "answer_modes": ["knowledge_only", "with_general"],
         "upload_mime_types": sorted(set(MIMES.values())),
         "max_upload_bytes": settings.max_upload_bytes,
+        "max_pdf_upload_bytes": settings.max_pdf_upload_bytes,
+        "max_pdf_pages": settings.max_pdf_pages,
     }
 
 
@@ -719,6 +727,10 @@ def activity_days(events, today):
 
 @router.get("/dashboard/overview", response_model=DashboardDTO)
 def dashboard(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    # Local import: services.studio loads this package, and a module-level import
+    # reads count_due_flashcards before that module finishes initializing.
+    from study_platform.services.studio import count_due_flashcards
+
     now = datetime.now(UTC)
     kb_count = db.scalar(
         sa.select(sa.func.count())

@@ -2,12 +2,14 @@
 <html lang="zh-CN" data-theme="dark" data-accent="neutral">
   <head>
     <meta charset="UTF-8" />
+    <meta name="color-scheme" content="light dark" />
     <script>
       let theme = 'system'
       try {
         const saved = localStorage.getItem('knowloop-theme')
         if (saved === 'light' || saved === 'dark') theme = saved
       } catch { /* Storage may be unavailable. */ }
+      document.querySelector('meta[name="color-scheme"]').content = theme === 'system' ? 'light dark' : theme
       document.documentElement.dataset.theme = theme === 'system'
         ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
         : theme

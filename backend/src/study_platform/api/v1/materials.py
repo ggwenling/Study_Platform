@@ -72,6 +72,8 @@ class MaterialResponse(BaseModel):
     title: str
     source_url: str | None = None
     page_count: int | None = None
+    processed_pages: int | None = None
+    total_pages: int | None = None
     mime_type: str | None
     byte_size: int | None
     status: str
@@ -92,6 +94,8 @@ class JobResponse(BaseModel):
     status: str
     phase: str | None
     progress: int
+    processed_pages: int | None = None
+    total_pages: int | None = None
     error_code: str | None
     attempt_count: int
 
@@ -216,6 +220,7 @@ def dto(db, material):
         "model_decryption_failed": "模型凭据无法解密，请检查部署加密密钥或在设置中替换 API Key。",
         "lease_expired": "后台处理多次中断，请重新启动后台处理后重试。",
         "vision_page_limit": "资料超过视觉解析页数上限，请拆分文件或改用本地解析。",
+        "pdf_page_limit": f"PDF 超过 {get_settings().max_pdf_pages} 页，请拆分后重新导入。",
         "vision_not_configured": "请先在设置中测试并启用默认视觉模型。",
     }.get(error, "资料处理失败，请检查原件后重试。") if error else None
     if error and state == "queued":
@@ -226,6 +231,8 @@ def dto(db, material):
         "title": material.title,
         "source_url": material.source_url,
         "page_count": version.page_count if version else None,
+        "processed_pages": (job.result or {}).get("processed_pages") if job else None,
+        "total_pages": (job.result or {}).get("total_pages") if job else None,
         "mime_type": version.source_mime if version else None,
         "byte_size": version.byte_size if version else None,
         "status": state,
@@ -241,7 +248,10 @@ def create_job(db, user, version, *, vision=None, activate_version=False):
     from study_platform.services.model_connections import library_snapshot
     material = db.get(Material, version.material_id)
     embedding = library_snapshot(db, user.id, material.knowledge_base_id)
-    payload = {"embedding_connection": embedding}
+    payload = {
+        "embedding_connection": embedding,
+        "pipeline_profile": get_settings().ingest_pipeline_profile,
+    }
     if vision is not None:
         payload.update(extraction_mode="vlm", vision_connection=vision)
     if activate_version:
@@ -285,6 +295,8 @@ def upload(
     mime = expected_mime(title)
     if not title or not mime:
         raise ApiError(400, "unsupported_file", "Unsupported file type")
+    settings = get_settings()
+    byte_limit = settings.upload_limit_for_mime(mime)
     vision = _material_vision_snapshot(db, user.id, mime) if extraction_mode == "vlm" else None
     version_id = uuid4()
     path = source_path(version_id)
@@ -297,8 +309,8 @@ def upload(
         with path.open("xb") as out:
             while block := file.file.read(1024 * 1024):
                 size += len(block)
-                if size > get_settings().max_upload_bytes:
-                    raise ApiError(413, "file_too_large", "File is too large")
+                if size > byte_limit:
+                    raise ApiError(413, "file_too_large", f"文件超过 {byte_limit / 1024**2:g} MiB，请压缩或拆分后重试。")
                 if not text_validator and len(header) < 8192:
                     header += block[: 8192 - len(header)]
                 if text_validator:
@@ -594,6 +606,8 @@ def get_job(job_id: UUID, db: Session = Depends(get_db), user=Depends(get_curren
         "status": job.status,
         "phase": (job.result or {}).get("phase"),
         "progress": job.progress,
+        "processed_pages": (job.result or {}).get("processed_pages"),
+        "total_pages": (job.result or {}).get("total_pages"),
         "error_code": job.failure_code,
         "attempt_count": job.attempt_count,
     }

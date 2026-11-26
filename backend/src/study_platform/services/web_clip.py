@@ -1,8 +1,10 @@
 """Fetch public static webpages without following unvalidated network targets."""
 
 import ipaddress
+import re
 import socket
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
@@ -12,6 +14,8 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import httpcore
 import httpx
 from httpcore._backends.sync import SyncBackend
+from lxml import etree
+from lxml import html as lxml_html
 
 from study_platform.core.config import get_settings
 from study_platform.core.errors import ApiError
@@ -24,6 +28,7 @@ _ALLOWED_CONTENT_TYPES = {
     "text/plain",
     "text/markdown",
 }
+_BENCHMARK_NET = ipaddress.ip_network("198.18.0.0/15")
 _DNS_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="web-clip-dns")
 _FETCH_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="web-clip-fetch")
 
@@ -134,6 +139,15 @@ def public_target(value: str, *, deadline: float | None = None) -> PublicTarget:
     if deadline is not None and time.monotonic() >= deadline:
         raise ApiError(504, "web_clip_timeout", "网页抓取超时，请稍后重试。")
     if not addresses or any(not _is_public_address(address) for address in addresses):
+        if addresses and all(
+            isinstance(address, ipaddress.IPv4Address) and address in _BENCHMARK_NET
+            for address in addresses
+        ):
+            raise ApiError(
+                422,
+                "web_clip_url_blocked",
+                "仅允许访问解析到公网地址的网页（当前域名被解析到保留网段 198.18.0.0/15，若本机开启了代理 TUN/Fake-IP，请关闭 Fake-IP 或对该域名配置直连后重试）。",
+            )
         raise ApiError(422, "web_clip_url_blocked", "仅允许访问解析到公网地址的网页。")
 
     authority_host = f"[{host}]" if ":" in host else host
@@ -167,6 +181,85 @@ def _client_for_target(target: PublicTarget) -> httpx.Client:
     )
 
 
+_MARKDOWN_INLINE_LINK = re.compile(
+    r"(?<!\\)\[((?:\\[^\n]|[^\[\]\\\n])*)\]\("
+    r"(?:<(?:\\[^\n]|[^<>\\\n])*>|(?:\\[^\n]|[^()\s\\]|\([^()\r\n]*\))*)\)"
+)
+
+
+def _restore_main_paragraphs(html: str, markdown: str) -> str:
+    """Recover paragraphs dropped by the extractor from an unambiguous main region."""
+    try:
+        document = lxml_html.fromstring(html)
+    except (etree.ParserError, ValueError):
+        return markdown
+    main = document.xpath("//main | //*[@role='main']")
+    if len(main) != 1:
+        return markdown
+    root = main[0]
+    for element in root.xpath(
+        ".//nav | .//header | .//footer | .//aside | .//script | .//style | .//template | "
+        ".//form | .//noscript | .//*[@hidden or @aria-hidden='true' or @role='navigation']"
+    ):
+        element.drop_tree()
+
+    def normalize(value):
+        # Formatting delimiters can split a CJK word without adding visible space.
+        return "".join(re.findall(r"\w+", value.casefold()))
+
+    elements = root.xpath(
+        ".//h1 | .//h2 | .//h3 | .//h4 | .//h5 | .//h6 | "
+        ".//p[not(ancestor::li or ancestor::table)] | "
+        ".//*[self::ul or self::ol or self::table or self::pre]["
+        "not(ancestor::ul or ancestor::ol or ancestor::table)]"
+    )
+    source = [" ".join(element.text_content().split()) for element in elements]
+    source_keys = [normalize(text) for text in source]
+    blocks = re.split(r"\n[ \t]*\n", markdown.strip()) if markdown.strip() else []
+    visible_blocks = [_MARKDOWN_INLINE_LINK.sub(r"\1", block) for block in blocks]
+    block_keys = [
+        normalize(re.sub(r"(?m)^\s*(?:\d+[.)]|[-+*])[ \t]+", "", block))
+        for block in visible_blocks
+    ]
+    source_counts, block_counts = Counter(source_keys), Counter(block_keys)
+    positions = {key: i for i, key in enumerate(block_keys) if key and block_counts[key] == 1}
+    anchors = [(i, positions[key]) for i, key in enumerate(source_keys) if key in positions and source_counts[key] == 1]
+    if blocks and (not anchors or [pos for _, pos in anchors] != sorted(pos for _, pos in anchors)):
+        return markdown
+
+    extracted = "".join(block_keys)
+    headings = {
+        normalize(line) for block in visible_blocks for line in block.splitlines() if re.match(r"^ {0,3}#{1,6}[ \t]", line)
+    }
+    additions = {}
+    heading = None
+    restored = set()
+    for i, (element, key) in enumerate(zip(elements, source_keys, strict=True)):
+        if re.fullmatch(r"h[1-6]", element.tag):
+            heading = i if key else None
+        elif element.tag == "p" and len(key) >= 40 and key not in extracted and key not in restored:
+            if heading is not None and source_keys[heading] not in headings:
+                level = int(elements[heading].tag[1])
+                additions[heading] = f"{'#' * level} {source[heading]}"
+                headings.add(source_keys[heading])
+            additions[i] = source[i]
+            restored.add(key)
+    if not additions:
+        return markdown
+
+    # Insert each gap before its next known block, keeping the extractor's formatting.
+    output = []
+    source_start = block_start = 0
+    for source_end, block_end in [*anchors, (len(elements), len(blocks))]:
+        if block_start == block_end:
+            output.extend(additions[i] for i in range(source_start, source_end) if i in additions)
+        output.extend(blocks[block_start:block_end])
+        if block_end < len(blocks):
+            output.append(blocks[block_end])
+        source_start, block_start = source_end + 1, block_end + 1
+    return "\n\n".join(output)
+
+
 def _extract(markup: bytes, content_type: str, encoding: str | None, final_url: str):
     if content_type in ("text/plain", "text/markdown"):
         try:
@@ -189,6 +282,7 @@ def _extract(markup: bytes, content_type: str, encoding: str | None, final_url: 
             include_tables=True,
             output_format="markdown",
         ) or ""
+        text = _restore_main_paragraphs(html, text)
     markdown = text.strip()
     if sum(char.isalnum() for char in markdown) < 40:
         raise ApiError(

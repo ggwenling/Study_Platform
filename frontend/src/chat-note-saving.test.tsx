@@ -14,7 +14,7 @@ const chat = {
   cached: {}, accepted: {} as Record<string, Message[]>, recoveryErrors: {}, activeFor: () => null,
   isBusy: () => false, acknowledgeSaved: vi.fn(), edit: vi.fn(), retry: vi.fn(),
 }
-const workspace = { user: { id: 'user' }, revision: 0, notify, chat }
+const workspace = { user: { id: 'user' }, revisions: { messages: 0 }, notify, chat }
 vi.mock('./WorkspaceData', () => ({ useWorkspace: () => workspace }))
 vi.mock('./components/Composer', async () => {
   const { useImperativeHandle } = await import('react')

@@ -58,7 +58,8 @@ export function LibraryStudio({
   linkedNoteId?: string | null
   closeLinkedNote?: () => void
 }) {
-  const { notify, report, refresh, aiJobs, revision: workspaceRevision } = useWorkspace()
+  const { notify, report, refresh, aiJobs, revisions } = useWorkspace()
+  const workspaceRevision = revisions.notes
   const [notes, setNotes] = useState<StudyNote[] | null>(initialNotes ?? null)
   const [notesError, setNotesError] = useState('')
   const [notesRetry, setNotesRetry] = useState(0)
@@ -248,7 +249,7 @@ export function LibraryStudio({
       const updated = { ...activeNote, ingested_material_id: res.material_id }
       setActiveNote(updated)
       setNotes((prev) => prev?.map((row) => (row.id === updated.id ? updated : row)) ?? null)
-      refresh()
+      refresh('materials', 'overview')
       onIngested()
       notify('笔记已作为 Markdown 资料回写入库，正在建立索引。')
     } catch (error) {

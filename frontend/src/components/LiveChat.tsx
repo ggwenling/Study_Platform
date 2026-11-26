@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useDisclosurePreference } from '../useDisclosurePreference'
 import { BookmarkPlus, Copy, Download, Ellipsis, FileText, Folder, PanelRight, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { api } from '@/api/client'
-import type { Citation, Conversation, Message, Scope } from '@/api/types'
+import { ApiError } from '@/api/stream'
+import type { Citation, Conversation, Message, Page, Scope } from '@/api/types'
 import { allPages, errorMessage, safeExternalUrl } from '@/api/ui'
 import { downloadMarkdownFile, formatConversationMarkdown, sanitizeMarkdownFilename, scopeSummaryText } from '@/conversationActions'
 import { Button } from '@/components/arc/button/button'
@@ -23,11 +24,38 @@ const time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digi
 const statusText = { pending: '等待生成…', streaming: '正在生成…', stopped: '已停止', failed: '回答失败', completed: '' }
 const mobileSourcesQuery = '(max-width: 760px)'
 
+function mergeMessages(saved: Message[], live: Message[], accepted: Message[], activeTurn?: string) {
+  const rows = new Map(saved.map((message) => [message.id, message]))
+  for (const message of live) {
+    const stored = rows.get(message.id)
+    const generating = activeTurn === message.turn_id
+    const storedTerminal = stored && !['pending', 'streaming'].includes(stored.status)
+    if (!storedTerminal || generating) rows.set(message.id, message)
+  }
+  for (const message of accepted) rows.set(message.id, message)
+  return [...rows.values()].filter((message) => message.role !== 'system_summary')
+    .sort((a, b) => a.sequence_no - b.sequence_no)
+}
+
+const ChatAnswerMarkdown = memo(function ChatAnswerMarkdown({ message, onSelectCitation }: {
+  message: Message
+  onSelectCitation: (messageId: string, citation: Citation) => void
+}) {
+  return (
+    <MarkdownContent citations={message.citations} onSelectCitation={(citation) => onSelectCitation(message.id, citation)}>
+      {message.content}
+    </MarkdownContent>
+  )
+})
+
 export default function LiveChat({ id, searchButton }: { id: string; searchButton?: ReactNode }) {
-  const { user, libraries = [], chat, revision, refresh, notify, report, requireLogin } = useWorkspace()
+  const { user, libraries = [], chat, revisions, refresh, notify, report, requireLogin } = useWorkspace()
   const navigate = useNavigate()
   const [conversation, setConversation] = useState<Conversation | null>(null)
-  const [saved, setSaved] = useState<Message[]>([])
+  const [history, setHistory] = useState<Page<Message> | null>(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [olderError, setOlderError] = useState('')
+  const [exporting, setExporting] = useState(false)
   const [error, setError] = useState('')
   const [dialogTarget, setDialogTarget] = useState<ConversationDialogTarget | null>(null)
   const [mobile, setMobile] = useState(() => window.matchMedia?.(mobileSourcesQuery).matches ?? false)
@@ -41,19 +69,17 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
   const sourceTrigger = useRef<HTMLElement | null>(null)
   const scroll = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
+  const olderRequest = useRef<AbortController | null>(null)
+  const exportRequest = useRef<AbortController | null>(null)
+  const scrollAnchor = useRef<{ element: HTMLElement; top: number; trigger?: HTMLButtonElement } | null>(null)
   const active = chat.activeFor(id)
   const busy = chat.isBusy(id)
-  const live = chat.cached[id] ?? []
-  const rows = new Map(saved.filter((message) => message.conversation_id === id).map((message) => [message.id, message]))
-  for (const message of live) {
-    const stored = rows.get(message.id)
-    const generating = active?.turnId === message.turn_id
-    const storedTerminal = stored && !['pending', 'streaming'].includes(stored.status)
-    if (!storedTerminal || generating) rows.set(message.id, message)
-  }
-  for (const message of chat.accepted[id] ?? []) rows.set(message.id, message)
-  const messages = [...rows.values()].filter((message) => message.role !== 'system_summary')
-    .sort((a, b) => a.sequence_no - b.sequence_no)
+  const cached = chat.cached[id] ?? []
+  const accepted = chat.accepted[id] ?? []
+  const oldest = history?.next_cursor ? history.items.at(-1)?.sequence_no : undefined
+  const live = oldest === undefined ? cached : cached.filter((message) =>
+    message.sequence_no >= oldest || message.turn_id === active?.turnId)
+  const messages = mergeMessages(history?.items ?? [], live, accepted, active?.turnId)
   const latest = messages.at(-1)
   const focused = messages.find((message) => message.id === selectedId) ?? [...messages].reverse().find((message) => message.role === 'assistant')
   const latestIsTerminal = latest?.role === 'assistant' && ['completed', 'failed', 'stopped'].includes(latest.status)
@@ -69,23 +95,78 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
 
   useEffect(() => {
     if (!user) return
-    let mounted = true
-    void Promise.all([api.conversation(id), allPages((cursor) => api.messages(id, cursor))]).then(
-      ([conversation, messages]) => {
-        if (!mounted) return
+    const controller = new AbortController()
+    void Promise.all([api.conversation(id), api.messages(id, undefined, 'desc', controller.signal)]).then(
+      ([conversation, page]) => {
+        if (controller.signal.aborted) return
         setConversation(conversation)
-        setSaved(messages)
-        chat.acknowledgeSaved(id, messages)
+        setHistory((current) => {
+          const oldest = page.items.at(-1)
+          if (!page.next_cursor || !oldest || !current?.items.some((message) => message.id === oldest.id)) return page
+          const earlier = current.items.filter((message) => message.sequence_no < oldest.sequence_no)
+          return { items: [...page.items, ...earlier], next_cursor: current.next_cursor }
+        })
+        chat.acknowledgeSaved(id, page.items)
         setError('')
       },
       (error) => {
-        if (!mounted) return
+        if (controller.signal.aborted) return
         setError(errorMessage(error))
         report(error)
       },
     )
-    return () => { mounted = false }
-  }, [id, user, revision])
+    return () => controller.abort()
+  }, [id, user, revisions.messages])
+
+  useEffect(() => () => {
+    olderRequest.current?.abort()
+    exportRequest.current?.abort()
+  }, [])
+
+  async function loadOlder(trigger?: HTMLButtonElement) {
+    const cursor = history?.next_cursor
+    if (!cursor || olderRequest.current) return
+    const controller = new AbortController()
+    olderRequest.current = controller
+    setLoadingOlder(true)
+    setOlderError('')
+    try {
+      const page = await api.messages(id, cursor, 'desc', controller.signal)
+      if (controller.signal.aborted) return
+      const node = scroll.current
+      if (node && (!follow.current || trigger === document.activeElement)) {
+        const viewportTop = node.getBoundingClientRect().top
+        const element = [...node.querySelectorAll<HTMLElement>('article.message')]
+          .find((row) => row.getBoundingClientRect().bottom > viewportTop)
+        if (element) {
+          scrollAnchor.current = { element, top: element.getBoundingClientRect().top, trigger }
+          follow.current = false
+        }
+      }
+      setHistory((current) => current?.next_cursor === cursor
+        ? { items: [...current.items, ...page.items], next_cursor: page.next_cursor }
+        : current)
+      chat.acknowledgeSaved(id, page.items)
+    } catch (failure) {
+      if (!controller.signal.aborted) {
+        setOlderError(errorMessage(failure))
+        if (failure instanceof ApiError && failure.status === 401) report(failure)
+      }
+    } finally {
+      olderRequest.current = null
+      if (!controller.signal.aborted) setLoadingOlder(false)
+    }
+  }
+
+  useLayoutEffect(() => {
+    const anchor = scrollAnchor.current
+    scrollAnchor.current = null
+    if (!anchor?.element.isConnected || !scroll.current) return
+    scroll.current.scrollTop += anchor.element.getBoundingClientRect().top - anchor.top
+    if (anchor.trigger && (document.activeElement === anchor.trigger || !anchor.trigger.isConnected && document.activeElement === document.body)) {
+      anchor.element.focus({ preventScroll: true })
+    }
+  }, [history, loadingOlder])
 
   useEffect(() => {
     if (follow.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight
@@ -113,7 +194,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
     return () => media.removeEventListener?.('change', change)
   }, [])
 
-  function openSource(citation: Citation) {
+  const openSource = useCallback((citation: Citation) => {
     if (citation.availability !== 'available') {
       notify('此来源已不可访问。')
       return
@@ -130,18 +211,38 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
       locationLabel: citation.location_label,
       sourceUrl: citation.source_url,
     })
-  }
+  }, [libraries, notify])
 
-  function openCitations(messageId: string, citation: Citation) {
+  const openCitations = useCallback((messageId: string, citation: Citation) => {
     setSelectedId(messageId)
     if (mobile) {
       sourceTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
       setDrawer(true)
     } else setPanel(true)
     openSource(citation)
-  }
+  }, [mobile, openSource, setPanel])
 
   const displayTitle = conversation?.title || live.find((item) => item.role === 'user')?.content.slice(0, 80) || '对话'
+
+  async function exportChat() {
+    if (exportRequest.current) return
+    const controller = new AbortController()
+    exportRequest.current = controller
+    setExporting(true)
+    try {
+      const complete = !history || history.next_cursor
+        ? mergeMessages(await allPages((cursor) => api.messages(id, cursor, 'asc', controller.signal)), cached, accepted, active?.turnId)
+        : messages
+      if (controller.signal.aborted) return
+      downloadMarkdownFile(sanitizeMarkdownFilename(displayTitle), formatConversationMarkdown(displayTitle, complete))
+      notify('已导出 Markdown 文件。')
+    } catch (failure) {
+      if (!controller.signal.aborted) report(failure)
+    } finally {
+      exportRequest.current = null
+      if (!controller.signal.aborted) setExporting(false)
+    }
+  }
 
   if (!user || (error && !conversation && !live.length)) {
     return (
@@ -201,10 +302,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
               { label: '重命名会话', icon: <Pencil size={15} />, disabled: !conversation, onSelect: () => {
                 if (conversation) setDialogTarget({ mode: 'rename', conversation })
               } },
-              { label: '导出 Markdown', icon: <Download size={15} />, disabled: !messages.length, onSelect: () => {
-                downloadMarkdownFile(sanitizeMarkdownFilename(displayTitle), formatConversationMarkdown(displayTitle, messages))
-                notify('已导出 Markdown 文件。')
-              } },
+              { label: '导出 Markdown', icon: <Download size={15} />, disabled: !messages.length || exporting, onSelect: () => void exportChat() },
               { label: '删除会话', icon: <Trash2 size={15} />, destructive: true, separatorBefore: true, onSelect: () => {
                 setDialogTarget({ mode: 'delete', conversation: conversation ?? { id, title: displayTitle } })
               } },
@@ -220,8 +318,15 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
         <div className="conversation" ref={scroll} tabIndex={0} aria-label="消息" onScroll={(event) => {
           const node = event.currentTarget
           follow.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 8
+          if (!follow.current && node.scrollTop <= 96 && !olderError) void loadOlder()
         }}>
           <div className="conversation-inner">
+            {history?.next_cursor && <div className="chat-older">
+              <Button variant="ghost" size="sm" loading={loadingOlder} onClick={(event) => void loadOlder(event.currentTarget)}>
+                {olderError ? '重试加载更早消息' : '加载更早消息'}
+              </Button>
+              {olderError && <p role="alert">{olderError}</p>}
+            </div>}
             {!messages.length && <p className="muted">{conversation ? '还没有消息。选好知识库后开始提问。' : '正在读取会话…'}</p>}
             {messages.map((message) => {
               const isUser = message.role === 'user'
@@ -232,7 +337,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                 ? '正在确认生成状态…' : statusText[message.status]
               const isLastTurn = Boolean(message.turn_id && message.turn_id === latest?.turn_id)
               return (
-                <article key={message.id} className={`message ${isUser ? 'user-message' : 'ai-message'}`}
+                <article key={message.id} className={`message ${isUser ? 'user-message' : 'ai-message'}`} tabIndex={-1}
                   data-editing={editing?.id === message.id || undefined} aria-label={isUser ? '用户消息' : 'AI 消息'}>
                   <div className="message-meta">
                     {isUser ? <span className="message-avatar">你</span> : <AssistantActivity phase={phase} />}
@@ -269,14 +374,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                   ) : (
                     <>
                       <div className="answer">
-                        {message.content && (
-                          <MarkdownContent
-                            citations={message.citations}
-                            onSelectCitation={(citation) => openCitations(message.id, citation)}
-                          >
-                            {message.content}
-                          </MarkdownContent>
-                        )}
+                        {message.content && <ChatAnswerMarkdown message={message} onSelectCitation={openCitations} />}
                         {message.turn_id && chat.recoveryErrors[message.turn_id] && ['pending', 'streaming'].includes(message.status)
                           ? <p className="muted" role="status">暂时无法确认生成状态。<Button size="sm" variant="secondary" onClick={() => chat.recover(id, message.turn_id!)}>重新查询状态</Button></p>
                           : <p className="muted activity-status" role="status" aria-live="polite">{status}</p>}
@@ -356,6 +454,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
           const note = 'noteId' in request
             ? await api.studio.appendNote(request.noteId, { ...source, section_heading: request.sectionHeading || undefined })
             : await api.studio.createNote(kbId, { ...source, title: request.title, note_type: 'summary' })
+          refresh?.('notes')
           setNoteTarget(null)
           notify(`已保存至「${note.title}」研究笔记。`, {
             action: {
@@ -368,9 +467,9 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
       <ConversationDialogs
         target={dialogTarget}
         onClose={() => setDialogTarget(null)}
-        onRenamed={(updated) => { setConversation(updated); refresh?.() }}
+        onRenamed={(updated) => { setConversation(updated); refresh?.('conversations') }}
         onBeforeDelete={(deletedId) => chat?.evictConversation?.(deletedId)}
-        onDeleted={(deletedId) => { chat?.evictConversation?.(deletedId); refresh?.(); void navigate('/', { replace: true }) }}
+        onDeleted={(deletedId) => { chat?.evictConversation?.(deletedId); refresh?.('conversations', 'overview'); void navigate('/', { replace: true }) }}
         report={report}
         notify={notify}
       />

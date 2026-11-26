@@ -46,6 +46,109 @@ def test_rejects_hostname_resolving_to_private_address(monkeypatch):
     assert error.value.code == "web_clip_url_blocked"
 
 
+@pytest.mark.parametrize(
+    ("url", "fake_ip"),
+    [
+        ("https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Caching", "198.18.0.207"),
+        ("https://www.w3.org/WAI/ARIA/apg/practices/keyboard-interface/", "198.18.0.208"),
+    ],
+)
+def test_rejects_public_qa_urls_on_fake_ip_dns_with_actionable_hint(monkeypatch, url, fake_ip):
+    monkeypatch.setattr(
+        web_clip.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", (fake_ip, 443))],
+    )
+    with pytest.raises(ApiError, match="公网地址") as error:
+        web_clip.fetch_public_webpage(url)
+    assert error.value.status_code == 422
+    assert error.value.code == "web_clip_url_blocked"
+    assert "198.18.0.0/15" in error.value.message
+    assert "Fake-IP" in error.value.message
+    assert "直连后重试" in error.value.message
+
+
+def test_clip_recovers_missing_main_paragraph_without_navigation_or_duplicates(monkeypatch):
+    import trafilatura
+
+    repeated = "An existing paragraph that already describes the purpose of this guide."
+    omitted = "Use Tab between components and arrow keys to move inside a composite widget."
+    hidden = "This hidden text is long enough to be mistaken for document content."
+    monkeypatch.setattr(trafilatura, "extract", lambda *args, **kwargs: repeated)
+    markup = f"""
+    <html><main><p>{repeated}</p><h2>Keyboard navigation</h2><p>{omitted}</p>
+    <nav><p>{hidden}</p></nav><div hidden><p>{hidden}</p></div></main></html>
+    """.encode()
+    _, markdown = web_clip._extract(markup, "text/html", "utf-8", "https://example.org/")
+    assert f"## Keyboard navigation\n\n{omitted}" in markdown
+    assert markdown.count(repeated) == 1
+    assert hidden not in markdown
+
+
+def test_clip_restores_middle_step_under_existing_heading(monkeypatch):
+    import trafilatura
+
+    title = "Replace the battery"
+    first = "First, switch off the device and remove its cover with the supplied tool."
+    middle = "Next, disconnect the old battery before handling the replacement battery."
+    last = "Finally, reconnect the power supply only after closing the battery cover."
+    markup = f"<main><h2>{title}</h2><p>{first}</p><p>{middle}</p><p>{last}</p></main>".encode()
+    monkeypatch.setattr(trafilatura, "extract", lambda *args, **kwargs: f"## {title}\n\n{first}\n\n{last}")
+
+    _, markdown = web_clip._extract(markup, "text/html", "utf-8", "https://example.org/")
+
+    assert markdown == f"## {title}\n\n{first}\n\n{middle}\n\n{last}"
+
+
+def test_clip_skips_reinsertion_when_extracted_blocks_are_reordered():
+    first = "First, switch off the device and remove its cover with the supplied tool."
+    middle = "Next, disconnect the old battery before handling the replacement battery."
+    last = "Finally, reconnect the power supply only after closing the battery cover."
+    markup = f"<main><p>{first}</p><p>{middle}</p><p>{last}</p></main>"
+    markdown = f"{last}\n\n{first}"
+
+    assert web_clip._restore_main_paragraphs(markup, markdown) == markdown
+
+
+def test_clip_restores_paragraph_before_a_retained_list_without_duplicating_inline_markup():
+    first = "First, prepare and inspect the work area before starting any repairs."
+    omitted = "Turn off the electrical supply before you begin with the list below."
+    last = "Finally, switch on the power and check whether the device is working."
+    items = ["Remove the cover", "Insert the replacement"]
+    html = f"""<main><h2>Preparation</h2><p>{first}</p><p>{omitted}</p>
+    <ol><li>{items[0]}</li><li>{items[1]}</li></ol>
+    <h2>重新加载</h2><p>浏览器在<strong>强制重新加载</strong>时会绕过已存储的缓存响应，这适用于需要获取最新版本的情况。</p>
+    <p>{last}</p></main>"""
+    markdown = (
+        f"## Preparation\n\n{first}\n\n1. {items[0]}\n2. {items[1]}\n\n"
+        "## 重新加载\n\n浏览器在**强制重新加载**时会绕过已存储的缓存响应，这适用于需要获取最新版本的情况。"
+        f"\n\n{last}"
+    )
+    assert web_clip._restore_main_paragraphs(html, markdown) == markdown.replace(
+        f"{first}\n\n", f"{first}\n\n{omitted}\n\n",
+    )
+
+
+@pytest.mark.parametrize("destination", [
+    "https://example.org/guide",
+    "https://example.org/Guide_(repair)",
+    "<https://example.org/Guide_(repair)>",
+])
+def test_clip_restores_paragraph_after_list_with_link(destination):
+    omitted = "After removing the cover, disconnect the old battery from its power cable."
+    last = "Finally, reconnect the power supply only after closing the battery cover."
+    markup = (
+        f'<main><h2>Replace the battery</h2><ol><li><a href="{destination.strip("<>")}">Remove the cover</a></li>'
+        f"<li>Remove the screws</li></ol><p>{omitted}</p><p>{last}</p></main>"
+    )
+    markdown = (
+        f"## Replace the battery\n\n1. [Remove the cover]({destination})\n"
+        f"2. Remove the screws\n\n{last}"
+    )
+
+    assert web_clip._restore_main_paragraphs(markup, markdown) == markdown.replace(last, f"{omitted}\n\n{last}")
+
+
 def test_dns_resolution_obeys_deadline(monkeypatch):
     import time
 

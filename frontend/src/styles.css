@@ -320,6 +320,7 @@ h1, h2, h3, p { margin: 0; }
 .ai-message { max-width: min(100%, 900px); }
 .ai-message > .pill { margin: 9px 0 0 40px; }
 .answer { padding-left: 40px; line-height: 1.75; overflow-wrap: anywhere; }
+.chat-older { margin-block-end: 16px; text-align: center; }
 .answer p, .answer ul, .answer pre { margin: 10px 0; }
 .answer ul { padding-left: 21px; }
 .answer li + li { margin-top: 4px; }
@@ -715,10 +716,10 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 }
 .sidebar-sections:focus-visible { outline-offset: -3px; }
 @media (forced-colors: none) {
-  .sidebar-sections { --scroll-thumb: light-dark(#9b9b9b, #656565); scrollbar-color: var(--scroll-thumb) transparent; }
+  .sidebar-sections { --scroll-thumb: light-dark(#8e8e8e, #656565); scrollbar-color: var(--scroll-thumb) transparent; }
   .sidebar-sections:is(:hover, :focus-within) { --scroll-thumb: light-dark(#6d6d6d, #929292); }
-  @supports selector(::-webkit-scrollbar) {
-    .sidebar-sections { scrollbar-width: auto; scrollbar-color: auto; }
+  @supports not (scrollbar-color: auto) {
+    .sidebar-sections { scrollbar-width: auto; }
     .sidebar-sections::-webkit-scrollbar { width: 6px; }
     .sidebar-sections::-webkit-scrollbar-track { background: transparent; }
     .sidebar-sections::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }

@@ -132,6 +132,42 @@ def test_first_send_idempotency_and_per_conversation_concurrency(chat_db):
     assert "conversation_busy" in results
 
 
+def test_message_history_paginates_backward_and_preserves_the_default_order(chat_db):
+    from study_platform.api.v1.resources import list_messages
+
+    owner = SimpleNamespace(id=chat_db.owner)
+    conversation_id, other_id = uuid4(), uuid4()
+    with chat_db.factory.begin() as db:
+        db.add_all(Conversation(id=id_, owner_user_id=owner.id) for id_ in (conversation_id, other_id))
+        db.flush()
+        db.add_all(
+            Message(conversation_id=conversation_id, role="user", content=str(index),
+                    status="completed", sequence_no=index)
+            for index in range(1, 7)
+        )
+        foreign_cursor = Message(
+            conversation_id=other_id, role="user", content="Other", status="completed", sequence_no=1,
+        )
+        db.add(foreign_cursor)
+        db.flush()
+        foreign_cursor_id = foreign_cursor.id
+
+    with chat_db.factory() as db:
+        first = list_messages(conversation_id, 3, None, db, owner, order="desc")
+        second = list_messages(conversation_id, 3, first["next_cursor"], db, owner, order="desc")
+        assert [row["sequence_no"] for row in first["items"]] == [6, 5, 4]
+        assert [row["sequence_no"] for row in second["items"]] == [3, 2, 1]
+        assert second["next_cursor"] is None
+        ascending = list_messages(conversation_id, 3, None, db, owner)
+        assert [row["sequence_no"] for row in ascending["items"]] == [1, 2, 3]
+        with pytest.raises(ApiError) as error:
+            list_messages(conversation_id, 3, foreign_cursor_id, db, owner, order="desc")
+        assert error.value.code == "invalid_cursor"
+        with pytest.raises(ApiError) as error:
+            list_messages(conversation_id, 3, None, db, SimpleNamespace(id=chat_db.outsider), order="desc")
+        assert error.value.status_code == 404
+
+
 def test_chunk_query_rejects_foreign_owner_index(chat_db):
     s = chat_db
     evidence = seed_evidence(s)

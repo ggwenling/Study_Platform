@@ -11,6 +11,12 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 from study_platform.core.config import Settings, get_settings
 from study_platform.core.errors import ApiError
 from study_platform.services.model_connections import resolved
+from study_platform.services.model_failure import (
+    allow_usage,
+    classify_model_exception,
+    public_failure,
+    retryable,
+)
 from study_platform.services.model_network import async_client, sync_client
 from study_platform.services.model_usage import ModelUsageContext, record_model_call
 
@@ -81,6 +87,32 @@ def chat_model(*, timeout: float | None = None, max_tokens: int | None = None,
     return build_chat_model(timeout=timeout, max_tokens=max_tokens, temperature=temperature)
 
 
+def describe_model_failure(exc: Exception, *, kind: str | None = None, http_status: int | None = None) -> dict:
+    """Structured failure metadata. The provider message, body, and headers are not copied."""
+    failure = classify_model_exception(exc)
+    if kind:
+        failure["failure_kind"] = kind
+    if http_status is not None:
+        failure["http_status"] = http_status
+    if isinstance(exc, ApiError):
+        failure["error_code"] = exc.code
+        failure["mapped_error_code"] = exc.code
+    else:
+        failure["mapped_error_code"] = provider_error(exc).code
+    failure["retryable"] = retryable(failure)
+    return public_failure(failure)
+
+
+def _note_embedding_failure(diagnostics: dict | None, exc: Exception, *, kind: str | None = None,
+                            http_status: int | None = None) -> None:
+    if diagnostics is None:
+        return
+    failure = describe_model_failure(exc, kind=kind, http_status=http_status)
+    if diagnostics.get("usage_status") == "known":
+        failure["usage_status"] = "known"
+    diagnostics["failure"] = failure
+
+
 def _embedding_usage(response: Any) -> dict[str, Any] | None:
     usage = getattr(response, "usage", None)
     return usage.model_dump() if usage is not None and hasattr(usage, "model_dump") else None
@@ -123,23 +155,34 @@ def embed_texts(
             )
         rows = sorted(response.data, key=lambda row: row.index)
         usage = _embedding_usage(response)
+        safe_usage, usage_status = allow_usage(usage)
         if diagnostics is not None:
-            diagnostics["usage"] = usage
+            diagnostics["usage"] = safe_usage
+            diagnostics["usage_status"] = usage_status
         if [row.index for row in rows] != list(range(len(texts))):
-            raise ApiError(502, "embedding_invalid", "向量响应数量或序号不正确。")
+            error = ApiError(502, "embedding_invalid", "向量响应数量或序号不正确。")
+            _note_embedding_failure(diagnostics, error, kind="invalid_count", http_status=200)
+            raise error
         vectors = [row.embedding for row in rows]
         if any(len(v) != 1024 for v in vectors):
-            raise ApiError(502, "embedding_dimension_invalid", "向量连接必须输出 1024 维，请检查模型和 dimensions 参数。")
+            error = ApiError(502, "embedding_dimension_invalid", "向量连接必须输出 1024 维，请检查模型和 dimensions 参数。")
+            _note_embedding_failure(diagnostics, error, kind="invalid_dimension", http_status=200)
+            raise error
         if len(vectors) != len(texts) or any(
             not all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v) or not any(v)
             for v in vectors
         ):
-            raise ApiError(502, "embedding_invalid", "向量模型返回维度或内容不正确")
+            error = ApiError(502, "embedding_invalid", "向量模型返回维度或内容不正确")
+            _note_embedding_failure(diagnostics, error, kind="invalid_value", http_status=200)
+            raise error
         success = True
         return vectors
-    except ApiError:
+    except ApiError as exc:
+        if diagnostics is None or "failure" not in diagnostics:
+            _note_embedding_failure(diagnostics, exc)
         raise
     except Exception as exc:
+        _note_embedding_failure(diagnostics, exc)
         raise provider_error(exc) from None
     finally:
         if diagnostics is not None:

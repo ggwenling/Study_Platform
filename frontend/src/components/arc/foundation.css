@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   --neutral-0: oklch(100% 0 0);
   --neutral-1: oklch(99% 0 0);
   --neutral-2: oklch(97.8% 0 0);
@@ -108,8 +108,15 @@
   --space-12: 3rem; --space-16: 4rem; --space-20: 5rem; --space-24: 6rem;
 }
 
+:root:has(> head > meta[name="color-scheme"][content="light"]) { color-scheme: light; }
+:root:has(> head > meta[name="color-scheme"][content="dark"]) { color-scheme: dark; }
+
+@supports not selector(:has(*)) {
+  :root[data-theme="light"] { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
+}
+
 :root[data-theme="dark"] {
-  color-scheme: dark;
   --background: oklch(19% 0 0);
   --surface: oklch(21.5% 0 0);
   --surface-raised: oklch(24% 0 0);

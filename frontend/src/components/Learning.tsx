@@ -91,7 +91,7 @@ function SourceList({ sources, onOpenSource, disabled = false }: {
 }
 
 export function Learning({ knowledgeBases, notify, overview, refreshOverview }: Props) {
-  const { capabilities, aiJobs, revision } = useWorkspace()
+  const { capabilities, aiJobs, revisions } = useWorkspace()
   const navigate = useNavigate()
   const location = useLocation()
   const historyState = location.state as {
@@ -220,7 +220,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
       if (!controller.signal.aborted) setPendingError(errorMessage(error))
     })
     return () => controller.abort()
-  }, [revision, pendingRetry])
+  }, [revisions.learning, pendingRetry])
 
   useEffect(() => {
     const state = location.state as typeof historyState
@@ -256,7 +256,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
       },
     )
     return () => controller.abort()
-  }, [kbId, materialsRetry])
+  }, [kbId, revisions.materials, materialsRetry])
 
   function applyResponseUpdate(responseId: string, result: LearningResponseResult) {
     setAttempt((prev) => {
@@ -496,7 +496,7 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
     <div className="learning-page">
       <header className="learning-header">
         <h1>学习</h1>
-        <p>基于所选知识库出题练习，支持在线选择/文字作答、拍照判题与错题复盘。</p>
+        <p>用知识库资料生成练习，或用闪卡复习已学内容。</p>
       </header>
 
       <section className="learning-daily-overview" aria-label="今日复习概览">
@@ -615,6 +615,9 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
           </div>
 
           {materialsError && <div role="alert">资料状态读取失败：{materialsError} <Button type="button" size="sm" variant="ghost" onClick={() => setMaterialsRetry((value) => value + 1)}>重新读取资料</Button></div>}
+          {kbId && materialsStatus.kbId === kbId && materialsStatus.ready && materials.length === 0 && !scoped && <p className="muted">
+            当前库暂无就绪资料。可以切换知识库，或等待资料处理完成。
+          </p>}
           {(materials.length > 0 || scoped) && (
             <Accordion
               defaultOpen={-1}
@@ -664,13 +667,9 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
           )}
 
           <div className="learning-config-actions">
-            <Button type="button" loading={busy} disabled={busy || !kbId} onClick={() => void startPractice()}>
-              从当前库出题
-            </Button>
             {resumableAttempt && (
               <Button
                 type="button"
-                variant="secondary"
                 disabled={busy}
                 onClick={() => void openAttemptById(resumableAttempt.id)}
               >
@@ -678,13 +677,16 @@ export function Learning({ knowledgeBases, notify, overview, refreshOverview }: 
                 继续上次练习（已答 {resumableAttempt.answered_count}/{resumableAttempt.item_count}）
               </Button>
             )}
+            <Button type="button" variant={resumableAttempt ? "secondary" : undefined} loading={busy} disabled={busy || !kbId} onClick={() => void startPractice()}>
+              从当前库出题
+            </Button>
           </div>
         </div>
 
         {!attempt ? (
           <EmptyState
             title="尚未开始练习"
-            description="选择题库、题型与题量后点击「从当前库出题」，或从历史记录恢复上次练习。"
+            description="先选择有就绪资料的知识库，再选择题型和题量。也可以从历史记录继续练习。"
             icon={<BookOpen aria-hidden />}
           />
         ) : current ? (

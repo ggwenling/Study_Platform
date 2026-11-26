@@ -1,0 +1,550 @@
+{
+  "synthetic": {
+    "line_chunks": 23,
+    "line_multi": 0,
+    "span_count": 23,
+    "min_chunks": 23,
+    "exact": true,
+    "and_possible_at_10": false,
+    "and_possible_at_24": true,
+    "packed_chunks": 2,
+    "packed_min_chunks": 2,
+    "lexical_hits_at_10": 10,
+    "lexical_hits_at_24": 23,
+    "lexical_method": "token_overlap",
+    "vector_ranking": "NOT_VERIFIED",
+    "rerank": "NOT_VERIFIED",
+    "rewrite_quality": "NOT_VERIFIED",
+    "decisions": {
+      "chunking_default": "KEEP",
+      "top_k_default": "KEEP",
+      "lexical_weight_default": "KEEP",
+      "hybrid_with_weight_zero": "INVALID_COMPARISON"
+    }
+  },
+  "vector_ranking": "NOT_VERIFIED",
+  "rerank": "NOT_VERIFIED",
+  "replay_counts": {
+    "rfc-7234": 1558,
+    "rfc-9110": 8658,
+    "rfc-9111": 1498,
+    "rfc-9112": 1931
+  },
+  "replay_multi": {
+    "rfc-7234": 0,
+    "rfc-9110": 0,
+    "rfc-9111": 0,
+    "rfc-9112": 0
+  },
+  "sources": [
+    {
+      "id": "rfc-7234",
+      "used": true,
+      "status": "PASS",
+      "sha256": "1d084238ae6692d1e3322fa0850dbb9596812332d92b76d9a815c5ed9b600dea"
+    },
+    {
+      "id": "rfc-9110",
+      "used": true,
+      "status": "PASS",
+      "sha256": "21c1cdce6ab0e5509b04d84a28000836c7a087cf786efe6f04877ebfff47232a"
+    },
+    {
+      "id": "rfc-9111",
+      "used": true,
+      "status": "PASS",
+      "sha256": "aeb52adb3279d5f23dae34f68af11bd5cef0a0aff7ffcd014c9ca93c5302cf3e"
+    },
+    {
+      "id": "rfc-9112",
+      "used": true,
+      "status": "PASS",
+      "sha256": "e4f426bac6206b67fdf9e0da826154f70588db2133a0a86b15cde4ff725d8937"
+    },
+    {
+      "id": "nist-180-4",
+      "used": false,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "nist-186-4",
+      "used": false,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "nist-186-5",
+      "used": false,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "nist-202",
+      "used": false,
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "nist-46",
+      "used": false,
+      "status": "FAIL",
+      "sha256": "33113108c9867def8465a0679c7acf7de89b08392e165a7ed86349b64ccd762f"
+    }
+  ],
+  "questions": [
+    {
+      "id": "REAL-001",
+      "spans": 3,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-002",
+      "spans": 3,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-003",
+      "spans": 3,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-004",
+      "spans": 3,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-005",
+      "spans": 3,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-006",
+      "spans": 1,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-007",
+      "spans": 2,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-008",
+      "spans": 2,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-009",
+      "spans": 3,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-010",
+      "spans": 4,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-011",
+      "spans": 1,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-012",
+      "spans": 2,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-013",
+      "spans": 7,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-014",
+      "spans": 1,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-015",
+      "spans": 1,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-016",
+      "spans": 2,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-017",
+      "spans": 2,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-018",
+      "spans": 2,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-019",
+      "spans": 1,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-025",
+      "spans": 2,
+      "in_chunk": 0,
+      "min_chunks": null,
+      "exact": false,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-026",
+      "spans": 9,
+      "in_chunk": 9,
+      "min_chunks": 8,
+      "exact": true,
+      "lexical_hits_at_10": 1,
+      "lexical_hits_at_24": 1,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 1
+    },
+    {
+      "id": "REAL-027",
+      "spans": 22,
+      "in_chunk": 22,
+      "min_chunks": 22,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 10
+    },
+    {
+      "id": "REAL-028",
+      "spans": 16,
+      "in_chunk": 16,
+      "min_chunks": 15,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 5
+    },
+    {
+      "id": "REAL-029",
+      "spans": 24,
+      "in_chunk": 24,
+      "min_chunks": 23,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 5
+    },
+    {
+      "id": "REAL-030",
+      "spans": 4,
+      "in_chunk": 4,
+      "min_chunks": 4,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-031",
+      "spans": 17,
+      "in_chunk": 17,
+      "min_chunks": 17,
+      "exact": true,
+      "lexical_hits_at_10": 2,
+      "lexical_hits_at_24": 8,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 14
+    },
+    {
+      "id": "REAL-032",
+      "spans": 22,
+      "in_chunk": 22,
+      "min_chunks": 22,
+      "exact": true,
+      "lexical_hits_at_10": 1,
+      "lexical_hits_at_24": 2,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 6
+    },
+    {
+      "id": "REAL-034",
+      "spans": 21,
+      "in_chunk": 21,
+      "min_chunks": 21,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 4,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 4
+    },
+    {
+      "id": "REAL-036",
+      "spans": 16,
+      "in_chunk": 16,
+      "min_chunks": 15,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 1
+    },
+    {
+      "id": "REAL-037",
+      "spans": 9,
+      "in_chunk": 9,
+      "min_chunks": 9,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-038",
+      "spans": 9,
+      "in_chunk": 9,
+      "min_chunks": 8,
+      "exact": true,
+      "lexical_hits_at_10": 2,
+      "lexical_hits_at_24": 2,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 2
+    },
+    {
+      "id": "REAL-039",
+      "spans": 6,
+      "in_chunk": 6,
+      "min_chunks": 6,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 3
+    },
+    {
+      "id": "REAL-040",
+      "spans": 23,
+      "in_chunk": 23,
+      "min_chunks": 23,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-041",
+      "spans": 18,
+      "in_chunk": 18,
+      "min_chunks": 17,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 6
+    },
+    {
+      "id": "REAL-042",
+      "spans": 10,
+      "in_chunk": 10,
+      "min_chunks": 9,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 4
+    },
+    {
+      "id": "REAL-043",
+      "spans": 4,
+      "in_chunk": 4,
+      "min_chunks": 3,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": true,
+      "lexical_doc_hit_at_24": true,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-044",
+      "spans": 2,
+      "in_chunk": 2,
+      "min_chunks": 2,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 0
+    },
+    {
+      "id": "REAL-046",
+      "spans": 2,
+      "in_chunk": 2,
+      "min_chunks": 2,
+      "exact": true,
+      "lexical_hits_at_10": 0,
+      "lexical_hits_at_24": 0,
+      "lexical_doc_hit_at_10": false,
+      "lexical_doc_hit_at_24": false,
+      "spans_sharing_query_term": 1
+    }
+  ],
+  "lexical_method": "token_overlap"
+}

@@ -67,6 +67,51 @@ def test_post_uses_guarded_sync_client_and_standard_request(monkeypatch):
     }
 
 
+@pytest.mark.parametrize(
+    ("base_url", "expected_endpoint"),
+    [
+        ("https://rerank.example/v1", "https://rerank.example/v1/rerank"),
+        ("http://rerank", "http://rerank/rerank"),
+        ("http://reranks/", "http://reranks/rerank"),
+        ("https://rerank.example/v1/", "https://rerank.example/v1/rerank"),
+        ("https://rerank.example/v1/rerank", "https://rerank.example/v1/rerank"),
+        (
+            "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
+            "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
+        ),
+        (
+            "https://dashscope.aliyuncs.com/compatible-api/v1/reranks/",
+            "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
+        ),
+    ],
+)
+def test_post_preserves_explicit_rerank_or_reranks_endpoint(monkeypatch, base_url, expected_endpoint):
+    seen = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"output": {"results": [{"index": 0, "relevance_score": 0.9}]}}
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, url, **kwargs):
+            seen["url"] = url
+            return Response()
+
+    monkeypatch.setattr(rerank, "sync_client", lambda *_args: Client())
+    result = rerank._post_rerank(base_url, "secret", "qwen3.7-text-rerank", "query", ["doc"], 1, 8)
+    assert result == [{"index": 0, "relevance_score": 0.9}]
+    assert seen["url"] == expected_endpoint
+
+
 def test_timeout_returns_rrf_fallback_and_records_fallback_call(monkeypatch):
     usage = []
     monkeypatch.setattr(rerank, "resolved", lambda *_: {

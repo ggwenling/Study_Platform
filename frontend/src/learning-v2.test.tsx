@@ -13,7 +13,7 @@ import { wrongIdsForAttempt } from './learningUi'
 const navigateMock = vi.hoisted(() => vi.fn())
 const locationMock = vi.hoisted(() => ({ value: { key: 'initial', state: null as unknown } }))
 const refreshOverview = vi.fn()
-const workspace = vi.hoisted(() => ({ libraries: [{ id: 'kb-1', name: '高数资料库' }], notify: vi.fn(), report: vi.fn(), capabilities: null as { vision?: boolean } | null, aiJobs: { jobs: [] as any[], track: vi.fn(), cancel: vi.fn() } }))
+const workspace = vi.hoisted(() => ({ revisions: { learning: 0, materials: 0 }, libraries: [{ id: 'kb-1', name: '高数资料库' }], notify: vi.fn(), report: vi.fn(), capabilities: null as { vision?: boolean } | null, aiJobs: { jobs: [] as any[], track: vi.fn(), cancel: vi.fn() } }))
 
 vi.mock('react-router', () => ({
   useNavigate: () => navigateMock,

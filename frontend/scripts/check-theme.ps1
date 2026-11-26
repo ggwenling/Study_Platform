@@ -44,12 +44,28 @@ try {
     Browser open "$BaseUrl/" | Out-Null
     Browser wait --fn '!!document.querySelector(".home-panel-inner")' | Out-Null
     foreach ($theme in @('light', 'dark')) {
-        Browser set media $theme | Out-Null
+        $systemTheme = if ($theme -eq 'light') { 'dark' } else { 'light' }
+        Browser set media $systemTheme | Out-Null
         Evaluate "localStorage.setItem('knowloop-theme', '$theme')" | Out-Null
         Browser open "$BaseUrl/" | Out-Null
         Browser wait --fn '!!document.querySelector(".home-panel-inner")' | Out-Null
         Check ((Evaluate 'document.documentElement.dataset.theme') -eq $theme) "$theme selection must survive reload."
+        Check ((Evaluate 'document.querySelector("meta[name=color-scheme]").content') -eq $theme) "$theme selection must reach document metadata."
+        Check ((Evaluate 'getComputedStyle(document.documentElement).colorScheme') -eq $theme) "$theme selection must override the system color scheme."
         Evaluate $contrastHelpers | Out-Null
+        $scrollbar = Evaluate @'
+(() => {
+    const scroller = document.querySelector('.sidebar-sections');
+    const style = getComputedStyle(scroller);
+    const probe = scroller.appendChild(document.createElement('span'));
+    probe.style.color = 'var(--scroll-thumb)';
+    const contrast = window.themeContrast(getComputedStyle(probe).color, getComputedStyle(scroller.closest('.sidebar')).backgroundColor);
+    probe.remove();
+    return { standard: style.scrollbarWidth === 'thin' && style.scrollbarColor !== 'auto', contrast };
+})()
+'@
+        Check $scrollbar.standard "$theme sidebar must use standard scrollbar styling in Chromium."
+        Check ($scrollbar.contrast -ge 3) "$theme sidebar scrollbar thumb must reach 3:1."
         $palette = Evaluate @'
 (() => {
     const probe = document.body.appendChild(document.createElement('span'));
@@ -137,6 +153,7 @@ try {
     Evaluate "localStorage.setItem('knowloop-theme', 'system')" | Out-Null
     Browser open "$BaseUrl/" | Out-Null
     Browser wait --fn '!!document.querySelector(".home-panel-inner")' | Out-Null
+    Check ((Evaluate 'getComputedStyle(document.documentElement).colorScheme') -eq 'light dark') 'System mode must allow both color schemes.'
     foreach ($theme in @('light', 'dark')) {
         Browser set media $theme | Out-Null
         Browser wait --fn "document.documentElement.dataset.theme === '$theme'" | Out-Null

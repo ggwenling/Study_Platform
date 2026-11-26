@@ -112,7 +112,7 @@ beforeEach(() => {
       { id: 'kb-2', name: '英语资料库', description: null, created_at: '', updated_at: '' },
     ],
     loading: false,
-    revision: 0,
+    revisions: { conversations: 0, materials: 0, messages: 0, notes: 0 },
     capabilities: { rag: true, max_upload_bytes: 10_000_000 },
     refresh: vi.fn(),
     notify: vi.fn(),

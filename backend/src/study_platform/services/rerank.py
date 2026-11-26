@@ -6,6 +6,7 @@ import math
 import time
 from dataclasses import replace
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
@@ -52,8 +53,17 @@ def parse_results(payload: Any, document_count: int) -> list[dict[str, float | i
     return sorted(results, key=lambda item: (-item["relevance_score"], item["index"]))
 
 
+def rerank_endpoint(base_url: str) -> str:
+    """Resolve the POST endpoint, preserving explicit `/rerank` or `/reranks` URLs."""
+    url = urlsplit(base_url)
+    path = url.path.rstrip("/")
+    if not path.endswith(("/rerank", "/reranks")):
+        path += "/rerank"
+    return url._replace(path=path).geturl()
+
+
 def _post_rerank(base_url, api_key, model, query, documents, top_n, timeout):
-    endpoint = f"{base_url.rstrip('/')}/rerank"
+    endpoint = rerank_endpoint(base_url)
     with sync_client(base_url, timeout) as client:
         response = client.post(
             endpoint,

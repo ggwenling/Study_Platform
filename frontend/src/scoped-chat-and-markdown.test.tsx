@@ -77,7 +77,7 @@ beforeEach(() => {
       { id: 'A', name: '库A', description: null, created_at: '', updated_at: '' },
       { id: 'B', name: '库B', description: null, created_at: '', updated_at: '' },
     ],
-    revision: 0,
+    revisions: { materials: 0 },
     capabilities: { rag: true, max_upload_bytes: 10_000_000 },
     refresh: vi.fn(),
     report: vi.fn(),
@@ -183,7 +183,7 @@ it('keeps an invalid selection blocked until the user explicitly uses the whole 
   await act(async () => node.querySelector<HTMLButtonElement>('.current-materials button[aria-expanded]')!.click())
   await act(async () => node.querySelector<HTMLInputElement>('input[type=checkbox]')!.click())
   vi.mocked(api.materials).mockResolvedValue({ items: [], next_cursor: null })
-  workspace.value.revision++
+  workspace.value.revisions.materials++
   await render(<Composer />)
   expect(node.textContent).toContain('已选资料不可用')
   const textarea = node.querySelector('textarea')!
@@ -439,6 +439,15 @@ describe('inline [S1] citations & KaTeX math rendering in MarkdownContent', () =
     const inlineCode = [...node.querySelectorAll('code')].find((el) => el.textContent === 'arr[S1]')
     expect(inlineCode).toBeTruthy()
     expect(node.querySelector('pre')?.textContent).toContain('items[S1]')
+    expect(node.querySelector('pre code.hljs')).toBeTruthy()
     expect(node.querySelector('.katex')).toBeTruthy()
+  })
+
+  it('highlights a tilde code fence added to an already rendered answer', async () => {
+    await render(<MarkdownContent>回答正文</MarkdownContent>)
+    expect(node.querySelector('pre')).toBeNull()
+    await render(<MarkdownContent>{'回答正文\n\n~~~js\nconst answer = 42\n~~~'}</MarkdownContent>)
+    await act(async () => { await vi.dynamicImportSettled() })
+    expect(node.querySelector('pre code.hljs .hljs-keyword')?.textContent).toBe('const')
   })
 })

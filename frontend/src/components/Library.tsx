@@ -67,7 +67,7 @@ export default function Library({ preferredId }: { preferredId?: string }) {
       const item = await api.createKnowledgeBase({ name, description: String(form.get('description')).trim() || null })
       setCreated(item)
       setCreating(false)
-      refresh()
+      refresh('libraries', 'overview')
       notify('知识库已创建。')
       select(item.id)
     } catch (error) { report(error) } finally { setCreateBusy(false) }
@@ -108,7 +108,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   library: KnowledgeBase; libraries: KnowledgeBase[]; select: (id: string) => void; create: () => void; onDeleted: () => void;
   fragmentId: string | null; noteId: string | null; closeSearchResult: () => void;
 }) {
-  const { revision, refresh, notify, report, capabilities, libraryUploadQueue: uploadQueue } = useWorkspace()
+  const { revisions, refresh, notify, report, capabilities, libraryUploadQueue: uploadQueue } = useWorkspace()
   const navigate = useNavigate()
   const id = library.id
   const [overview, setOverview] = useState<LibraryOverview>()
@@ -189,7 +189,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       if (finished.length) {
         setVisionJobs((current) => current.filter((job) => !finished.includes(job.jobId)))
         reloadData()
-        refresh()
+        refresh('materials', 'overview', 'usage')
       }
       if (pending) timer = window.setTimeout(pollVisionJob, 2200)
     }
@@ -222,7 +222,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     }
     void load()
     return () => { controller.abort(); window.clearTimeout(timer) }
-  }, [id, revision, reload])
+  }, [id, revisions.materials, reload])
 
   useEffect(() => {
     for (const material of materials) {
@@ -287,7 +287,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     try {
       await api.updateKnowledgeBase(id, { name, description: String(form.get('description')).trim() || null })
       setPanel(undefined)
-      refresh()
+      refresh('libraries')
       notify('知识库已更新。')
     } catch (error) { report(error) } finally { setBusy(undefined) }
   }
@@ -306,7 +306,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       const result = await api.reparseMaterial(material.id, 'vlm')
       setVisionJobs((current) => [...current.filter((job) => job.jobId !== result.job_id), { title: material.title, jobId: result.job_id }])
       reloadData()
-      refresh()
+      refresh('materials', 'overview')
       notify('已提交视觉理解重新解析，完成后会通知你。')
     } finally { setBusy(undefined) }
   }
@@ -317,7 +317,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     try {
       await api.cancelJob(material.job_id)
       reloadData()
-      refresh()
+      refresh('materials', 'overview')
       notify('已取消资料处理。')
     } catch (error) { report(error) } finally { setBusy(undefined) }
   }
@@ -331,7 +331,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       setLocations((current) => { const next = { ...current }; delete next[material.id]; return next })
       setConfirmMaterial(null)
       reloadData()
-      refresh()
+      refresh('materials', 'overview')
       notify('资料已删除。')
     } catch (error) { report(error) } finally { setBusy(undefined) }
   }
@@ -342,7 +342,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     try {
       await api.deleteKnowledgeBase(id)
       setPanel(undefined)
-      refresh()
+      refresh('libraries', 'conversations', 'materials', 'notes', 'learning', 'overview')
       notify('知识库已删除。')
       onDeleted()
     } catch (error) { report(error) } finally { setBusy(undefined) }
@@ -423,7 +423,13 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       <header className="library-header">
         <Layers size={32} />
         <div><h1>{library.name}</h1>
-          {library.embedding_binding && <p>向量模型 · {library.embedding_binding.model} · {library.embedding_connection_id ? '个人连接' : '平台连接'} · 1024 维</p>}{library.description && <p>{library.description}</p>}</div>
+          {library.embedding_binding && <p>向量模型 · {library.embedding_binding.model} · {library.embedding_connection_id ? '个人连接' : '平台连接'} · 1024 维</p>}
+          {library.description && <p>{library.description}</p>}
+          {capabilities?.max_pdf_pages && capabilities.max_pdf_upload_bytes && <p className="muted">
+            PDF 最多 {capabilities.max_pdf_pages} 页、{capabilities.max_pdf_upload_bytes / 1024 ** 2} MiB
+            {' · '}其他资料最多 {capabilities.max_upload_bytes / 1024 ** 2} MiB
+          </p>}
+        </div>
         <div className="library-header-actions">
           <Button size="sm" variant="secondary" onClick={() => setPanel('edit')}><Pencil size={16} />编辑</Button>
           <Button size="sm" variant="secondary" loading={busy === 'sync'} disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步</Button>
@@ -447,7 +453,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
       <LibraryReindex library={library} open={reindexOpen} onOpenChange={setReindexOpen} onPublished={() => {
         setFragmentRevision((value) => value + 1)
         reloadData()
-        refresh()
+        refresh('materials', 'overview')
       }} />
       {capabilities?.vision && <p className="muted library-upload-note">
         <Switch aria-label="本次导入的图片或 PDF 使用视觉解析（可能产生费用）" label="本次导入的图片或 PDF 使用视觉解析（可能产生费用）"
@@ -595,7 +601,10 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
               const inProgress = !['ready', 'failed', 'cancelled'].includes(item.status)
               const sourceUrl = safeExternalUrl(item.source_url)
               return <li key={item.id}>
-                <div><strong>{item.title}</strong><p className="muted">{phases[item.status] ?? item.status}</p>
+                <div><strong>{item.title}</strong><p className="muted">{phases[item.status] ?? item.status}
+                  {inProgress && item.total_pages != null && item.processed_pages != null &&
+                    ` · 已处理 ${item.processed_pages} / ${item.total_pages} 页`}
+                </p>
                   {sourceUrl && <a href={sourceUrl} target="_blank" rel="noopener noreferrer">打开原网页</a>}
                   {item.error_message && <p className="error-text">{item.error_message}</p>}</div>
                 <div className="library-dialog-actions">
