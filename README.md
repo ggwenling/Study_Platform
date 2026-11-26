@@ -1,40 +1,46 @@
 # KnowLoop · 知循
 
-**A personal knowledge workspace for organizing documents, asking questions with citations, and studying from your own materials.**
+**A personal knowledge workspace for asking questions about your documents, checking the cited passages, and turning what you learn into notes and practice.**
+
+[![React 19](https://img.shields.io/badge/React-19-087EA4?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-5B45D0?style=flat-square&logo=vite&logoColor=white)](https://vite.dev/)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-007A70?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![PostgreSQL and pgvector](https://img.shields.io/badge/PostgreSQL-pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1F5C54?style=flat-square&logo=langgraph&logoColor=white)](https://docs.langchain.com/oss/python/langgraph/overview)
 
 English · [简体中文](README.zh-CN.md)
 
-[Desktop gallery](#desktop-gallery) · [Features](#features) · [Quick start](#quick-start) · [Architecture](#architecture) · [Verification](#verification)
+[Quick start](#quick-start) · [Desktop gallery](#desktop-gallery) · [Features](#features) · [Architecture](#architecture) · [Verification](#verification)
 
-## Overview
+[![KnowLoop desktop chat showing a cited answer beside its source passages](docs/screenshots/01-cited-chat.png)](docs/screenshots/01-cited-chat.png)
 
-KnowLoop connects three everyday tasks. Import your documents into a private knowledge base, ask a question and check the cited evidence, then save the result as a research note or turn the source material into a study session. Full-text search helps you recover material by a phrase or reference number even when you no longer remember the filename.
-
-![KnowLoop desktop chat with a source-cited answer and the original evidence in the reference panel](docs/screenshots/01-cited-chat.png)
-
-*The running desktop web app. The screenshots use fictional source documents. The answer and its citations were generated through the application with configured models.*
+*KnowLoop running locally with a fictional reading-room project. The chat, notes, and flashcards use saved demo data.*
 
 ## Desktop gallery
 
-| Knowledge base | Workspace search |
+| Knowledge base | Source reader |
 | --- | --- |
-| ![Knowledge base on desktop in the light theme with indexed documents, activity, and workshop tools](docs/screenshots/02-knowledge-base.png) | ![Desktop Ctrl+K search showing a matching source passage](docs/screenshots/03-search.png) |
-| Inspect processing status, file structure, fragments, and recent index activity. | Search document text, note text and titles, knowledge base names, and conversation titles. |
+| [![Library with indexed documents and knowledge workshop tools](docs/screenshots/02-knowledge-base.png)](docs/screenshots/02-knowledge-base.png) | [![The source reader with the cited passage in context](docs/screenshots/06-source-reader.png)](docs/screenshots/06-source-reader.png) |
+| Import documents, check indexing status, and open the knowledge workshop. | Open a citation in context and save an excerpt with its source. |
 
 | Research notes | Study |
 | --- | --- |
-| ![A saved research note with links to the cited sources](docs/screenshots/04-research-note.png) | ![The desktop study page with a flashcard generated from the demonstration library](docs/screenshots/05-study.png) |
-| Save answers with their references and revisit the original evidence. | Generate practice material and review flashcards from a selected knowledge base. |
+| [![A saved research note showing the source document and excerpt](docs/screenshots/04-research-note.png)](docs/screenshots/04-research-note.png) | [![Flashcard answer with its source and review ratings](docs/screenshots/05-study.png)](docs/screenshots/05-study.png) |
+| Save a passage with its document and location. | Flip a card, check its source, and rate how well you remembered it. |
+
+[View workspace search](docs/screenshots/03-search.png) to see how `Ctrl+K` finds a source passage or saved note.
 
 ## Features
 
 | Workflow | What you can do |
 | --- | --- |
 | **Collect and index** | Upload PDF, DOCX, PPTX, Markdown, UTF-8 TXT, PNG, or JPEG, paste text, or import a publicly accessible webpage by URL. PPTX import extracts slide text, tables, and speaker notes. The worker parses documents, uses OCR on eligible scans and images, and builds an index. Follow progress and retry failed jobs. |
-| **Ask and verify** | Stream answers with citations, scope a turn to selected materials, and summarize ready documents. Inspect source passages and available page previews. Use the library's retrieval diagnostics to test how a query matches fragments. |
+| **Ask and verify** | Stream answers with citations, narrow a question to selected materials, and summarize indexed documents. Open a citation in the source reader to inspect adjacent passages or view available PDF pages. Use retrieval diagnostics to see which fragments a query matches. |
 | **Find and organize** | Use `Ctrl+K` to find source passages and research notes. Open matched passages or notes directly. Group conversations by project, export them to Markdown, and restore archived conversations from History. |
-| **Build a research notebook** | Create or save notes from answers. Generate study guides, mind maps, or formula sheets and write selected notes back into the library as source material. |
-| **Practice and review** | Generate quizzes and flashcards from a knowledge base, submit text or photo answers, and revisit mistakes and past sessions. Vision model assistance is opt-in. |
+| **Build a research notebook** | Save an answer or an excerpt from the source reader to a new or existing note. Generate study guides, mind maps, or formula sheets in the knowledge workshop and write selected notes back into the library as source material. |
+| **Practice and review** | Generate quizzes and flashcards from a knowledge base, review due cards with spaced repetition, and revisit mistakes. Submit text or photo answers. Vision model assistance is opt-in. |
 | **Export and back up** | Export notes as ZIP, flashcards as Anki TSV or Markdown, and filtered wrong questions as Markdown. Windows backup and restore cover the `study` schema and configured storage directory. |
 | **Configure models** | Use platform defaults or configure compatible language and embedding connections. Each library can optionally use a compatible reranking connection. Each library has a defined embedding binding, with 1024-dimensional embeddings. |
 
@@ -121,7 +127,7 @@ React, TypeScript, and Vite provide the web interface. FastAPI handles authentic
 
 ## Operational boundaries
 
-- The default upload limit is 20 MiB per file, with up to 50 PDF pages and 20 million pixels per image. Web import is limited to publicly reachable pages and may not extract login-protected or JavaScript-heavy sites. Scan and slide-image quality affects OCR results.
+- PDFs are limited to 50 MiB and 150 pages by default. Other uploads are limited to 20 MiB per file, and images can contain up to 20 million pixels. Web import works with publicly reachable pages. Login walls and JavaScript-heavy pages can prevent extraction. Scan and slide-image quality affects OCR results.
 - Documents and app records are stored on the configured host. Hosted model connections receive inputs needed for embedding or answering. A hosted reranker also receives the query and candidate passages. Choose providers and documents accordingly.
 - Workspace search matches stored text. Model-based answers and learning outputs depend on the configured services and the quality of the source material.
 - Windows backup and restore include the PostgreSQL `study` schema and configured `STORAGE_DIR` (default `.local/storage`). They exclude `.env` and the separate `study_graph` checkpointer schema. Review the script's checks and recovery steps before restoring. [Local operations and recovery](docs/local-runtime.md)
