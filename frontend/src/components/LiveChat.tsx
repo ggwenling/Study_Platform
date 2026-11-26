@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router'
 import { api } from '@/api/client'
 import { ApiError } from '@/api/stream'
 import type { Citation, Conversation, Message, Page, Scope } from '@/api/types'
-import { allPages, errorMessage, safeExternalUrl } from '@/api/ui'
+import { allPages, chatModelError, errorMessage, safeExternalUrl } from '@/api/ui'
 import { downloadMarkdownFile, formatConversationMarkdown, sanitizeMarkdownFilename, scopeSummaryText } from '@/conversationActions'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
@@ -52,6 +52,8 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
   const { user, libraries = [], chat, revisions, refresh, notify, report, requireLogin } = useWorkspace()
   const navigate = useNavigate()
   const [conversation, setConversation] = useState<Conversation | null>(null)
+  const [savingModel, setSavingModel] = useState(false)
+  const modelSave = useRef({ pending: false, revision: 0 })
   const [history, setHistory] = useState<Page<Message> | null>(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [olderError, setOlderError] = useState('')
@@ -96,10 +98,12 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
   useEffect(() => {
     if (!user) return
     const controller = new AbortController()
+    const revision = modelSave.current.revision
     void Promise.all([api.conversation(id), api.messages(id, undefined, 'desc', controller.signal)]).then(
       ([conversation, page]) => {
         if (controller.signal.aborted) return
-        setConversation(conversation)
+        setConversation((current) => current?.id === id && revision !== modelSave.current.revision
+          ? { ...conversation, llm_connection_id: current.llm_connection_id } : conversation)
         setHistory((current) => {
           const oldest = page.items.at(-1)
           if (!page.next_cursor || !oldest || !current?.items.some((message) => message.id === oldest.id)) return page
@@ -117,6 +121,24 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
     )
     return () => controller.abort()
   }, [id, user, revisions.messages])
+
+  async function chooseModel(connectionId: string | null) {
+    if (!conversation || modelSave.current.pending || (conversation.llm_connection_id ?? null) === connectionId) return
+    modelSave.current.pending = true
+    setSavingModel(true)
+    try {
+      const updated = await api.updateConversation(id, { llm_connection_id: connectionId })
+      modelSave.current.revision += 1
+      setConversation(updated)
+      refresh('conversations')
+    } catch (failure) {
+      report(failure)
+      refresh('capabilities')
+    } finally {
+      modelSave.current.pending = false
+      setSavingModel(false)
+    }
+  }
 
   useEffect(() => () => {
     olderRequest.current?.abort()
@@ -331,6 +353,7 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
             {messages.map((message) => {
               const isUser = message.role === 'user'
               const stopped = message.status === 'stopped' || message.status === 'failed'
+              const modelFailure = message.status === 'failed' ? chatModelError(message.error_code) : undefined
               const phase = !isUser && ['pending', 'streaming'].includes(message.status)
                 && active?.assistantId === message.id ? active.phase : null
               const status = phase ? activityLabels[phase] : ['pending', 'streaming'].includes(message.status)
@@ -377,7 +400,8 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                         {message.content && <ChatAnswerMarkdown message={message} onSelectCitation={openCitations} />}
                         {message.turn_id && chat.recoveryErrors[message.turn_id] && ['pending', 'streaming'].includes(message.status)
                           ? <p className="muted" role="status">暂时无法确认生成状态。<Button size="sm" variant="secondary" onClick={() => chat.recover(id, message.turn_id!)}>重新查询状态</Button></p>
-                          : <p className="muted activity-status" role="status" aria-live="polite">{status}</p>}
+                          : <p className="muted activity-status" role="status" aria-live="polite">{status}{message.status === 'failed' && `。${modelFailure ?? '请检查后重试。'}`}</p>}
+                        {message.model_profile && <small className="muted">本轮配置模型 · {message.model_profile}</small>}
                       </div>
                       <div className="citation-list">
                         {message.citations.map((citation) => (
@@ -403,8 +427,13 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
                             <BookmarkPlus size={15} />存为笔记
                           </Button>
                         )}
-                        {message === latest && message.turn_id && (stopped || message.status === 'completed') && <Button size="sm" variant="secondary" disabled={busy}
+                        {message === latest && message.turn_id && !modelFailure && (stopped || message.status === 'completed') && <Button size="sm" variant="secondary" disabled={busy}
                           onClick={() => void chat.retry(id, message.turn_id!)}>{stopped ? '重试本轮' : '重新生成'}</Button>}
+                        {message === latest && message.turn_id && modelFailure && <>
+                          <Button size="sm" variant="secondary" disabled={busy || savingModel || !conversation}
+                            onClick={() => void chat.retry(id, message.turn_id!, true)}>用当前模型重试</Button>
+                          <Link to="/settings#model-settings-title">检查模型连接</Link>
+                        </>}
                         {message === latest && message.turn_id && message.status === 'streaming' && !active && !busy && <Button size="sm" variant="secondary" onClick={() => void chat.stop(id, message.turn_id!)}>停止生成</Button>}
                       </div>
                     </>
@@ -414,7 +443,10 @@ export default function LiveChat({ id, searchButton }: { id: string; searchButto
             })}
           </div>
         </div>
-        <div className="chat-footer"><Composer ref={composer} conversationId={id} preferredLibrary={latest?.scope?.knowledge_base_id ?? conversation?.project_knowledge_base_id ?? undefined} /></div>
+        <div className="chat-footer"><Composer ref={composer} conversationId={id}
+          conversationModelId={conversation ? conversation.llm_connection_id ?? null : undefined}
+          onModelChange={(modelId) => void chooseModel(modelId)} savingModel={savingModel}
+          preferredLibrary={latest?.scope?.knowledge_base_id ?? conversation?.project_knowledge_base_id ?? undefined} /></div>
       </section>
       {mobile ? (
         <Dialog open={drawer} onOpenChange={(open) => { if (!open) setDrawer(false) }}>

@@ -137,6 +137,7 @@ def test_message_snapshot_scope_only_exposes_public_fields():
         conversation_id=uuid4(),
         workflow_run_id=run_id,
         role="assistant",
+        model_profile="tested-model",
         content="Answer",
         status="cancelled",
         sequence_no=1,
@@ -144,6 +145,7 @@ def test_message_snapshot_scope_only_exposes_public_fields():
     )
     dto = message_dto(db, message)
     assert dto["turn_id"] == run_id and dto["status"] == "stopped"
+    assert dto["model_profile"] == "tested-model" and dto["error_code"] is None
     assert set(dto["scope"]) == {
         "knowledge_base_id",
         "knowledge_base_name",

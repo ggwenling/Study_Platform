@@ -2,7 +2,7 @@
 
 ## Baseline
 
-The current Alembic head is `0016_rerank_and_kb_retrieval`, with 43 ORM-mapped business tables in `study`. The initial revision creates 37 tables. Revisions `0002_personal_rag`, `0003_bearer_auth`, `0009_model_call_records`, and `0010_model_connections` add six more. The project supports PostgreSQL 16 and later. CI uses 16, and the Windows pgvector installer defaults to 18. The backend uses Python 3.12, SQLAlchemy 2, psycopg 3, `citext`, and pgvector `vector(1024)`. [Original database design](architecture/02_Database_Design.md)
+The current Alembic head is `0017_conversation_llm`, with 43 ORM-mapped business tables in `study`. The initial revision creates 37 tables. Revisions `0002_personal_rag`, `0003_bearer_auth`, `0009_model_call_records`, and `0010_model_connections` add six more. The project supports PostgreSQL 16 and later. CI uses 16, and the Windows pgvector installer defaults to 18. The backend uses Python 3.12, SQLAlchemy 2, psycopg 3, `citext`, and pgvector `vector(1024)`. [Original database design](architecture/02_Database_Design.md)
 
 `users.status` is `VARCHAR(24)`: the source dictionary says `VARCHAR(16)` but explicitly allows the 20-character `pending_verification` state. Widening this one column is the necessary correction to preserve every declared state. All other declared enum values fit their dictionary column widths.
 
@@ -57,7 +57,7 @@ Coverage reflects source inspection. Row counts are outside this inventory.
 
 ## Alembic and LangGraph boundaries
 
-`0001_initial_schema.py` contains frozen, explicit DDL for the original 37 tables. The revision chain through `0016_rerank_and_kb_retrieval` adds six tables and evolves columns, checks, and indexes to the current 43-table metadata contract. Migrations do not call `Base.metadata.create_all()`. The initial revision explicitly creates the `study` schema and its tables. Downgrade removes indexes, then FKs, then business tables in reverse order. It preserves shared `citext` and `vector` extensions and the `study` schema containing Alembic's own version table.
+`0001_initial_schema.py` contains frozen, explicit DDL for the original 37 tables. The revision chain through `0017_conversation_llm` adds six tables and evolves columns, checks, and indexes to the current 43-table metadata contract. Migrations do not call `Base.metadata.create_all()`. The initial revision explicitly creates the `study` schema and its tables. Downgrade removes indexes, then FKs, then business tables in reverse order. It preserves shared `citext` and `vector` extensions and the `study` schema containing Alembic's own version table.
 
 Alembic manages the `study` schema. The initial revision also creates the `study_graph` namespace, while the standalone `setup_checkpointer.py` step lets the pinned official PostgreSQL checkpointer create and migrate its internal tables. Those tables are not business models. Checkpointer teardown must remove them before `study_graph` can be dropped. Downgrade intentionally uses no `CASCADE`. Production downgrade and purge require an operational plan.
 

@@ -31,7 +31,7 @@ function UsageBreakdown({ title, rows }: { title: string; rows: ModelUsageBucket
   </section>
 }
 
-export function Settings({ user, requireLogin }: { user: User | null; requireLogin: () => void }) {
+export function Settings({ user, requireLogin, openSetup }: { user: User | null; requireLogin: () => void; openSetup?: boolean }) {
   const { revisions } = useWorkspace()
   const [summary, setSummary] = useState<ModelUsageSummary | null>(null)
   const [error, setError] = useState('')
@@ -63,7 +63,7 @@ export function Settings({ user, requireLogin }: { user: User | null; requireLog
       <h1>设置</h1>
       <p>管理当前使用的模型连接，查看个人用量。</p>
     </header>
-    <ModelConnectionsPanel key={user.id} />
+    <ModelConnectionsPanel key={user.id} openSetup={openSetup} />
     <section className="settings-card settings-usage" aria-labelledby="usage-title" aria-busy={busy}>
       <header className="usage-heading">
         <h2 id="usage-title"><BarChart3 size={19} aria-hidden="true" />用量概览</h2>

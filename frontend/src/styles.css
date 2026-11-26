@@ -169,6 +169,11 @@ h1, h2, h3, p { margin: 0; }
   .home-orbit { transform: none; }
 }
 .home-content { min-width: 0; width: min(100%, 864px); }
+.home-model-setup { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .65rem 1.25rem; margin-block: 0 1rem; padding: .85rem 1rem; border: 1px solid var(--border); border-radius: .85rem; background: var(--surface); }
+.home-model-setup h2 { font-size: var(--text-sm); margin: 0; }
+.home-model-setup p { font-size: var(--text-xs); color: var(--text-secondary); margin: .2rem 0 0; }
+.home-model-setup > :last-child { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; }
+.home-model-setup a, .composer-model a, .composer-hint a { text-decoration: underline; text-underline-offset: 3px; }
 .welcome { text-align: center; margin-bottom: clamp(26px, 5vh, 55px); }
 .welcome h1 {
   font-family: var(--font-sans);
@@ -215,6 +220,9 @@ h1, h2, h3, p { margin: 0; }
 .current-materials-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .material-scope-checkbox { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--ink); cursor: pointer; flex: none; }
 .composer .composer-hint { overflow-wrap: anywhere; }
+.composer-model { display: flex; align-items: end; flex-wrap: wrap; gap: .35rem .75rem; padding-block: .25rem; font-size: var(--text-xs); }
+.composer-model > :first-child { min-width: 0; max-width: min(100%, 26rem); }
+.composer-model > a { align-self: center; }
 .composer-login { position: absolute; inset: 0; z-index: 1; border: 0; border-radius: 24px; background: transparent; }
 .composer:focus-within { border-color: var(--border-strong); }
 .composer[data-dragging] { border-color: var(--ink); border-style: dashed; background: var(--surface-muted); }

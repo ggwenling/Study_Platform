@@ -34,6 +34,7 @@ from study_platform.persistence.models import (
 from study_platform.services.citations import citation_dto, message_dto
 from study_platform.services.learning import count_due_wrong_questions
 from study_platform.services.lexical import lexical_query_terms, plain_tsquery
+from study_platform.services.model_connections import selected_llm
 from study_platform.services.workspace_search import (
     body_score_expression,
     body_search_expression,
@@ -93,6 +94,7 @@ class ConversationDTO(BaseModel):
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None
+    llm_connection_id: UUID | None = None
 
 
 class ConversationPage(BaseModel):
@@ -140,6 +142,8 @@ class MessageDTO(BaseModel):
     created_at: datetime
     scope: ScopeDTO | None
     citations: list[CitationDTO]
+    model_profile: str | None = None
+    error_code: str | None = None
 
 
 class MessagePage(BaseModel):
@@ -153,11 +157,17 @@ def kb_dto(kb):
 
 
 def conversation_dto(row):
-    return {k: getattr(row, k) for k in ("id", "title", "project_knowledge_base_id", "created_at", "updated_at", "archived_at")}
+    return {k: getattr(row, k) for k in ("id", "title", "project_knowledge_base_id", "created_at", "updated_at",
+                                        "archived_at", "llm_connection_id")}
 
 
 class CreateConversationBody(ConversationBody):
     project_knowledge_base_id: UUID | None = None
+    llm_connection_id: UUID | None = None
+
+
+class UpdateConversationBody(ConversationBody):
+    llm_connection_id: UUID | None = None
 
 
 def owned_conversation(db, user, conversation_id, *, lock=False):
@@ -345,9 +355,12 @@ def create_conversation(
 ):
     if body.project_knowledge_base_id:
         owned_kb(db, user, body.project_knowledge_base_id, lock=True)
+    if body.llm_connection_id is not None:
+        selected_llm(db, user.id, body.llm_connection_id)
     row = Conversation(
         owner_user_id=user.id, course_id=None, title=body.title, mode="normal", scope_snapshot=[],
         project_knowledge_base_id=body.project_knowledge_base_id,
+        llm_connection_id=body.llm_connection_id,
     )
     db.add(row)
     db.commit()
@@ -364,12 +377,17 @@ def get_conversation(
 @router.patch("/conversations/{conversation_id}", response_model=ConversationDTO)
 def rename_conversation(
     conversation_id: UUID,
-    body: ConversationBody,
+    body: UpdateConversationBody,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    row = owned_conversation(db, user, conversation_id)
-    row.title = body.title
+    row = owned_conversation(db, user, conversation_id, lock=True)
+    if "title" in body.model_fields_set or "llm_connection_id" not in body.model_fields_set:
+        row.title = body.title
+    if "llm_connection_id" in body.model_fields_set:
+        if body.llm_connection_id is not None:
+            selected_llm(db, user.id, body.llm_connection_id)
+        row.llm_connection_id = body.llm_connection_id
     db.commit()
     return conversation_dto(row)
 
@@ -636,9 +654,22 @@ def search(
     }
 
 
+class ChatModelDTO(BaseModel):
+    id: UUID
+    name: str
+    model: str
+    status: str
+    is_default: bool
+    error_code: str | None
+
+
 class CapabilitiesDTO(BaseModel):
     rag: bool
     library_rag: dict[str, bool] = Field(default_factory=dict)
+    library_embedding: dict[str, bool] = Field(default_factory=dict)
+    has_personal_models: bool = False
+    chat_models: list[ChatModelDTO] = Field(default_factory=list)
+    platform_chat_model: str | None = None
     ocr: bool
     vision: bool
     rerank: bool
@@ -674,11 +705,22 @@ def capabilities(user=Depends(get_current_user), db: Session = Depends(get_db)):
         rerank = bool(default_snapshot(db, user.id, "rerank").get("id"))
     except ApiError:
         rerank = False
-    library_rag = {str(kb): available["llm"] and (status == "ready" if connection else bool(settings.embedding_api_key.get_secret_value()))
-                   for kb, connection, status in libraries}
+    library_embedding = {str(kb): status == "ready" if connection else bool(settings.embedding_api_key.get_secret_value())
+                         for kb, connection, status in libraries}
+    library_rag = {kb: available["llm"] and ready for kb, ready in library_embedding.items()}
+    models = db.scalars(sa.select(ModelConnection).where(
+        ModelConnection.owner_user_id == user.id, ModelConnection.deleted_at.is_(None),
+    ).order_by(ModelConnection.created_at)).all()
     return {
         "rag": available["llm"] and (available["embedding"] or any(library_rag.values())),
         "library_rag": library_rag,
+        "library_embedding": library_embedding,
+        "has_personal_models": bool(models),
+        "chat_models": [ChatModelDTO(
+            id=row.id, name=row.name, model=row.versions[str(row.revision)]["model"],
+            status=row.status, is_default=row.is_default, error_code=row.error_code,
+        ) for row in models if row.kind == "llm"],
+        "platform_chat_model": settings.chat_model if settings.deepseek_api_key.get_secret_value() else None,
         "ocr": True,
         "vision": vision,
         "rerank": rerank,

@@ -132,7 +132,21 @@ def expire_runs(db, conversation_id):
         ).values(status="failed"))
 
 
+def chat_model(db, owner, connection_id):
+    if connection_id is not None:
+        row = model_connections.selected_llm(db, owner, connection_id)
+        saved = model_connections.snapshot(row)
+    else:
+        saved = model_connections.default_snapshot(db, owner, "llm")
+        row = model_connections.owned(db, owner, UUID(saved["id"])) if saved["id"] else None
+    name = row.versions[str(saved["revision"])]["model"] if row else get_settings().chat_model
+    return saved, name
+
+
 def prepare(owner: UUID, data: dict, key: str):
+    # Keep old idempotency fingerprints when no initial model is requested.
+    if data.get("llm_connection_id") is None:
+        data = {name: value for name, value in data.items() if name != "llm_connection_id"}
     fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
     with session_factory()() as db:
         # Serialize duplicate first-send requests even before a conversation exists.
@@ -160,6 +174,8 @@ def prepare(owner: UUID, data: dict, key: str):
         if kb is None:
             raise ApiError(404, "not_found", "知识库不存在")
         if data.get("conversation_id"):
+            if data.get("llm_connection_id"):
+                raise ApiError(422, "model_selection_requires_update", "请先保存会话的模型选择。")
             conv = owned_conversation(db, owner, UUID(data["conversation_id"]), lock=True)
             expire_runs(db, conv.id)
             if db.scalar(sa.select(AiWorkflowRun.id).where(
@@ -168,7 +184,10 @@ def prepare(owner: UUID, data: dict, key: str):
                 raise ApiError(409, "conversation_busy", "会话已有正在生成的回答")
         else:
             conv = Conversation(id=uuid4(), owner_user_id=owner, title=data["content"][:80],
-                                mode="normal", scope_snapshot=[], project_knowledge_base_id=kb.id)
+                                mode="normal", scope_snapshot=[], project_knowledge_base_id=kb.id,
+                                llm_connection_id=UUID(data["llm_connection_id"]) if data.get("llm_connection_id") else None)
+        llm_connection, model_name = chat_model(db, owner, conv.llm_connection_id)
+        if not data.get("conversation_id"):
             db.add(conv)
             db.flush()
         selected = data.get("material_ids")
@@ -179,9 +198,6 @@ def prepare(owner: UUID, data: dict, key: str):
         retrieval = effective_settings(kb.retrieval_settings)
         embedding_connection = model_connections.library_snapshot(db, owner, kb.id)
         rerank_connection = rerank_snapshot(db, owner, retrieval)
-        llm_connection = model_connections.default_snapshot(db, owner, "llm")
-        model_name = (model_connections.owned(db, owner, UUID(llm_connection["id"])).versions[str(llm_connection["revision"])]["model"]
-                      if llm_connection["id"] else get_settings().chat_model)
         run = AiWorkflowRun(
             id=uuid4(), owner_user_id=owner, conversation_id=conv.id,
             knowledge_base_id=kb.id, answer_mode=data["answer_mode"],
@@ -256,7 +272,7 @@ def cancel(owner, conversation_id, turn_id):
     return turn(owner, conversation_id, turn_id)
 
 
-def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None):
+def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None, use_current_model=False):
     with session_factory()() as db:
         run = db.get(AiWorkflowRun, turn_id)
         if (not run or run.owner_user_id != owner or run.conversation_id != conversation_id
@@ -269,7 +285,7 @@ def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None)
         ).with_for_update())
         if kb is None:
             raise ApiError(409, "scope_unavailable", "原知识库已不可用")
-        owned_conversation(db, owner, conversation_id, lock=True)
+        conv = owned_conversation(db, owner, conversation_id, lock=True)
         expire_runs(db, conversation_id)
         db.refresh(run)
         latest = db.scalar(sa.select(Message).where(
@@ -290,6 +306,11 @@ def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None)
         if edited_content is not None:
             latest.content = edited_content
             run.source_scope = {**run.source_scope, "content": edited_content}
+        if use_current_model:
+            if run.status != "failed":
+                raise ApiError(409, "retry_not_allowed", "仅失败的轮次可以切换模型重试。")
+            saved, run.model_profile = chat_model(db, owner, conv.llm_connection_id)
+            run.source_scope = {**run.source_scope, "llm_connection": saved}
         run.status = "running"
         run.fencing += 1
         run.failure_code = None
@@ -301,6 +322,7 @@ def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None)
             Message.workflow_run_id == run.id, Message.role == "assistant"))
         db.execute(sa.delete(MessageCitation).where(MessageCitation.message_id == assistant.id))
         assistant.content, assistant.status, assistant.usage = "", "streaming", None
+        assistant.model_profile = run.model_profile
         db.commit()
         return run.id, run.fencing, False
 

@@ -56,7 +56,7 @@ async function runStep(info: { title: string }, name: string, body: () => Promis
 
 test.describe.serial('isolated synthetic user journey', () => {
   test.beforeAll(async ({ browser }) => {
-    for (const url of [`${appOrigin}/`, `${apiOrigin}/health/ready`, 'http://127.0.0.1:18080/health']) {
+    for (const url of [`${appOrigin}/`, `${apiOrigin}/health/ready`, new URL('/health', modelBase).href]) {
       const response = await fetch(url)
       if (!response.ok) throw new Error(`${url} returned ${response.status}`)
     }

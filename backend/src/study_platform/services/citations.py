@@ -141,6 +141,8 @@ def message_dto(db, message) -> dict:
         "status": "stopped" if message.status == "cancelled" else message.status,
         "sequence_no": message.sequence_no,
         "turn_id": message.workflow_run_id,
+        "model_profile": message.model_profile if message.role == "assistant" else None,
+        "error_code": run.failure_code if run and message.status == "failed" else None,
         "created_at": message.created_at,
         "scope": scope,
         "citations": [citation_dto(db, c) for c in citations],

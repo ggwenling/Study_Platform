@@ -20,6 +20,13 @@ from study_platform.persistence.models.model_connections import (
 )
 from study_platform.persistence.models.operations import AiJob, AiWorkflowRun
 from study_platform.services import model_connections as service
+from study_platform.services.auth_limits import rate_limit
+from study_platform.services.model_discovery import (
+    PROVIDERS,
+    DiscoveredModel,
+    ModelProvider,
+    discover_models,
+)
 from study_platform.services.model_network import normalize_url
 
 router = APIRouter(prefix="/me/model-connections", tags=["model connections"])
@@ -63,6 +70,22 @@ class ConnectionsDTO(BaseModel):
     encryption_available: bool
     platform_llm: str | None
     platform_embedding: str | None
+
+
+class DiscoveryInput(BaseModel):
+    base_url: str = Field(min_length=1, max_length=500)
+    api_key: SecretStr = Field(max_length=4096)
+
+
+@router.get("/providers", response_model=list[ModelProvider])
+def list_providers(user=Depends(get_current_user)):
+    return PROVIDERS
+
+
+@router.post("/discover", response_model=list[DiscoveredModel])
+async def discover(body: DiscoveryInput, user=Depends(get_current_user)):
+    rate_limit(f"model-discovery:{user.id}", limit=12)
+    return await discover_models(body.base_url, body.api_key.get_secret_value().strip())
 
 
 def dto(db, row):

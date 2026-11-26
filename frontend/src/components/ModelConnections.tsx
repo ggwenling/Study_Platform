@@ -11,12 +11,13 @@ import { Input } from '@/components/arc/input/input'
 import { PasswordField } from '@/components/arc/password-field/password-field'
 import { Select } from '@/components/arc/select/select'
 import { useWorkspace } from '../WorkspaceData'
+import { ModelSetup } from './ModelSetup'
 import './ModelConnections.css'
 
 const statusLabel = { draft: '待测试', testing: '测试中', ready: '已测试', failed: '测试失败' }
 const modelGroups = {
   llm: { label: 'LLM 文本模型', icon: MessageCircle,
-    description: '用于对话、摘要和学习。默认变更对下一次新提问生效。',
+    description: '用于对话、摘要和学习。使用账户默认的会话会在下一轮采用新的默认值。',
     scope: '正在生成的回答和原轮次重试仍沿用原连接。',
     updated: '默认文本模型已更新，将用于下一次新提问。' },
   embedding: { label: '向量模型 · 1024 维', icon: Database,
@@ -51,20 +52,23 @@ const fixes: Record<string, string> = {
   model_decryption_failed: '凭据无法解密。请联系管理员或重新填写 API Key。',
 }
 
-export function ModelConnectionsPanel() {
+export function ModelConnectionsPanel({ openSetup }: { openSetup?: boolean } = {}) {
   const { notify, report, refresh } = useWorkspace()
   const [data, setData] = useState<ModelConnections>()
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
   const [editing, setEditing] = useState<ModelConnection | 'new'>()
+  const [settingUp, setSettingUp] = useState(Boolean(openSetup))
   const [deleting, setDeleting] = useState<ModelConnection>()
   const [kind, setKind] = useState<ModelConnection['kind']>('llm')
   const [busy, setBusy] = useState('')
   const formRef = useRef<HTMLFormElement>(null)
   const addRef = useRef<HTMLButtonElement>(null)
+  const setupRef = useRef<HTMLButtonElement>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const [editSession, setEditSession] = useState(0)
   const credentialsReady = Boolean(data?.encryption_available)
+  useEffect(() => { if (openSetup) setSettingUp(true) }, [openSetup])
   function closeEditor() {
     const key = formRef.current?.elements.namedItem('api_key') as HTMLInputElement | null
     if (key) key.value = ''
@@ -164,7 +168,10 @@ export function ModelConnectionsPanel() {
   return <section className="model-settings" aria-labelledby="model-settings-title">
     <header><div><h2 id="model-settings-title"><Server size={20} />模型连接</h2>
       <p>选择模型用途，保存连接并测试，通过后即可设为默认。测试会产生少量调用。</p></div>
-      <Button ref={addRef} variant="secondary" onClick={() => open()} disabled={Boolean(busy) || !credentialsReady}><Plus size={16} />添加连接</Button>
+      <div className="model-actions">
+        <Button ref={setupRef} onClick={() => setSettingUp(true)} disabled={Boolean(busy) || !credentialsReady}>配置向导</Button>
+        <Button ref={addRef} variant="secondary" onClick={() => open()} disabled={Boolean(busy) || !credentialsReady}><Plus size={16} />添加连接</Button>
+      </div>
     </header>
     {error && <p role="alert">{error} <Button size="sm" onClick={load}>重试</Button></p>}
     {!data && !error && <p role="status">正在读取模型连接…</p>}
@@ -197,6 +204,9 @@ export function ModelConnectionsPanel() {
         </section>
       })}
     </div>}
+    {settingUp && credentialsReady && <ModelSetup onClose={() => setSettingUp(false)} onChange={load}
+      onCloseAutoFocus={(event) => { event.preventDefault(); setupRef.current?.focus() }}
+      explainFailure={(code) => fixes[code ?? ''] ?? '测试失败。请检查模型用途、地址和凭据后重试。'} />}
     <Dialog open={Boolean(editing)} onOpenChange={(open) => { if (!open && busy !== 'save') closeEditor() }}>
       <DialogContent title={editing === 'new' ? '添加模型连接' : '编辑模型连接'} closeLabel="关闭" onCloseAutoFocus={restoreFocus}>
         {editing && <form ref={formRef} className="model-form" onSubmit={save} key={editSession}>

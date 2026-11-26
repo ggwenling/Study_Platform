@@ -63,8 +63,9 @@ export function Home() {
     void navigate(location.pathname + location.search + location.hash, { replace: true, state: null })
   }, [location.pathname, location.search, location.hash, navigate])
   const composer = useRef<ComposerHandle>(null)
-  const { overview, user, loading, requireLogin } = useWorkspace()
+  const { overview, user, capabilities, loading, requireLogin } = useWorkspace()
   const [panelOpen, setPanelOpen] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:overview`, true)
+  const [showModelSetup, setShowModelSetup] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:model-setup`, true)
   const panelContent = useRef<HTMLDivElement>(null)
   const [panelWidth, setPanelWidth] = useState(224)
   useLayoutEffect(() => {
@@ -85,6 +86,11 @@ export function Home() {
             <h1>欢迎使用 知循</h1>
             <p>你的个人多知识库 RAG 工具，基于自己的资料获得更可靠的答案与洞察。</p>
           </header>
+          {user && capabilities?.has_personal_models === false && showModelSetup && <section className="home-model-setup" aria-labelledby="home-model-setup-title">
+            <div><h2 id="home-model-setup-title">接入你的模型</h2><p>从供应商预设开始，配置聊天、向量、视觉和重排模型。</p></div>
+            <div><Link to="/settings?configure=models">开始配置</Link>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setShowModelSetup(false)}>暂时跳过</Button></div>
+          </section>}
           <Composer
             ref={composer}
             preferredLibrary={navState?.preferredLibrary}
