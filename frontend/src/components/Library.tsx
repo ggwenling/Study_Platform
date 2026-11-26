@@ -8,6 +8,7 @@ import { allPages, errorMessage, locatorLabel, safeExternalUrl } from '@/api/ui'
 import { ApiError } from '@/api/stream'
 import { PasteTextDialog } from './PasteTextDialog'
 import { WebClipDialog } from './WebClipDialog'
+import { FileImportDialog, useFileImport } from './FileImportDialog'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
 import { Button } from '@/components/arc/button/button'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
@@ -15,7 +16,6 @@ import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { EmptyState } from '@/components/arc/empty-state/empty-state'
 import { Input } from '@/components/arc/input/input'
 import { Stepper } from '@/components/arc/stepper/stepper'
-import { Switch } from '@/components/arc/switch/switch'
 import { Textarea } from '@/components/arc/textarea/textarea'
 import { TreeView } from '@/components/arc/tree-view/tree-view'
 import type { TreeNode } from '@/components/arc/tree-view/tree-view'
@@ -121,7 +121,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
   const [pasteOpen, setPasteOpen] = useState(false)
   const [webClipOpen, setWebClipOpen] = useState(false)
   const [reindexOpen, setReindexOpen] = useState(false)
-  const [visionForNextUpload, setVisionForNextUpload] = useState(false)
+  const fileImport = useFileImport(capabilities?.vision, uploadQueue.enqueue)
   const [dragging, setDragging] = useState(false)
   const [confirmMaterial, setConfirmMaterial] = useState<Material | null>(null)
   const [visionMaterial, setVisionMaterial] = useState<Material | null>(null)
@@ -237,15 +237,8 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
     }
   }, [expanded, id, locations, materials])
 
-  useEffect(() => {
-    if (!capabilities?.vision) setVisionForNextUpload(false)
-  }, [capabilities?.vision])
-
   const reloadData = () => setReload((value) => value + 1)
-  const addFiles = (files: FileList | File[]) => {
-    uploadQueue.enqueue(files, { id, name: library.name }, visionForNextUpload && capabilities?.vision ? 'vlm' : 'ocr')
-    setVisionForNextUpload(false)
-  }
+  const addFiles = (files: FileList | File[]) => fileImport.addFiles(files, { id, name: library.name })
   const failedUploads = uploadQueue.items.filter((row) => row.status === 'failed')
 
   function onDragOver(event: DragEvent<HTMLElement>) {
@@ -455,10 +448,6 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         reloadData()
         refresh('materials', 'overview')
       }} />
-      {capabilities?.vision && <p className="muted library-upload-note">
-        <Switch aria-label="本次导入的图片或 PDF 使用视觉解析（可能产生费用）" label="本次导入的图片或 PDF 使用视觉解析（可能产生费用）"
-          checked={visionForNextUpload} onCheckedChange={setVisionForNextUpload} />
-      </p>}
       {dragging && <p className="library-processing-banner" role="status">松开鼠标，将文件批量导入「{library.name}」。</p>}
       {overview && overview.processing_count > 0 && (
         <p className="library-processing-banner" role="status">
@@ -621,6 +610,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
         </>}
       </DialogContent>}
     </Dialog>
+    {fileImport.dialog && <FileImportDialog {...fileImport.dialog} />}
     <PasteTextDialog
       open={pasteOpen}
       onOpenChange={setPasteOpen}

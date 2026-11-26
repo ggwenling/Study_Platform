@@ -5,6 +5,7 @@ import { animate } from 'motion/mini'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/arc/button/button'
 import { Composer } from './Composer'
+import { ChatModelSelect } from './ChatModelSelect'
 import type { ComposerHandle } from './Composer'
 import { useWorkspace } from '../WorkspaceData'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
@@ -63,6 +64,7 @@ export function Home() {
     void navigate(location.pathname + location.search + location.hash, { replace: true, state: null })
   }, [location.pathname, location.search, location.hash, navigate])
   const composer = useRef<ComposerHandle>(null)
+  const [modelId, setModelId] = useState<string | null>(null)
   const { overview, user, capabilities, loading, requireLogin } = useWorkspace()
   const [panelOpen, setPanelOpen] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:overview`, true)
   const [showModelSetup, setShowModelSetup] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:model-setup`, true)
@@ -85,6 +87,7 @@ export function Home() {
           <header className="welcome">
             <h1>欢迎使用 知循</h1>
             <p>你的个人多知识库 RAG 工具，基于自己的资料获得更可靠的答案与洞察。</p>
+            <ChatModelSelect modelId={modelId} onChange={setModelId} />
           </header>
           {user && capabilities?.has_personal_models === false && showModelSetup && <section className="home-model-setup" aria-labelledby="home-model-setup-title">
             <div><h2 id="home-model-setup-title">接入你的模型</h2><p>从供应商预设开始，配置聊天、向量、视觉和重排模型。</p></div>
@@ -93,6 +96,7 @@ export function Home() {
           </section>}
           <Composer
             ref={composer}
+            modelId={modelId}
             preferredLibrary={navState?.preferredLibrary}
             initialDraft={navState?.initialDraft}
             initialMaterialIds={navState?.initialMaterialIds}

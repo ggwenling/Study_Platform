@@ -299,15 +299,14 @@ describe('material cancel/delete & knowledge base deletion', () => {
     vi.mocked(api.job).mockResolvedValue({ id: 'j2', status: 'failed', phase: 'vision', progress: 0, error_code: 'model_timeout', attempt_count: 1 })
 
     await render(<Library preferredId="kb-1" />)
-    const visionSwitch = node.querySelector<HTMLButtonElement>('button[role="switch"]')!
-    expect(visionSwitch.getAttribute('aria-checked')).toBe('false')
-    await act(async () => visionSwitch.click())
+    expect(node.querySelector('button[role="switch"]')).toBeNull()
     const fileInput = node.querySelector<HTMLInputElement>('.library-header input[type=file]')!
     const pdf = new File(['PDF'], '新讲义.pdf', { type: 'application/pdf' })
     Object.defineProperty(fileInput, 'files', { value: [pdf], configurable: true })
     await act(async () => fileInput.dispatchEvent(new Event('change', { bubbles: true })))
+    expect(workspace.value.libraryUploadQueue.enqueue).not.toHaveBeenCalled()
+    await act(async () => findButton('使用视觉解析并导入')!.click())
     expect(workspace.value.libraryUploadQueue.enqueue).toHaveBeenCalledWith([pdf], { id: 'kb-1', name: '高数资料库' }, 'vlm')
-    expect(visionSwitch.getAttribute('aria-checked')).toBe('false')
 
     await act(async () => findButton('管理资料')!.click())
     await act(async () => findButton('使用视觉理解重新解析（VLM）')!.click())

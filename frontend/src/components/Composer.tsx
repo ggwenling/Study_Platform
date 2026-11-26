@@ -16,17 +16,16 @@ import { Button } from '@/components/arc/button/button'
 import { DropdownMenu } from '@/components/arc/dropdown-menu/dropdown-menu'
 import { Select } from '@/components/arc/select/select'
 import { Tooltip } from '@/components/arc/tooltip/tooltip'
-import { Switch } from '@/components/arc/switch/switch'
 import { FadingTextarea } from './FadingTextarea'
 import { CurrentMaterials } from './CurrentMaterials'
 import { PasteTextDialog } from './PasteTextDialog'
 import { WebClipDialog } from './WebClipDialog'
+import { FileImportDialog, useFileImport } from './FileImportDialog'
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog'
 import { Input } from '@/components/arc/input/input'
 
 const demoLibrary = [{ value: 'product', label: '产品资料库' }]
 const emptyLibrary = [{ value: 'empty', label: '暂无可用知识库', disabled: true }]
-const accountModel = 'account-default'
 
 function libraryButtonLabel(name: string) {
   return name.replace(/^【(?:演示|模拟)】\s*/, '') || name
@@ -39,12 +38,11 @@ export type ComposerHandle = {
   editAsNew: (content: string, scope: Scope | null) => void
 }
 
-export function Composer({ demo = false, conversationId, conversationModelId, onModelChange, savingModel,
+export function Composer({ demo = false, conversationId, modelId, savingModel,
   preferredLibrary, initialDraft, initialMaterialIds, onInitialDraftApplied, ref }: {
   demo?: boolean
   conversationId?: string
-  conversationModelId?: string | null
-  onModelChange?: (id: string | null) => void
+  modelId?: string | null
   savingModel?: boolean
   preferredLibrary?: string
   initialDraft?: string
@@ -64,12 +62,11 @@ export function Composer({ demo = false, conversationId, conversationModelId, on
   const [panelReveal, setPanelReveal] = useState<{ id: string; at: number } | null>(null)
   const [pasteOpen, setPasteOpen] = useState(false)
   const [webClipOpen, setWebClipOpen] = useState(false)
-  const [visionForNextUpload, setVisionForNextUpload] = useState(false)
+  const fileImport = useFileImport(capabilities?.vision, uploadQueue.enqueue)
   const [dragging, setDragging] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createBusy, setCreateBusy] = useState(false)
   const [createError, setCreateError] = useState('')
-  const [initialModelId, setInitialModelId] = useState<string | null>(null)
   const form = useRef<HTMLFormElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const imageInput = useRef<HTMLInputElement>(null)
@@ -81,7 +78,6 @@ export function Composer({ demo = false, conversationId, conversationModelId, on
     ? libraries.find((library) => library.id === requestedLibrary)
     : draftState.scopeRequired ? undefined : libraries[0]
   const libraryId = currentLibrary?.id
-  const modelId = conversationId ? conversationModelId : initialModelId
   const models = capabilities?.chat_models
   const accountDefault = models?.find((model) => model.is_default)
   const explicitModel = models?.find((model) => model.id === modelId)
@@ -90,14 +86,13 @@ export function Composer({ demo = false, conversationId, conversationModelId, on
   const embeddingReady = libraryId ? capabilities?.library_embedding?.[libraryId] : undefined
   const modelReady = models === undefined ? legacyReady : effectiveModel ? effectiveModel.status === 'ready'
     : !modelId && Boolean(capabilities?.platform_chat_model)
-  const awaitingModel = Boolean(!demo && conversationId && conversationModelId === undefined && models !== undefined)
+  const awaitingModel = Boolean(!demo && conversationId && modelId === undefined && models !== undefined)
   const modelIssue = chat.selectionFailureFor?.(conversationId) ?? (!awaitingModel && modelReady === false && (
     modelId && !explicitModel ? '所选个人模型已不可用。' : chatModelError(effectiveModel?.error_code)
       ?? (effectiveModel ? '请先测试此文本模型。' : '当前没有可用的默认模型。')
   ))
   const active = demo ? null : chat.activeFor(conversationId)
   const pending = !demo && chat.pendingFor(conversationId)
-  const canSelectModel = !demo && user && models && (!conversationId || conversationModelId !== undefined)
   const sendDisabled = !draft.trim() || (!demo && (savingModel || awaitingModel || chat.isBusy(conversationId)))
 
   useEffect(() => {
@@ -118,10 +113,6 @@ export function Composer({ demo = false, conversationId, conversationModelId, on
   useEffect(() => {
     if (!reducedMotion) void import('./ComposerMetalSend')
   }, [reducedMotion])
-
-  useEffect(() => {
-    setVisionForNextUpload(false)
-  }, [libraryId, capabilities?.vision])
 
   function applySummaryMode(enabled: boolean) {
     setDraftState((current) => ({ ...current, summaryMode: enabled }))
@@ -194,8 +185,7 @@ export function Composer({ demo = false, conversationId, conversationModelId, on
 
   function addFiles(files: FileList | File[]) {
     if (!ensureImportReady() || !currentLibrary) return
-    uploadQueue.enqueue(files, { id: currentLibrary.id, name: currentLibrary.name }, visionForNextUpload && capabilities?.vision ? 'vlm' : 'ocr')
-    setVisionForNextUpload(false)
+    fileImport.addFiles(files, { id: currentLibrary.id, name: currentLibrary.name })
   }
 
   useImperativeHandle(ref, () => ({
@@ -337,26 +327,6 @@ export function Composer({ demo = false, conversationId, conversationModelId, on
           </div>
         )}
       </div>
-      {canSelectModel && <div className="composer-model">
-        <Select label="聊天模型" value={modelId ?? accountModel} disabled={savingModel || Boolean(pending && !conversationId)}
-          description={conversationId ? '切换后，后续回复所需的会话上下文会发送给所选模型。' : undefined}
-          onValueChange={(value) => {
-            const id = value === accountModel ? null : value
-            chat.clearSelectionFailure?.(conversationId)
-            if (conversationId) onModelChange?.(id)
-            else setInitialModelId(id)
-          }} options={[
-            { value: accountModel, label: `使用账户默认${accountDefault || capabilities?.platform_chat_model ? ` · ${accountDefault?.name ?? capabilities?.platform_chat_model}` : ''}` },
-            ...models.map((model) => ({ value: model.id, label: `${model.name} · ${model.model}${model.status !== 'ready' ? '（待修复）' : ''}`, disabled: model.status !== 'ready' })),
-            ...(modelId && !explicitModel ? [{ value: modelId, label: '原连接不可用', disabled: true }] : []),
-          ]} />
-        {savingModel && <span role="status">正在保存模型选择…</span>}
-        <Link to="/settings?configure=models">配置模型</Link>
-      </div>}
-      {!demo && capabilities?.vision && <p className="composer-hint">
-        <Switch aria-label="本次上传中的图片或 PDF 使用视觉解析（可能产生费用）" label="本次上传中的图片或 PDF 使用视觉解析（可能产生费用）"
-          checked={visionForNextUpload} onCheckedChange={setVisionForNextUpload} />
-      </p>}
       {uploadQueue.latestNote && <span className="composer-hint" role="status">{uploadQueue.latestNote}</span>}
       {failedUploads.length > 0 && (
         <div className="upload-queue-failures">
@@ -375,6 +345,7 @@ export function Composer({ demo = false, conversationId, conversationModelId, on
         })
       }}>重发上次请求</Button>}
     </form>
+    {fileImport.dialog && <FileImportDialog {...fileImport.dialog} />}
     {!demo && user && libraryId && (
       <CurrentMaterials
         key={user.id}

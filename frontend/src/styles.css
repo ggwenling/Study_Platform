@@ -173,7 +173,7 @@ h1, h2, h3, p { margin: 0; }
 .home-model-setup h2 { font-size: var(--text-sm); margin: 0; }
 .home-model-setup p { font-size: var(--text-xs); color: var(--text-secondary); margin: .2rem 0 0; }
 .home-model-setup > :last-child { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; }
-.home-model-setup a, .composer-model a, .composer-hint a { text-decoration: underline; text-underline-offset: 3px; }
+.home-model-setup a, .composer-hint a { text-decoration: underline; text-underline-offset: 3px; }
 .welcome { text-align: center; margin-bottom: clamp(26px, 5vh, 55px); }
 .welcome h1 {
   font-family: var(--font-sans);
@@ -220,9 +220,7 @@ h1, h2, h3, p { margin: 0; }
 .current-materials-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .material-scope-checkbox { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--ink); cursor: pointer; flex: none; }
 .composer .composer-hint { overflow-wrap: anywhere; }
-.composer-model { display: flex; align-items: end; flex-wrap: wrap; gap: .35rem .75rem; padding-block: .25rem; font-size: var(--text-xs); }
-.composer-model > :first-child { min-width: 0; max-width: min(100%, 26rem); }
-.composer-model > a { align-self: center; }
+.import-file-name { font-weight: 600; overflow-wrap: anywhere; }
 .composer-login { position: absolute; inset: 0; z-index: 1; border: 0; border-radius: 24px; background: transparent; }
 .composer:focus-within { border-color: var(--border-strong); }
 .composer[data-dragging] { border-color: var(--ink); border-style: dashed; background: var(--surface-muted); }
@@ -308,6 +306,9 @@ h1, h2, h3, p { margin: 0; }
 .chat-header::after { content: ""; position: absolute; inset: 100% 0 auto; z-index: 2; height: 26px; background: linear-gradient(var(--canvas), transparent); pointer-events: none; }
 .chat-header h1 { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; margin-right: auto; font-size: var(--text-lg); font-weight: 500; }
 .chat-header .pill { white-space: nowrap; }
+.chat-model-control { min-width: 0; max-width: 13rem; }
+.welcome .chat-model-control { width: fit-content; max-width: min(100%, 16rem); margin: .75rem auto 0; }
+.chat-header .chat-model-control { flex: 0 1 10rem; }
 .pill { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text-secondary); font-size: var(--text-xs); }
 .conversation { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto; scrollbar-gutter: stable; overflow-anchor: none; outline-offset: -4px; scroll-padding-block: 26px 16px; }
 @media (pointer: fine) and (forced-colors: none) {
@@ -696,6 +697,8 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
   .app-shell[data-nav="false"] .sidebar { display: none; }
   .topbar { height: 49px; }
   .chat-header { gap: 5px; padding-right: 8px; }
+  .chat-header .chat-privacy { display: none; }
+  .chat-header .chat-model-control { max-width: 32%; }
   .home { min-height: calc(100dvh - 49px); }
   .composer { --composer-control-size: 44px; }
   .composer-actions, .composer-options { gap: 6px; }
