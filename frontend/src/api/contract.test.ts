@@ -44,13 +44,15 @@ it('uses paths and methods present in the backend OpenAPI contract', async () =>
   await api.learning.submitAnswerImage('id', new File(['x'], 'answer.png'), true)
   await api.modelUsage(30)
   await api.modelConnections()
+  await api.modelProviders(); await api.discoverModels('https://api.example/v1', 'test-key')
   const connection = { name: '模型', kind: 'llm' as const, base_url: 'https://api.example/v1', model: 'model', api_key: 'test-key' }
   await api.createModelConnection(connection); await api.updateModelConnection('id', connection)
   await api.testModelConnection('id'); await api.defaultModelConnection('llm', 'id'); await api.deleteModelConnection('id')
   for await (const _ of streamChat({ knowledge_base_id: 'id', answer_mode: 'knowledge_only', intent: 'qa', content: 'x' }, 'key')) { /* consume */ }
   for await (const _ of retryTurn('id', 'id')) { /* consume */ }
+  for await (const _ of retryTurn('id', 'id', undefined, true)) { /* consume */ }
   for await (const _ of editTurn('id', 'id', 'edited')) { /* consume */ }
-  expect(calls).toHaveLength(57)
+  expect(calls).toHaveLength(60)
   for (const [url, method] of calls) {
     const path = Object.keys(contract.paths).find((template) => new RegExp('^' + template.replace(/\{[^}]+\}/g, '[^/]+') + '$').test(url))
     expect(path, `${method.toUpperCase()} ${url}`).toBeDefined()
@@ -95,6 +97,21 @@ it('publishes the fields consumed by the frontend', () => {
   }
   for (const [name, fields] of Object.entries(models)) {
     expect(contract.components.schemas[name]?.required, name).toEqual(expect.arrayContaining(fields))
+  }
+  const optional = {
+    DashboardDTO: ['recent_chat_library_id'],
+    MessageDTO: ['model_profile', 'error_code', 'failure_stage'],
+    ConversationDTO: ['llm_connection_id'],
+    CapabilitiesDTO: ['chat_models', 'library_embedding', 'has_personal_models'],
+    ChatRequest: ['llm_connection_id'],
+    RetryTurnBody: ['use_current_model'],
+  }
+  for (const [name, fields] of Object.entries(optional)) {
+    const schema = contract.components.schemas[name]
+    for (const field of fields) {
+      expect(schema.properties, name).toHaveProperty(field)
+      expect(schema.required ?? [], name).not.toContain(field)
+    }
   }
   expect(contract.components.schemas.UserDTO.properties).toHaveProperty('avatar_url')
   expect(contract.components.schemas.ConversationDTO.properties).toHaveProperty('archived_at')

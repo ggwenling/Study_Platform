@@ -3,8 +3,8 @@ export interface Page<T> { items: T[]; next_cursor: string | null }
 export interface User { id: string; email: string; display_name: string; avatar_url: string | null }
 export interface Scope { knowledge_base_id: string; knowledge_base_name: string; answer_mode: 'knowledge_only' | 'with_general'; intent?: 'qa' | 'summary'; selected_material_ids?: string[] | null; index_version_ids: string[] }
 export interface Citation { id: string; source_label: string; material_id: string; material_version_id: string; knowledge_base_id: string; title: string; quote: string; quote_status?: 'verified' | 'unverified' | 'unavailable' | null; locator: Record<string, unknown>; location_label: string; version_no: number; availability: 'available' | 'unavailable'; unavailable_reason?: string | null; content_url?: string | null; preview_url?: string | null; source_url?: string | null; chunk_id?: string | null }
-export interface Message { id: string; conversation_id: string; sequence_no: number; role: 'user' | 'assistant' | 'system_summary'; content: string; status: 'pending' | 'streaming' | 'completed' | 'failed' | 'stopped'; created_at: string; scope: Scope | null; citations: Citation[]; turn_id: string | null }
-export interface ChatRequest { conversation_id?: string | null; knowledge_base_id: string; answer_mode?: 'knowledge_only' | 'with_general'; intent?: 'qa' | 'summary'; content: string; material_ids?: string[] | null }
+export interface Message { id: string; conversation_id: string; sequence_no: number; role: 'user' | 'assistant' | 'system_summary'; content: string; status: 'pending' | 'streaming' | 'completed' | 'failed' | 'stopped'; created_at: string; scope: Scope | null; citations: Citation[]; turn_id: string | null; model_profile?: string | null; error_code?: string | null; failure_stage?: 'retrieval' | 'generation' | null }
+export interface ChatRequest { conversation_id?: string | null; llm_connection_id?: string | null; knowledge_base_id: string; answer_mode?: 'knowledge_only' | 'with_general'; intent?: 'qa' | 'summary'; content: string; material_ids?: string[] | null }
 export type ChatPhase = 'working' | 'searching' | 'solving' | 'composing'
 export type ChatEvent =
   | { type: 'meta'; conversation_id: string; turn_id: string; user_message_id: string; assistant_message_id: string; scope: Scope; replay?: boolean }
@@ -25,7 +25,7 @@ export interface RetrievalSettings {
 }
 export interface KnowledgeBase { id: string; name: string; description: string | null; created_at: string; updated_at: string; embedding_connection_id?: string | null; embedding_binding?: { model: string; base_url: string; dimensions: number } | null; retrieval_settings?: Partial<RetrievalSettings> | null }
 export interface KnowledgeBaseInput { name: string; description?: string | null }
-export interface Conversation { id: string; project_knowledge_base_id: string | null; title: string | null; created_at: string; updated_at: string; archived_at?: string | null }
+export interface Conversation { id: string; project_knowledge_base_id: string | null; title: string | null; created_at: string; updated_at: string; archived_at?: string | null; llm_connection_id?: string | null }
 export interface SearchItem {
   id: string
   type: 'knowledge_base' | 'material' | 'conversation' | 'fragment' | 'note'
@@ -44,8 +44,9 @@ export interface Dashboard {
   due_flashcard_count: number
   due_wrong_question_count: number
   activity: { date: string; count: number }[]
+  recent_chat_library_id?: string | null
 }
-export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; ocr: boolean; vision?: boolean; rerank?: boolean; retrieval_defaults?: Omit<RetrievalSettings, 'rerank_connection_id'>; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number; max_pdf_upload_bytes?: number; max_pdf_pages?: number }
+export interface Capabilities { rag: boolean; library_rag?: Record<string, boolean>; library_embedding?: Record<string, boolean>; has_personal_models?: boolean; chat_models?: ChatModel[]; platform_chat_model?: string | null; ocr: boolean; vision?: boolean; rerank?: boolean; retrieval_defaults?: Omit<RetrievalSettings, 'rerank_connection_id'>; answer_modes: string[]; upload_mime_types: string[]; max_upload_bytes: number; max_pdf_upload_bytes?: number; max_pdf_pages?: number }
 export interface ModelUsageBucket { key: string; label?: string | null; calls: number; successes: number; failures: number; fallback_calls: number; total_tokens: number }
 export interface ModelUsageTotals { calls: number; successes: number; failures: number; fallback_calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }
 export interface ModelUsageSummary { days: number; since: string; totals: ModelUsageTotals; by_day: ModelUsageBucket[]; by_purpose: ModelUsageBucket[]; by_model: ModelUsageBucket[]; by_connection: ModelUsageBucket[] }
@@ -225,6 +226,12 @@ export interface ClassificationState extends Classification {
 }
 export interface ClassificationDecision extends Classification { suggestion_id: string; ignore?: boolean }
 export type ModelConnectionKind = 'llm' | 'embedding' | 'vision' | 'rerank'
+export interface ModelProvider {
+  id: string; name: string; base_url: string; models: Partial<Record<ModelConnectionKind, string | null>>;
+  discovery: boolean; rerank_path: string | null; key_label: string; hint: string | null
+}
+export interface DiscoveredModel { id: string; name: string | null }
+export type ChatModel = Pick<ModelConnection, 'id' | 'name' | 'model' | 'status' | 'is_default' | 'error_code'>
 export type ExtractionMode = 'ocr' | 'vlm'
 
 export interface ModelConnection {

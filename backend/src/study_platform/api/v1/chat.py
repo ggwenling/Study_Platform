@@ -28,6 +28,7 @@ class EditTurnBody(BaseModel):
 
 class ChatRequest(EditTurnBody):
     conversation_id: UUID | None = None
+    llm_connection_id: UUID | None = None
     knowledge_base_id: UUID
     answer_mode: Literal["knowledge_only", "with_general"] = "knowledge_only"
     intent: Literal["qa", "summary"] = "qa"
@@ -41,6 +42,10 @@ class TurnDTO(BaseModel):
     scope: ScopeDTO
     messages: list[MessageDTO]
     error_code: str | None
+
+
+class RetryTurnBody(BaseModel):
+    use_current_model: bool = False
 
 
 def response(owner, prepared):
@@ -68,8 +73,11 @@ def cancel(conversation_id: UUID, turn_id: UUID, user=Depends(get_current_user))
 
 @router.post("/conversations/{conversation_id}/turns/{turn_id}/retry",
              response_class=StreamingResponse, responses={200: {"content": {"text/event-stream": {}}}})
-async def retry(conversation_id: UUID, turn_id: UUID, user=Depends(get_current_user)):
-    prepared = await run_in_threadpool(chat.retry, user.id, conversation_id, turn_id)
+async def retry(conversation_id: UUID, turn_id: UUID, body: RetryTurnBody | None = None,
+                user=Depends(get_current_user)):
+    prepared = await run_in_threadpool(
+        chat.retry, user.id, conversation_id, turn_id, use_current_model=bool(body and body.use_current_model),
+    )
     return response(user.id, prepared)
 
 

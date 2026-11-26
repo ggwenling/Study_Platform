@@ -132,7 +132,21 @@ def expire_runs(db, conversation_id):
         ).values(status="failed"))
 
 
+def chat_model(db, owner, connection_id):
+    if connection_id is not None:
+        row = model_connections.selected_llm(db, owner, connection_id)
+        saved = model_connections.snapshot(row)
+    else:
+        saved = model_connections.default_snapshot(db, owner, "llm")
+        row = model_connections.owned(db, owner, UUID(saved["id"])) if saved["id"] else None
+    name = row.versions[str(saved["revision"])]["model"] if row else get_settings().chat_model
+    return saved, name
+
+
 def prepare(owner: UUID, data: dict, key: str):
+    # Keep old idempotency fingerprints when no initial model is requested.
+    if data.get("llm_connection_id") is None:
+        data = {name: value for name, value in data.items() if name != "llm_connection_id"}
     fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
     with session_factory()() as db:
         # Serialize duplicate first-send requests even before a conversation exists.
@@ -160,6 +174,8 @@ def prepare(owner: UUID, data: dict, key: str):
         if kb is None:
             raise ApiError(404, "not_found", "知识库不存在")
         if data.get("conversation_id"):
+            if data.get("llm_connection_id"):
+                raise ApiError(422, "model_selection_requires_update", "请先保存会话的模型选择。")
             conv = owned_conversation(db, owner, UUID(data["conversation_id"]), lock=True)
             expire_runs(db, conv.id)
             if db.scalar(sa.select(AiWorkflowRun.id).where(
@@ -168,7 +184,10 @@ def prepare(owner: UUID, data: dict, key: str):
                 raise ApiError(409, "conversation_busy", "会话已有正在生成的回答")
         else:
             conv = Conversation(id=uuid4(), owner_user_id=owner, title=data["content"][:80],
-                                mode="normal", scope_snapshot=[], project_knowledge_base_id=kb.id)
+                                mode="normal", scope_snapshot=[], project_knowledge_base_id=kb.id,
+                                llm_connection_id=UUID(data["llm_connection_id"]) if data.get("llm_connection_id") else None)
+        llm_connection, model_name = chat_model(db, owner, conv.llm_connection_id)
+        if not data.get("conversation_id"):
             db.add(conv)
             db.flush()
         selected = data.get("material_ids")
@@ -179,9 +198,6 @@ def prepare(owner: UUID, data: dict, key: str):
         retrieval = effective_settings(kb.retrieval_settings)
         embedding_connection = model_connections.library_snapshot(db, owner, kb.id)
         rerank_connection = rerank_snapshot(db, owner, retrieval)
-        llm_connection = model_connections.default_snapshot(db, owner, "llm")
-        model_name = (model_connections.owned(db, owner, UUID(llm_connection["id"])).versions[str(llm_connection["revision"])]["model"]
-                      if llm_connection["id"] else get_settings().chat_model)
         run = AiWorkflowRun(
             id=uuid4(), owner_user_id=owner, conversation_id=conv.id,
             knowledge_base_id=kb.id, answer_mode=data["answer_mode"],
@@ -256,7 +272,7 @@ def cancel(owner, conversation_id, turn_id):
     return turn(owner, conversation_id, turn_id)
 
 
-def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None):
+def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None, use_current_model=False):
     with session_factory()() as db:
         run = db.get(AiWorkflowRun, turn_id)
         if (not run or run.owner_user_id != owner or run.conversation_id != conversation_id
@@ -269,7 +285,7 @@ def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None)
         ).with_for_update())
         if kb is None:
             raise ApiError(409, "scope_unavailable", "原知识库已不可用")
-        owned_conversation(db, owner, conversation_id, lock=True)
+        conv = owned_conversation(db, owner, conversation_id, lock=True)
         expire_runs(db, conversation_id)
         db.refresh(run)
         latest = db.scalar(sa.select(Message).where(
@@ -290,6 +306,13 @@ def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None)
         if edited_content is not None:
             latest.content = edited_content
             run.source_scope = {**run.source_scope, "content": edited_content}
+        if use_current_model:
+            if run.status != "failed":
+                raise ApiError(409, "retry_not_allowed", "仅失败的轮次可以切换模型重试。")
+            saved, run.model_profile = chat_model(db, owner, conv.llm_connection_id)
+            run.source_scope = {**run.source_scope, "llm_connection": saved}
+        if "failure_stage" in run.source_scope:
+            run.source_scope = {key: value for key, value in run.source_scope.items() if key != "failure_stage"}
         run.status = "running"
         run.fencing += 1
         run.failure_code = None
@@ -301,11 +324,12 @@ def retry(owner, conversation_id, turn_id, *, edited_content: str | None = None)
             Message.workflow_run_id == run.id, Message.role == "assistant"))
         db.execute(sa.delete(MessageCitation).where(MessageCitation.message_id == assistant.id))
         assistant.content, assistant.status, assistant.usage = "", "streaming", None
+        assistant.model_profile = run.model_profile
         db.commit()
         return run.id, run.fencing, False
 
 
-def checkpoint(run_id, fence, content, status=None, citations=None, failure=None, usage=None):
+def checkpoint(run_id, fence, content, status=None, citations=None, failure=None, usage=None, *, failure_stage=None):
     """Short transaction; lock order matches knowledge-base deletion."""
     with session_factory()() as db:
         original = db.get(AiWorkflowRun, run_id)
@@ -320,6 +344,7 @@ def checkpoint(run_id, fence, content, status=None, citations=None, failure=None
             status, failure = "cancelled", "scope_unavailable"
         elif original.lease_expires_at < now():
             status, failure = "failed", "turn_interrupted"
+            failure_stage = None
         elif status in (None, "completed"):
             expected = original.source_scope["index_version_ids"]
             current = visible_indices(
@@ -336,6 +361,8 @@ def checkpoint(run_id, fence, content, status=None, citations=None, failure=None
         if status:
             original.status, original.failure_code, original.finished_at = status, failure, now()
             assistant.status, assistant.usage, original.usage = status, usage, usage
+            if status == "failed" and failure_stage:
+                original.source_scope = {**original.source_scope, "failure_stage": failure_stage}
             if status == "completed":
                 conv.updated_at = now()
                 for chunk in citations or []:
@@ -609,8 +636,9 @@ _CONDITION = re.compile(
     re.IGNORECASE,
 )
 _QA_CONJUNCTION = r"以及|还是|分别|\b(?:and|versus)\b"
+_QA_COMPARISON = r"区别|对比|差异|不同|异同"
 _COMPOUND_QUESTION = re.compile(
-    rf"{_QA_CONJUNCTION}|各自|各多少|区别|对比|顺序|同时|[？?].+|\b(?:compare|respectively)\b", re.I,
+    rf"{_QA_CONJUNCTION}|{_QA_COMPARISON}|各自|各多少|顺序|同时|[？?].+|\b(?:compare|respectively)\b", re.I,
 )
 _QA_CLAUSE_SEPARATOR = re.compile(rf"[，,；;？?。]|{_QA_CONJUNCTION}", re.I)
 _QA_IDENTIFIER = re.compile(r"\b[a-z0-9]+(?:-[a-z0-9]+)+\b", re.I)
@@ -739,7 +767,7 @@ def missing_qa_queries(scope, question, evidence):
             term.casefold() for term in jieba.cut(predicate)
             if term.casefold() in predicate_terms and not _COMPOUND_QUESTION.fullmatch(term)
         }
-        if entity_terms and topic:
+        if entity_terms and (topic or re.search(_QA_COMPARISON, predicate)):
             shared[left] = (left + marker + predicate, left_terms, topic)
             shared[right] = (right, entity_terms, topic)
     marked = list(question)
@@ -758,7 +786,10 @@ def missing_qa_queries(scope, question, evidence):
         query = clause
         if clause in shared:
             query, terms, topic = shared[clause]
-            covered = any(all(term in text for term in terms) and any(word in text for word in topic) for text in texts)
+            covered = any(
+                all(term in text for term in terms) and (not topic or any(word in text for word in topic))
+                for text in (texts if topic else substantive)
+            )
         elif anchors := _QA_IDENTIFIER.findall(clause):
             covered = all(sum(anchor.casefold() in text for text in substantive) >= 2 for anchor in anchors)
         else:
@@ -988,6 +1019,7 @@ async def _stream(owner, run_id, fence, replay=False):
     usage = None
     pending = None
     iterator = None
+    failure_stage = None
     try:
         yield meta
         yield event("phase", turn_id=run_id, phase="working")
@@ -995,6 +1027,7 @@ async def _stream(owner, run_id, fence, replay=False):
         if scope["intent"] == "summary":
             raw_evidence = chunks
         else:
+            failure_stage = "retrieval"
             yield event("phase", turn_id=run_id, phase="searching")
             if get_settings().rag_query_rewrite_enabled and scope["index_version_ids"]:
                 if not await run_in_threadpool(checkpoint, run_id, fence, content):
@@ -1022,6 +1055,7 @@ async def _stream(owner, run_id, fence, replay=False):
                 raw_evidence = await run_in_threadpool(
                     supplement_qa, scope, scope["content"], owner, raw_evidence, followups
                 )
+        failure_stage = None
         prepared = prepare_generation(scope, raw_evidence, history)
         evidence = prepared["evidence"]
         if prepared["kind"] == "refusal":
@@ -1031,6 +1065,7 @@ async def _stream(owner, run_id, fence, replay=False):
             if not await run_in_threadpool(checkpoint, run_id, fence, content):
                 yield await ended_event(owner, conv_id, run_id)
                 return
+            failure_stage = "generation"
             yield event("phase", turn_id=run_id, phase="composing")
             iterator = astream_chat(
                 prepared["messages"],
@@ -1060,6 +1095,7 @@ async def _stream(owner, run_id, fence, replay=False):
         yield event("phase", turn_id=run_id, phase="working")
         if not content.strip():
             raise ApiError(502, "model_response_empty", "模型未返回内容", retryable=True)
+        failure_stage = None
         citations = cited_chunks(content, evidence)
         if scope["intent"] == "summary" and (
             {c["material_version_id"] for c in citations}
@@ -1081,7 +1117,8 @@ async def _stream(owner, run_id, fence, replay=False):
         raise
     except Exception as exc:
         error = exc if isinstance(exc, ApiError) else provider_error(exc)
-        await run_in_threadpool(checkpoint, run_id, fence, content, "failed", None, error.code)
+        await run_in_threadpool(checkpoint, run_id, fence, content, "failed", None, error.code,
+                                failure_stage=failure_stage)
         yield event("error", turn_id=run_id, **error.payload())
     finally:
         if pending is not None:

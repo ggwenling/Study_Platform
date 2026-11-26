@@ -140,11 +140,7 @@ it('binds in-flight upload to A after switching to B and preserves the draft', a
   const input = node.querySelector<HTMLInputElement>('input[type=file]')!
   Object.defineProperty(input, 'files', { value: [file] })
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
-  await act(async () => {
-    const select = node.querySelector('select')!
-    select.value = 'B'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+  await render(<Composer preferredLibrary="B" />)
   await act(async () => upload.resolve({ material_id: 'm', version_id: 'v', job_id: 'j', status: 'queued' }))
   expect(uploadMaterial).toHaveBeenCalledWith('A', file, undefined, expect.any(AbortSignal))
   expect(node.textContent).toContain('已提交至「库A」')
@@ -182,7 +178,7 @@ it('creates and selects the first library without leaving chat', async () => {
   expect(api.createKnowledgeBase).toHaveBeenCalledWith({ name: '库C' })
   workspace.value.libraries = [library('A'), library('C')]
   await render(<Composer />)
-  expect(node.querySelector('select')?.value).toBe('C')
+  expect(node.querySelector('[aria-label="当前知识库资料：库C"]')).toBeTruthy()
 })
 
 it('accepts PPTX files and processes the shared queue sequentially with single-item retry', async () => {
@@ -210,30 +206,36 @@ it('accepts PPTX files and processes the shared queue sequentially with single-i
   expect(uploadMaterial).toHaveBeenCalledTimes(3)
 })
 
-it('uses the Composer vision choice once and resets it after the selected upload', async () => {
+it('offers vision only in the import dialog and requires a fresh choice for each batch', async () => {
   workspace.value.capabilities = { ...workspace.value.capabilities, vision: true }
   vi.mocked(uploadMaterial).mockResolvedValue({ material_id: 'm', version_id: 'v', job_id: 'j', status: 'queued' })
   await render(<Composer />)
 
-  const visionSwitch = node.querySelector<HTMLButtonElement>('button[role="switch"]')!
-  expect(visionSwitch.getAttribute('aria-checked')).toBe('false')
-  await act(async () => visionSwitch.click())
-  expect(visionSwitch.getAttribute('aria-checked')).toBe('true')
+  expect(node.querySelector('form.composer [role="switch"]')).toBeNull()
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
 
   const input = node.querySelector<HTMLInputElement>('input[type=file][accept^=".pdf"]')!
   const pdf = new File(['PDF'], '讲义.pdf', { type: 'application/pdf' })
   Object.defineProperty(input, 'files', { value: [pdf], configurable: true })
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('讲义.pdf')
+  expect(uploadMaterial).not.toHaveBeenCalled()
+  await click('使用视觉解析并导入')
   await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
 
-  expect(visionSwitch.getAttribute('aria-checked')).toBe('false')
   expect(uploadMaterial).toHaveBeenNthCalledWith(1, 'A', pdf, undefined, expect.any(AbortSignal), 'vlm')
 
   const nextPdf = new File(['PDF 2'], '下一份.pdf', { type: 'application/pdf' })
   Object.defineProperty(input, 'files', { value: [nextPdf], configurable: true })
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+  expect(uploadMaterial).toHaveBeenCalledTimes(1)
+  await click('常规识别并导入')
   await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
   expect(uploadMaterial).toHaveBeenNthCalledWith(2, 'A', nextPdf, undefined, expect.any(AbortSignal))
+
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+  await click('取消')
+  expect(uploadMaterial).toHaveBeenCalledTimes(2)
 })
 
 it('accepts drag-and-drop files and Ctrl+V pasted screenshots in Composer', async () => {

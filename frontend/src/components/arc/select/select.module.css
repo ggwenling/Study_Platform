@@ -15,6 +15,7 @@
 .trigger[data-value-align="center"] .chevron { position: absolute; inset-inline-end: 8px; }
 .trigger[data-state="open"] .chevron { transform: rotate(180deg); }
 .hint { color: var(--text-muted); font-size: var(--text-xs); }
+.menuHint { max-width: 20rem; padding: 5px 11px; color: var(--text-muted); font-size: var(--text-xs); }
 /* Radix holds the animation until the menu is positioned, so it always grows from the trigger edge. */
 .content { --menu-x: 0px; --menu-y: -6px; box-sizing: border-box; z-index: 1000; width: var(--radix-select-trigger-width); min-width: var(--radix-select-trigger-width); max-width: min(24rem, calc(100vw - 20px)); max-height: min(320px, var(--radix-select-content-available-height)); overflow: hidden; border: 1px solid var(--border); border-radius: calc(var(--radius-control) + 2px); padding: 6px; background: var(--surface-raised); color: var(--foreground); box-shadow: var(--shadow-floating); transform-origin: var(--radix-select-content-transform-origin); animation: select-in var(--duration-standard) var(--ease-enter) both; }
 .content[data-side="top"] { --menu-y: 6px; }

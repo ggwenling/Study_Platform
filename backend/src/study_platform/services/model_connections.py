@@ -58,6 +58,21 @@ def snapshot(row):
     return {"id": str(row.id), "revision": row.revision, "kind": row.kind}
 
 
+def selected_llm(db, owner, connection_id):
+    lock_owner(db, owner)
+    try:
+        row = owned(db, owner, connection_id)
+    except ApiError as error:
+        if error.code != "not_found":
+            raise
+        raise ApiError(409, "chat_model_unavailable", "所选文本模型已不可用，请选择其他模型。") from None
+    if row.kind != "llm":
+        raise ApiError(422, "model_connection_kind_mismatch", "聊天只能选择文本生成模型。")
+    if row.status != "ready":
+        raise ApiError(409, "model_test_required", "请测试并修复所选文本模型，或切换后重试。")
+    return row
+
+
 def default_snapshot(db, owner, kind):
     # Same owner advisory lock serializes default selection, references and deletion.
     lock_owner(db, owner)

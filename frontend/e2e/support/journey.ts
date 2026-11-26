@@ -117,7 +117,7 @@ export async function waitUntilReady(request: APIRequestContext, token: string, 
 }
 
 export async function mockStats(request: APIRequestContext) {
-  const response = await request.get('http://127.0.0.1:18080/__stats')
+  const response = await request.get(new URL('/__stats', modelBase).href)
   expect(response.ok()).toBeTruthy()
   return response.json() as Promise<{ embeddings: number; chat: number; chatWithEvidence: number }>
 }

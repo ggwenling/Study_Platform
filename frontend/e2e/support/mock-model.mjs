@@ -14,6 +14,7 @@ const stats = {
   embeddings: 0,
   chat: 0,
   chatWithEvidence: 0,
+  chatByModel: {},
   other: 0,
   startedAt: new Date().toISOString(),
 }
@@ -34,6 +35,7 @@ function messageText(message) {
 
 function chatContent(body) {
   const blob = (body.messages || []).map(messageText).join('\n')
+  if (body.model?.startsWith('ux-switch-') && !blob.includes('Reply OK.')) return `验收回复 ${body.model}`
   if (blob.includes('本轮资料JSON')) {
     stats.chatWithEvidence += 1
     return '概念说明 [S1]'
@@ -68,6 +70,10 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, req.url === '/health' ? { status: 'ok' } : stats)
       return
     }
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      sendJson(res, 200, { data: ['ux-switch-a', 'ux-embed', 'ux-vision', 'ux-rerank'].map(id => ({ id, name: id })) })
+      return
+    }
     if (req.method !== 'POST') {
       sendJson(res, 404, { error: { message: 'not found' } })
       return
@@ -89,6 +95,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (path.endsWith('/chat/completions')) {
       stats.chat += 1
+      if (body.model?.startsWith('ux-switch-')) stats.chatByModel[body.model] = (stats.chatByModel[body.model] || 0) + 1
+      if (body.model === 'ux-switch-a' && body.messages.some(message => messageText(message).includes('触发受控失败'))) {
+        sendJson(res, 401, { error: { message: 'controlled authentication failure' } })
+        return
+      }
       const content = chatContent(body)
       log(`chat stream=${Boolean(body.stream)} evidence=${content.includes('[S1]')} model=${body.model || ''}`)
       if (body.stream) {
@@ -116,6 +127,10 @@ const server = http.createServer(async (req, res) => {
         choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
       })
+      return
+    }
+    if (path.endsWith('/rerank')) {
+      sendJson(res, 200, { results: [{ index: 0, relevance_score: 0.9 }] })
       return
     }
     stats.other += 1

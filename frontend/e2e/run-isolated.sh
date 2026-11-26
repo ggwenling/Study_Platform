@@ -12,6 +12,7 @@ ENV_FILE="${ROOT}/.env"
 DB_NAME="knowloop_ux_acceptance_test"
 DB_USER="knowloop_ux"
 MOCK_PORT="${UX_MOCK_PORT:-18080}"
+SECOND_MOCK_PORT="${UX_SECOND_MOCK_PORT:-18081}"
 
 if [[ -f "${ENV_FILE}" ]] && ! grep -q 'KNOWLOOP_UX_ACCEPTANCE' "${ENV_FILE}"; then
   echo "Refusing to overwrite ${ENV_FILE}: it is not this isolated UX env." >&2
@@ -74,7 +75,8 @@ start_tmux() {
 }
 
 start_tmux knowloop-ux-mock "cd '${ROOT}' && UX_MOCK_PORT=${MOCK_PORT} UX_MOCK_LOG='${LOG_DIR}/mock.log' node frontend/e2e/support/mock-model.mjs"
-start_tmux knowloop-ux-api "cd '${ROOT}/backend' && uv run study-api > '${LOG_DIR}/api.log' 2>&1"
+start_tmux knowloop-ux-mock-second "cd '${ROOT}' && UX_MOCK_PORT=${SECOND_MOCK_PORT} UX_MOCK_LOG='${LOG_DIR}/mock-second.log' node frontend/e2e/support/mock-model.mjs"
+start_tmux knowloop-ux-api "cd '${ROOT}/backend' && MODEL_ALLOWED_ORIGINS='[\"http://127.0.0.1:${MOCK_PORT}\",\"http://127.0.0.1:${SECOND_MOCK_PORT}\"]' uv run study-api > '${LOG_DIR}/api.log' 2>&1"
 start_tmux knowloop-ux-worker "cd '${ROOT}/backend' && uv run study-worker > '${LOG_DIR}/worker.log' 2>&1"
 start_tmux knowloop-ux-web "cd '${ROOT}/frontend' && npm run dev -- --host 127.0.0.1 --port 5173 --strictPort > '${LOG_DIR}/web.log' 2>&1"
 
@@ -92,6 +94,7 @@ wait_http() {
 }
 
 wait_http "http://127.0.0.1:${MOCK_PORT}/health"
+wait_http "http://127.0.0.1:${SECOND_MOCK_PORT}/health"
 wait_http "http://127.0.0.1:8000/health/ready"
 wait_http "http://127.0.0.1:5173/"
 
@@ -110,4 +113,6 @@ wait_http "http://127.0.0.1:5173/"
 } | tee "${ROOT}/.local/ux-acceptance/environment.txt"
 
 cd "${ROOT}/frontend/e2e"
+export UX_MODEL_BASE_URL="http://127.0.0.1:${MOCK_PORT}/v1"
+export UX_MODEL_SECOND_BASE_URL="http://127.0.0.1:${SECOND_MOCK_PORT}/manual/v1"
 npm test

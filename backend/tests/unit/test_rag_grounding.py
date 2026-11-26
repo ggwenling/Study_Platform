@@ -233,6 +233,20 @@ def test_entity_comparison_preserves_shared_predicate(monkeypatch, conjunction, 
     ])
 
 
+@pytest.mark.parametrize("predicate", ["的区别是什么", "有什么不同"])
+def test_generic_entity_comparison_still_supplements_missing_evidence(monkeypatch, predicate):
+    monkeypatch.setattr(chat, "get_settings", lambda: SimpleNamespace(rag_query_rewrite_enabled=False))
+    monkeypatch.setattr(chat, "effective_settings", lambda _: {"rerank_enabled": False})
+    scope = {"index_version_ids": ["i"]}
+    question = f"苏州和上海{predicate}？"
+    queries = [f"{entity}{predicate}" for entity in ("苏州", "上海")]
+    assert chat.missing_qa_queries(scope, question, []) == queries
+    assert chat.missing_qa_queries(scope, question, [{"text": "苏州和上海都是中国城市。"}]) == queries
+    assert chat.missing_qa_queries(scope, question, [{
+        "text": "上海位于长江入海口，是重要的港口城市，轨道交通连接中心城区和不同区域的多个交通枢纽。",
+    }]) == queries[:1]
+
+
 @pytest.mark.parametrize("top_k", [2, 3])
 def test_supplement_queries_only_as_many_clauses_as_fit(monkeypatch, top_k):
     original = evidence(top_k)

@@ -142,6 +142,10 @@ def embed_texts(
     usage: dict[str, Any] | None = None
     success = False
     try:
+        options = {"dimensions": settings.embedding_dimensions, "encoding_format": "float"}
+        # The legacy Hunyuan endpoint returns fixed 1024 dimensions and only accepts model/input.
+        if connection.get("id") and base_url == "https://api.hunyuan.cloud.tencent.com/v1":
+            options = {}
         with OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -149,10 +153,7 @@ def embed_texts(
             timeout=settings.model_timeout_seconds,
             max_retries=0,
         ) as client:
-            response = client.embeddings.create(
-                model=model, input=texts,
-                dimensions=settings.embedding_dimensions, encoding_format="float",
-            )
+            response = client.embeddings.create(model=model, input=texts, **options)
         rows = sorted(response.data, key=lambda row: row.index)
         usage = _embedding_usage(response)
         safe_usage, usage_status = allow_usage(usage)

@@ -743,7 +743,7 @@ def test_live_hybrid_with_default_weight_does_not_open_a_database(monkeypatch, c
 
 
 def test_code_schema_revision_is_the_single_alembic_head():
-    assert code_schema_revision() == "0016_rerank_and_kb_retrieval"
+    assert code_schema_revision() == "0017_conversation_llm"
 
 
 def test_candidate_pool_is_the_max_of_candidate_k_and_top_k(monkeypatch):

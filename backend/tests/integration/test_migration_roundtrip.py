@@ -180,6 +180,7 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
                 assert connection.scalar(sa.text("SELECT is_active FROM study.index_versions WHERE id=:id"), {"id": indexes[0]})
                 for conversation, expected_project in zip(conversations, [kb_ids[0], None, None, None], strict=True):
                     assert connection.scalar(sa.text("SELECT project_knowledge_base_id FROM study.conversations WHERE id=:id"), {"id": conversation}) == expected_project
+                    assert connection.scalar(sa.text("SELECT llm_connection_id FROM study.conversations WHERE id=:id"), {"id": conversation}) is None
             check(True)
             if offline:
                 with engine.connect() as connection:
@@ -207,6 +208,7 @@ def test_migration_roundtrip(monkeypatch: pytest.MonkeyPatch, offline: bool) -> 
             command.downgrade(config, "0014_vision_model_connections")
             with engine.connect() as connection:
                 inspector = sa.inspect(connection)
+                assert "llm_connection_id" not in {column["name"] for column in inspector.get_columns("conversations", schema="study")}
                 assert "lexical" not in {column["name"] for column in inspector.get_columns("notes", schema="study")}
                 assert "retrieval_settings" not in {column["name"] for column in inspector.get_columns("knowledge_bases", schema="study")}
             command.upgrade(config, "head")

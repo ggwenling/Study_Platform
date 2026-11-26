@@ -25,7 +25,13 @@ from study_platform.core.config import Settings
 from study_platform.core.errors import ApiError
 from study_platform.main import create_app
 from study_platform.persistence.database import get_db
-from study_platform.persistence.models import AiJob, KnowledgeBase, ModelConnection, User
+from study_platform.persistence.models import (
+    AiJob,
+    AiWorkflowRun,
+    KnowledgeBase,
+    ModelConnection,
+    User,
+)
 from study_platform.services import chat, classification, ingestion, model_connections
 from study_platform.services.learning_grade import grade_text_answer
 from study_platform.services.learning_llm import (
@@ -49,6 +55,21 @@ def compatible_api():
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
+
+        def do_GET(self):
+            key = self.headers.get("Authorization")
+            calls.append((self.path, {}, key))
+            status, body = {
+                "/v1/models": (200, {"data": [{"id": "discovered", "name": "Candidate", "private": "omit"}]}),
+                "/invalid/models": (200, {"unexpected": []}),
+                "/large/models": (200, {"data": "x" * (513 * 1024)}),
+            }.get(self.path, (404, {}))
+            if key == "Bearer invalid-key":
+                status, body = 401, {"detail": key}
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(body).encode())
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -104,7 +125,7 @@ def compatible_api():
             else:
                 system = body["messages"][0]["content"]
                 content = "OK"
-                if "本轮资料JSON" in system:
+                if "本轮资料JSON" in system and model not in {"choice-a", "choice-b"}:
                     content = "概念说明 [S1]"
                 if "等义" in system:
                     content = json.dumps({"query": "如何理解重要概念"})
@@ -306,6 +327,93 @@ def activate(state, kind="llm", model="model-a"):
         == 204
     )
     return row, body
+
+
+def test_provider_presets_and_discovery(connections_env):
+    state = connections_env
+    presets = state.client.get("/me/model-connections/providers").json()
+    assert len({row["id"] for row in presets}) == 11
+    assert {row["id"] for row in presets if row["discovery"]} == {"deepseek", "siliconflow", "moonshot", "qianfan"}
+    assert set().union(*(row["models"] for row in presets)) == {"llm", "embedding", "vision", "rerank"}
+    base = state.provider.url.removesuffix("/v1")
+    path = "/me/model-connections/discover"
+    result = state.client.post(path, json={"base_url": state.provider.url, "api_key": "fixture-catalog-key"})
+    assert result.json() == [{"id": "discovered", "name": "Candidate"}]
+    assert state.provider.calls == [("/v1/models", {}, "Bearer fixture-catalog-key")]
+    for location, key, status, code in (
+        ("/unsupported", "fixture-catalog-key", 422, "model_discovery_unsupported"),
+        ("/invalid", "fixture-catalog-key", 502, "model_discovery_invalid"),
+        ("/large", "fixture-catalog-key", 502, "model_discovery_invalid"),
+        ("/v1", "invalid-key", 502, "model_auth_failed"),
+    ):
+        failure = state.client.post(path, json={"base_url": base + location, "api_key": key})
+        assert failure.status_code == status
+        assert failure.json()["code"] == code
+        assert key not in failure.text
+    state.settings.model_allowed_origins = []
+    before = len(state.provider.calls)
+    blocked = state.client.post(path, json={"base_url": state.provider.url, "api_key": "fixture-catalog-key"})
+    assert blocked.json()["code"] == "model_address_blocked"
+    assert len(state.provider.calls) == before
+
+
+def test_conversation_model_selection_pins_and_recovers_without_fallback(connections_env):
+    state = connections_env
+    a, body_a = activate(state, model="choice-a")
+    b, _ = activate(state, model="choice-b")
+    vector, _ = activate(state, "embedding", "embed")
+    kb = state.client.post("/knowledge-bases", json={"name": "model choice"}).json()
+    payload = {"knowledge_base_id": kb["id"], "answer_mode": "with_general", "content": "Question"}
+    first, fence, _ = chat.prepare(state.owner.id, {**payload, "llm_connection_id": a["id"], "intent": "qa"}, uuid4().hex)
+    with state.factory() as db:
+        conv_id = str(db.get(AiWorkflowRun, first).conversation_id)
+    conv = f"/conversations/{conv_id}"
+    assert state.client.get(conv).json()["llm_connection_id"] == a["id"]
+    assert state.client.patch(conv, json={"llm_connection_id": vector["id"]}).json()["code"] == "model_connection_kind_mismatch"
+    owner = state.owner.id
+    state.owner.id = state.outsider
+    foreign, _ = activate(state, model="foreign-model")
+    state.owner.id = owner
+    assert state.client.patch(conv, json={"llm_connection_id": foreign["id"]}).json()["code"] == "chat_model_unavailable"
+    assert state.client.patch(conv, json={"llm_connection_id": b["id"]}).json()["title"] == "Question"
+    assert state.client.patch(conv, json={"title": "Renamed"}).json()["llm_connection_id"] == b["id"]
+
+    async def collect():
+        return "".join([part async for part in chat.stream(owner, first, fence)])
+
+    assert "event: done" in asyncio.run(collect())
+    assert state.provider.calls[-1][1]["model"] == "choice-a"
+    other = state.client.post("/conversations", json={"title": "Other"}).json()
+    assert other["llm_connection_id"] is None
+    state.provider.modes["choice-b"] = "unauthorized"
+    before = len(state.provider.calls)
+    failed = state.client.post("/chat/stream", json={**payload, "conversation_id": conv_id},
+                               headers={"Idempotency-Key": uuid4().hex})
+    assert "model_auth_failed" in failed.text and "event: done" not in failed.text
+    assert [call[1]["model"] for call in state.provider.calls[before:]] == ["choice-b"]
+    history = state.client.get(f"{conv}/messages").json()["items"]
+    turn = history[-1]["turn_id"]
+    assert history[-1]["error_code"] == "model_auth_failed"
+    assert state.client.patch(conv, json={"llm_connection_id": a["id"]}).status_code == 200
+    ordinary = state.client.post(f"{conv}/turns/{turn}/retry", json={})
+    assert "model_auth_failed" in ordinary.text and state.provider.calls[-1][1]["model"] == "choice-b"
+    assert state.client.post(f"/me/model-connections/{b['id']}/test").json()["status"] == "failed"
+    capabilities = state.client.get("/capabilities").json()
+    assert not capabilities["rag"] and capabilities["library_embedding"][kb["id"]]
+    selected = state.client.post(f"{conv}/turns/{turn}/retry", json={"use_current_model": True})
+    assert "event: done" in selected.text and state.provider.calls[-1][1]["model"] == "choice-a"
+    messages = state.client.get(f"{conv}/messages").json()["items"]
+    assert len(messages) == 4 and messages[-1]["model_profile"] == "choice-a"
+    assert [m["id"] for m in history] == [m["id"] for m in messages]
+
+    state.client.patch(f"/me/model-connections/{a['id']}", json={**body_a, "api_key": "rotated-test-key"})
+    assert state.client.post("/chat/stream", json={**payload, "conversation_id": conv_id},
+                             headers={"Idempotency-Key": uuid4().hex}).json()["code"] == "model_test_required"
+    assert state.client.delete(f"/me/model-connections/{a['id']}").status_code == 204
+    assert state.client.get(conv).json()["llm_connection_id"] == a["id"]
+    assert state.client.post("/chat/stream", json={**payload, "conversation_id": conv_id},
+                             headers={"Idempotency-Key": uuid4().hex}).json()["code"] == "chat_model_unavailable"
+    assert state.client.patch(conv, json={"llm_connection_id": None}).json()["llm_connection_id"] is None
 
 
 def test_encryption_ownership_defaults_and_revision(connections_env):

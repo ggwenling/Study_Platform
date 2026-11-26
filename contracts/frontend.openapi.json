@@ -935,7 +935,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ConversationBody"
+                "$ref": "#/components/schemas/UpdateConversationBody"
               }
             }
           }
@@ -3259,6 +3259,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RetryTurnBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -4020,6 +4037,86 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/me/model-connections/providers": {
+      "get": {
+        "tags": [
+          "model connections"
+        ],
+        "summary": "List Providers",
+        "operationId": "list_providers_api_v1_me_model_connections_providers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ModelProvider"
+                  },
+                  "type": "array",
+                  "title": "Response List Providers Api V1 Me Model Connections Providers Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/model-connections/discover": {
+      "post": {
+        "tags": [
+          "model connections"
+        ],
+        "summary": "Discover",
+        "operationId": "discover_api_v1_me_model_connections_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoveryInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DiscoveredModel"
+                  },
+                  "type": "array",
+                  "title": "Response Discover Api V1 Me Model Connections Discover Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/v1/me/model-connections": {
@@ -5689,6 +5786,36 @@
             "type": "object",
             "title": "Library Rag"
           },
+          "library_embedding": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Library Embedding"
+          },
+          "has_personal_models": {
+            "type": "boolean",
+            "title": "Has Personal Models",
+            "default": false
+          },
+          "chat_models": {
+            "items": {
+              "$ref": "#/components/schemas/ChatModelDTO"
+            },
+            "type": "array",
+            "title": "Chat Models"
+          },
+          "platform_chat_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Chat Model"
+          },
           "ocr": {
             "type": "boolean",
             "title": "Ocr"
@@ -5760,6 +5887,52 @@
         ],
         "title": "CapabilitiesDTO"
       },
+      "ChatModelDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "model",
+          "status",
+          "is_default",
+          "error_code"
+        ],
+        "title": "ChatModelDTO"
+      },
       "ChatRequest": {
         "properties": {
           "content": {
@@ -5779,6 +5952,18 @@
               }
             ],
             "title": "Conversation Id"
+          },
+          "llm_connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Connection Id"
           },
           "knowledge_base_id": {
             "type": "string",
@@ -6315,19 +6500,6 @@
         ],
         "title": "ConversationArchiveBody"
       },
-      "ConversationBody": {
-        "properties": {
-          "title": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Title",
-            "default": "新对话"
-          }
-        },
-        "type": "object",
-        "title": "ConversationBody"
-      },
       "ConversationDTO": {
         "properties": {
           "id": {
@@ -6379,6 +6551,18 @@
               }
             ],
             "title": "Archived At"
+          },
+          "llm_connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Connection Id"
           }
         },
         "type": "object",
@@ -6441,6 +6625,18 @@
               }
             ],
             "title": "Project Knowledge Base Id"
+          },
+          "llm_connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Connection Id"
           }
         },
         "type": "object",
@@ -6523,6 +6719,18 @@
             },
             "type": "array",
             "title": "Activity"
+          },
+          "recent_chat_library_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Chat Library Id"
           }
         },
         "type": "object",
@@ -6557,6 +6765,53 @@
           "connection_id"
         ],
         "title": "DefaultInput"
+      },
+      "DiscoveredModel": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "DiscoveredModel"
+      },
+      "DiscoveryInput": {
+        "properties": {
+          "base_url": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Base Url"
+          },
+          "api_key": {
+            "type": "string",
+            "maxLength": 4096,
+            "format": "password",
+            "title": "Api Key",
+            "writeOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_url",
+          "api_key"
+        ],
+        "title": "DiscoveryInput"
       },
       "DocumentLocation": {
         "properties": {
@@ -8080,6 +8335,43 @@
             },
             "type": "array",
             "title": "Citations"
+          },
+          "model_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Profile"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "failure_stage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "retrieval",
+                  "generation"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Stage"
           }
         },
         "type": "object",
@@ -8125,6 +8417,84 @@
           "next_cursor"
         ],
         "title": "MessagePage"
+      },
+      "ModelProvider": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "models": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "propertyNames": {
+              "enum": [
+                "llm",
+                "embedding",
+                "vision",
+                "rerank"
+              ]
+            },
+            "type": "object",
+            "title": "Models"
+          },
+          "discovery": {
+            "type": "boolean",
+            "title": "Discovery",
+            "default": false
+          },
+          "rerank_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Path"
+          },
+          "key_label": {
+            "type": "string",
+            "title": "Key Label",
+            "default": "API Key"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "base_url",
+          "models"
+        ],
+        "title": "ModelProvider"
       },
       "ModelUsageSummaryDTO": {
         "properties": {
@@ -8692,6 +9062,17 @@
         ],
         "title": "RetrievalUpdate"
       },
+      "RetryTurnBody": {
+        "properties": {
+          "use_current_model": {
+            "type": "boolean",
+            "title": "Use Current Model",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "RetryTurnBody"
+      },
       "RetryWrongBody": {
         "properties": {
           "wrong_ids": {
@@ -9020,6 +9401,31 @@
           "error_code"
         ],
         "title": "TurnDTO"
+      },
+      "UpdateConversationBody": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "default": "新对话"
+          },
+          "llm_connection_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Connection Id"
+          }
+        },
+        "type": "object",
+        "title": "UpdateConversationBody"
       },
       "UpdateNoteBody": {
         "properties": {

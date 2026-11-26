@@ -4,6 +4,7 @@ import type { ReindexStatus, ReindexSubmitted } from './types'
 import type { AiGenerationJobType, AiJob, SubmittedAiJob } from './types'
 import type { PendingQuiz } from './types'
 import type { ModelConnection, ModelConnections, ModelConnectionInput, LibraryOverview, Fragment, FragmentPage, DocumentLocation, ClassificationState, ClassificationDecision, Capabilities, ChatRequest, Citation, Conversation, Dashboard, FlashcardDeckDetail, FlashcardDeckSummary, FlashcardItem, HitTestResponse, Job, KnowledgeBase, KnowledgeBaseInput, LearningAttempt, LearningAttemptSummary, LearningResponseResult, Material, MaterialPreview, MaterialReader, Message, ModelUsageSummary, Page, RetrievalSettings, SearchItem, StudioArtifactKind, StudyNote, Turn, UploadResult, User, WrongQuestionItem } from './types'
+import type { DiscoveredModel, ModelProvider } from './types'
 
 const base = '/api/v1'
 const pathId = (id: string) => encodeURIComponent(id)
@@ -193,6 +194,9 @@ const query = (values: Record<string, string | undefined>) => {
 export const api = {
   me: () => request<User>('/me'),
   modelConnections: () => request<ModelConnections>('/me/model-connections'),
+  modelProviders: () => request<ModelProvider[]>('/me/model-connections/providers'),
+  discoverModels: (base_url: string, api_key: string, signal?: AbortSignal) =>
+    request<DiscoveredModel[]>('/me/model-connections/discover', { ...json('POST', { base_url, api_key }), signal }),
   createModelConnection: (body: ModelConnectionInput) => request<ModelConnection>('/me/model-connections', json('POST', body)),
   updateModelConnection: (id: string, body: ModelConnectionInput) => request<ModelConnection>(`/me/model-connections/${pathId(id)}`, json('PATCH', body)),
   deleteModelConnection: (id: string) => request<void>(`/me/model-connections/${pathId(id)}`, json('DELETE')),
@@ -287,9 +291,9 @@ export const api = {
   pageImage: (id: string, page: number) => checkedFetch(`/material-versions/${pathId(id)}/pages/${page}`),
   source: (id: string) => request<Citation>(`/sources/${pathId(id)}`),
   conversations: (cursor?: string, project?: string, archived = false) => sharedRead<Page<Conversation>>('/conversations' + query({ cursor, project_knowledge_base_id: project, archived: archived ? 'true' : undefined })),
-  createConversation: (body: { title?: string; project_knowledge_base_id?: string } = {}) => request<Conversation>('/conversations', json('POST', body)),
+  createConversation: (body: { title?: string; project_knowledge_base_id?: string; llm_connection_id?: string | null } = {}) => request<Conversation>('/conversations', json('POST', body)),
   conversation: (id: string) => request<Conversation>(`/conversations/${pathId(id)}`),
-  updateConversation: (id: string, body: { title: string }) => request<Conversation>(`/conversations/${pathId(id)}`, json('PATCH', body)),
+  updateConversation: (id: string, body: { title?: string; llm_connection_id?: string | null }) => request<Conversation>(`/conversations/${pathId(id)}`, json('PATCH', body)),
   deleteConversation: (id: string) => request<void>(`/conversations/${pathId(id)}`, json('DELETE')),
   archiveConversation: (id: string, archived: boolean) => request<Conversation>(`/conversations/${pathId(id)}/archive`, json('PATCH', { archived })),
   messages: (id: string, cursor?: string, order: 'asc' | 'desc' = 'asc', signal?: AbortSignal) =>
@@ -444,7 +448,9 @@ async function* stream(path: string, body: unknown, idempotencyKey?: string, sig
   if (!complete) throw new ApiError({ code: 'stream_interrupted', message: 'Chat stream ended before completion', retryable: true, turn_id: turnId })
 }
 export function streamChat(body: ChatRequest, idempotencyKey: string, signal?: AbortSignal) { return stream('/chat/stream', body, idempotencyKey, signal) }
-export function retryTurn(conversationId: string, turnId: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/retry', {}, undefined, signal) }
+export function retryTurn(conversationId: string, turnId: string, signal?: AbortSignal, useCurrentModel = false) {
+  return stream(turnPath(conversationId, turnId) + '/retry', useCurrentModel ? { use_current_model: true } : {}, undefined, signal)
+}
 export function editTurn(conversationId: string, turnId: string, content: string, signal?: AbortSignal) { return stream(turnPath(conversationId, turnId) + '/edit', { content }, undefined, signal) }
 
 export function uploadMaterial(knowledgeBaseId: string, file: File, onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal, extractionMode: ExtractionMode = 'ocr'): Promise<UploadResult> {

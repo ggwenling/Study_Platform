@@ -313,7 +313,7 @@ function Shell({ onLogout, onPrivateLink, privatePage, sessionState, retrySessio
                   <Route path="/history" element={<HistoryPage />} />
                   <Route path="/knowledge" element={<Library preferredId={libraryId ?? undefined} />} />
                   <Route path="/learning" element={<LearningRoute notify={notify} />} />
-                  <Route path="/settings" element={<SettingsPage user={user} requireLogin={requireLogin} />} />
+                  <Route path="/settings" element={<SettingsPage user={user} requireLogin={requireLogin} openSetup={new URLSearchParams(search).get('configure') === 'models'} />} />
                   <Route path="/__visual/orb" element={<Suspense fallback={<div className="placeholder-page" role="status">正在加载…</div>}><VisualOrbSmoke /></Suspense>} />
                   <Route path="*" element={<Placeholder title="页面不存在" description="请检查访问地址，或返回首页。" />} />
                 </Routes>}
