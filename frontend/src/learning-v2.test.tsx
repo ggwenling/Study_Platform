@@ -245,7 +245,7 @@ describe('Learning 2.0 workflow', () => {
 
     async function upload(fileName: string) {
       const file = new File(['image'], fileName, { type: 'image/png' })
-      const input = node.querySelector<HTMLInputElement>('.learning-upload input')!
+      const input = node.querySelector<HTMLInputElement>('.learning-answer-submit-row input[type=file]')!
       Object.defineProperty(input, 'files', { configurable: true, value: [file] })
       await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
       return file
@@ -513,6 +513,40 @@ describe('Learning 2.0 workflow', () => {
     expect(node.textContent).toContain('错题重练')
   })
 
+  const readyMaterial = { id: 'm1', knowledge_base_id: 'kb-1', title: '讲义', mime_type: 'text/plain', byte_size: 1, status: 'ready', version_id: 'v', job_id: null, created_at: '', error_code: null, error_message: null }
+
+  it.each([{ rows: [] }, { rows: [{ ...readyMaterial, status: 'processing' }] }])('blocks quiz generation without ready materials ($rows)', async ({ rows }) => {
+    vi.mocked(api.materials).mockResolvedValue({ items: rows, next_cursor: null })
+    await render(<Learning knowledgeBases={[{ id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' }]} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+
+    const generate = findButtonContaining('从当前库出题')!
+    await act(async () => generate.click())
+    expect(api.learning.generateQuiz).not.toHaveBeenCalled()
+    expect(generate.disabled).toBe(true)
+    expect(node.textContent).toContain('当前库暂无就绪资料')
+  })
+
+  it('blocks quiz generation while the selected library is loading and when that load fails', async () => {
+    const libraries = [
+      { id: 'kb-1', name: '高数资料库', description: null, created_at: '', updated_at: '' },
+      { id: 'kb-2', name: '另一个库', description: null, created_at: '', updated_at: '' },
+    ]
+    let failLoad!: (error: Error) => void
+    vi.mocked(api.materials).mockResolvedValueOnce({ items: [readyMaterial], next_cursor: null })
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { failLoad = reject }))
+    await render(<Learning knowledgeBases={libraries} notify={vi.fn()} overview={testOverview} refreshOverview={refreshOverview} />)
+    const generate = findButtonContaining('从当前库出题')!
+    expect(generate.disabled).toBe(false)
+
+    await changeSelect('当前知识库', 'kb-2')
+    expect(generate.disabled).toBe(true)
+    await act(async () => failLoad(new Error('请求失败')))
+    expect(node.textContent).toContain('资料状态读取失败')
+    expect(generate.disabled).toBe(true)
+    await act(async () => generate.click())
+    expect(api.learning.generateQuiz).not.toHaveBeenCalled()
+  })
+
   it('keeps an empty selected scope blocked until using the whole library and caps selection at 50', async () => {
     const rows = Array.from({ length: 51 }, (_, i) => ({ id: `m${i}`, knowledge_base_id: 'kb-1', title: `资料${i}`, mime_type: 'text/plain', byte_size: 1, status: 'ready', version_id: 'v', job_id: null, created_at: '', error_code: null, error_message: null }))
     vi.mocked(api.materials).mockResolvedValue({ items: rows, next_cursor: null })
@@ -525,13 +559,14 @@ describe('Learning 2.0 workflow', () => {
     for (const box of boxes.slice(0, 50)) await act(async () => box.click())
     await act(async () => findButtonContaining('从当前库出题')!.click())
     expect(api.learning.generateQuiz).not.toHaveBeenCalled()
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining('所选资料范围尚未确认'))
+    expect(findButtonContaining('从当前库出题')!.disabled).toBe(true)
     await act(async () => findButtonContaining('使用全库')!.click())
     await act(async () => findButtonContaining('从当前库出题')!.click())
     expect(api.learning.generateQuiz).toHaveBeenCalledWith('kb-1', 5, expect.objectContaining({ material_ids: null }))
   })
 
   it('queues quiz generation and tracks its progress instead of starting an attempt inline', async () => {
+    vi.mocked(api.materials).mockResolvedValue({ items: [readyMaterial], next_cursor: null })
     const job = {
       job_id: 'quiz-job', job_type: 'quiz' as const, status: 'queued' as const,
       knowledge_base_id: 'kb-1', title: '高数资料库 · 练习题',

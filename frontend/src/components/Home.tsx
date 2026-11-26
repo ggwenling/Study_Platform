@@ -10,6 +10,8 @@ import { useWorkspace } from '../WorkspaceData'
 import { ActivityHeatmap } from '@/components/arc/activity-heatmap/activity-heatmap'
 import { useDisclosurePreference } from '../useDisclosurePreference'
 
+const compactOverviewQuery = '(max-width: 1080px)'
+
 const shortcuts = [
   { label: '基于资料提问', description: '从知识库查找答案', icon: MessageCircle },
   { label: '总结与提炼', description: '整理重点，提炼要点', icon: FileText },
@@ -65,21 +67,39 @@ export function Home() {
   const composer = useRef<ComposerHandle>(null)
   const [modelId, setModelId] = useState<string | null>(null)
   const { overview, user, capabilities, loading, requireLogin } = useWorkspace()
-  const [panelOpen, setPanelOpen] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:overview`, true)
+  const [desktopPanelOpen, setDesktopPanelOpen] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:overview`, true)
+  const [compact, setCompact] = useState(() => window.matchMedia(compactOverviewQuery).matches)
+  const [compactPanelOpen, setCompactPanelOpen] = useState(false)
+  const panelOpen = compact ? compactPanelOpen : desktopPanelOpen
+  const setPanelOpen = compact ? setCompactPanelOpen : setDesktopPanelOpen
   const [showModelSetup, setShowModelSetup] = useDisclosurePreference(`knowloop:${user?.id ?? 'guest'}:model-setup`, true)
   const panelContent = useRef<HTMLDivElement>(null)
+  const panelToggle = useRef<HTMLButtonElement>(null)
   const [panelWidth, setPanelWidth] = useState(224)
+  useEffect(() => {
+    const media = window.matchMedia(compactOverviewQuery)
+    const update = () => setCompact(media.matches)
+    media.addEventListener('change', update)
+    update()
+    return () => media.removeEventListener('change', update)
+  }, [])
   useLayoutEffect(() => {
+    if (compact) return
     const node = panelContent.current!
     const measure = () => setPanelWidth(node.getBoundingClientRect().width)
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(node)
     return () => observer.disconnect()
-  }, [])
+  }, [compact])
 
   return (
-    <div className="home" data-overview={panelOpen}>
+    <div className="home" onKeyDown={(event) => {
+      if (event.defaultPrevented || event.key !== 'Escape' || !compact || !panelOpen) return
+      event.preventDefault()
+      if (panelContent.current?.contains(document.activeElement)) panelToggle.current?.focus()
+      setCompactPanelOpen(false)
+    }}>
       <div className="home-hero">
         <HomeOrbit />
         <div className="home-content">
@@ -121,9 +141,9 @@ export function Home() {
           </div>
         </div>
       </div>
-      <motion.aside initial={false} animate={{ width: panelOpen ? panelWidth : 36 }} transition={{ duration: reduced ? 0 : .28, ease: [.22, 1, .36, 1] }} className="home-panel" aria-label="资料概况">
-        <Button className="overview-toggle" variant="ghost" size="sm" aria-label={panelOpen ? '收起资料概况' : '展开资料概况'} aria-expanded={panelOpen} aria-controls="home-overview" onClick={() => setPanelOpen(!panelOpen)}><PanelRight size={18} /></Button>
-        <motion.div ref={panelContent} className="home-panel-inner" id="home-overview" inert={!panelOpen} aria-hidden={!panelOpen} initial={false} animate={{ opacity: panelOpen ? 1 : 0, x: panelOpen ? 0 : 12 }} transition={{ duration: reduced ? 0 : .2 }}>
+      <motion.aside initial={false} animate={{ width: compact ? '100%' : panelOpen ? panelWidth : 46 }} transition={{ duration: compact || reduced ? 0 : .28, ease: [.22, 1, .36, 1] }} className="home-panel" aria-label="资料概况">
+        <Button ref={panelToggle} className="overview-toggle" variant="ghost" size="sm" aria-label={panelOpen ? '收起资料概况' : '展开资料概况'} aria-expanded={panelOpen} aria-controls="home-overview" onClick={() => setPanelOpen(!panelOpen)}><PanelRight size={18} />{compact && <span>资料概况</span>}</Button>
+        <motion.div ref={panelContent} className="home-panel-inner" id="home-overview" hidden={compact && !panelOpen} inert={!panelOpen} aria-hidden={!panelOpen} initial={false} animate={{ opacity: panelOpen ? 1 : 0, x: panelOpen || compact ? 0 : 12 }} transition={{ duration: compact || reduced ? 0 : .2 }}>
         <section>
           <h2><Link to="/history">资料活动 <ChevronRight size={16} /></Link></h2>
           {overview?.activity.some((day) => day.count > 0)
