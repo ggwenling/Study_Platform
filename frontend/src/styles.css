@@ -708,6 +708,7 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 
 /* Keep navigation and the account menu outside the scrollable projects list. */
 .sidebar-sections {
+  --sidebar-heading-action-size: 28px;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -738,17 +739,24 @@ a.composer-hint { text-decoration: underline; text-underline-offset: 3px; }
 .sidebar-sections h3 { font-size: var(--text-sm); }
 .sidebar-sections [data-state] { border: 0; }
 .sidebar-sections h3 > button { min-height: 38px; gap: 8px; }
+.recent h3 > button { min-block-size: max(38px, var(--sidebar-heading-action-size)); }
+.recent h3 > button > span:last-child { inline-size: var(--sidebar-heading-action-size); justify-content: center; }
 .sidebar-sections [role="region"] > div { padding: 0 0 8px; }
 .sidebar-sections [data-orientation="vertical"] { border: 0; }
 .projects { margin: 16px 8px 0; }
 .projects-heading { display: flex; align-items: center; justify-content: space-between; }
 .projects-heading h2 { font-size: var(--text-sm); }
+.projects-heading > button { inline-size: var(--sidebar-heading-action-size); min-block-size: var(--sidebar-heading-action-size); padding: 0; }
 .projects > p { font-size: var(--text-xs); line-height: 1.6; margin-top: 8px; }
 .project-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-folder h3 > button { gap: 4px; }
 .project-folder h3 > button > span:first-child { flex: 1; }
 .project-compose:is(button) { flex: none; width: 28px; min-width: 28px; min-height: 28px; padding: 0; }
-@media (pointer: coarse) { .project-compose:is(button) { min-width: 44px; min-height: 44px; } }
+@media (pointer: coarse) {
+  .sidebar-sections { --sidebar-heading-action-size: 44px; }
+  .projects-heading > button::after { content: none; }
+  .project-compose:is(button) { min-width: 44px; min-height: 44px; }
+}
 .project-conversations { margin-bottom: 8px; }
 .project-conversations > p { font-size: var(--text-xs); padding: 8px 0; }
 .fading-input { position: relative; }

@@ -108,6 +108,13 @@ test.describe.serial('isolated synthetic user journey', () => {
       await shot(page, '02-registered-home')
       await page.reload()
       await expect(page.getByRole('button', { name: '账户菜单，验收甲' })).toBeVisible()
+      const recentArrow = page.getByRole('button', { name: '最近对话', exact: true }).locator('svg')
+      const createIcon = page.getByRole('button', { name: '新建项目', exact: true }).locator('svg')
+      const centerX = (icon: typeof recentArrow) => icon.evaluate((svg) => {
+        const box = svg.getBoundingClientRect()
+        return box.left + box.width / 2
+      })
+      await expect.poll(async () => Math.abs(await centerX(recentArrow) - await centerX(createIcon))).toBeLessThan(1)
     })
   })
 
@@ -136,6 +143,18 @@ test.describe.serial('isolated synthetic user journey', () => {
       state.contentKbId = new URL(page.url()).searchParams.get('id') || ''
       expect(state.contentKbId).toBeTruthy()
 
+      const importButton = page.locator('.library-header').getByRole('button', { name: '导入资料', exact: true })
+      const chooseFiles = page.getByRole('button', { name: '选择文件', exact: true })
+      await expect(importButton).toBeVisible()
+      await expect(chooseFiles).toBeVisible()
+      await shot(page, '04-library-empty-import')
+      const viewport = page.viewportSize()!
+      await page.setViewportSize({ width: 390, height: 844 })
+      await expect(importButton).toBeInViewport()
+      const [emptyChooser] = await Promise.all([page.waitForEvent('filechooser'), chooseFiles.click()])
+      await emptyChooser.setFiles([])
+      await page.setViewportSize(viewport)
+
       const badDir = path.join(repoRoot, '.local/ux-acceptance/tmp')
       fs.mkdirSync(badDir, { recursive: true })
       const emptyFile = path.join(badDir, 'empty.txt')
@@ -148,10 +167,8 @@ test.describe.serial('isolated synthetic user journey', () => {
       await input.setInputFiles(emptyFile)
       await expect(page.getByText('「empty.txt」内容为空。')).toBeVisible()
 
-      const chooserPromise = page.waitForEvent('filechooser')
-      await page.getByRole('button', { name: '知识库操作' }).click()
-      await page.getByRole('menuitem', { name: '导入资料' }).click()
-      await (await chooserPromise).setFiles(fixturePath)
+      const [chooser] = await Promise.all([page.waitForEvent('filechooser'), importButton.press('Enter')])
+      await chooser.setFiles(fixturePath)
       await expect(page.getByText(`「${fixtureName}」已提交至「${libraryName}」`)).toBeVisible()
 
       const token = await loginApi(request, state.emailA)

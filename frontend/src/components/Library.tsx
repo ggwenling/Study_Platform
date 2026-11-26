@@ -239,6 +239,7 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
 
   const reloadData = () => setReload((value) => value + 1)
   const addFiles = (files: FileList | File[]) => fileImport.addFiles(files, { id, name: library.name })
+  const chooseFiles = () => fileInput.current?.click()
   const failedUploads = uploadQueue.items.filter((row) => row.status === 'failed')
 
   function onDragOver(event: DragEvent<HTMLElement>) {
@@ -424,11 +425,11 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
           </p>}
         </div>
         <div className="library-header-actions">
+          <Button type="button" size="sm" onClick={chooseFiles}><Upload size={16} aria-hidden="true" />导入资料</Button>
+          <Button size="sm" variant="secondary" onClick={() => setWebClipOpen(true)}><Globe size={16} />导入网页</Button>
           <Button size="sm" variant="secondary" onClick={() => setPanel('edit')}><Pencil size={16} />编辑</Button>
           <Button size="sm" variant="secondary" loading={busy === 'sync'} disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步</Button>
-          <Button size="sm" variant="secondary" onClick={() => setWebClipOpen(true)}><Globe size={16} />导入网页</Button>
           <DropdownMenu label="知识库操作" icon={<Ellipsis size={17} />} iconOnly disabled={Boolean(busy)} items={[
-            { label: '导入资料', icon: <Upload size={16} />, onSelect: () => fileInput.current?.click() },
             { label: '随手贴文本', icon: <FilePlus2 size={16} />, onSelect: () => setPasteOpen(true) },
             { label: '管理资料', icon: <FileText size={16} />, onSelect: () => { setConfirmMaterial(null); setPanel('files') } },
             { label: '重建索引', icon: <RefreshCw size={16} />, onSelect: () => setReindexOpen(true) },
@@ -477,7 +478,10 @@ function LibraryDetail({ library, libraries, select, create, onDeleted, fragment
               {materials.length > 0 && <Button size="sm" variant="ghost" onClick={() => { setConfirmMaterial(null); setPanel('files') }}>管理资料</Button>}
             </h3>
             {materials.length ? <TreeView density="compact" nodes={roots} expandedIds={expanded} onExpandedChange={setExpanded} onSelect={chooseNode} aria-label="文档层级" />
-              : <p className="muted library-empty">{overview ? '暂无资料。可从页头菜单导入。' : '正在读取资料…'}</p>}
+              : <div className="library-import-empty">
+                <p>选择本机文件，或将文件拖到此页。</p>
+                <Button type="button" size="sm" variant="secondary" onClick={chooseFiles}>选择文件</Button>
+              </div>}
           </div>
           <div className="library-metrics">
             {cards.map((card) => <Button key={card.label} variant="secondary" className="library-metric" onClick={card.action}>
