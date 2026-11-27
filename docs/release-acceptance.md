@@ -351,4 +351,54 @@ uv run python ../infra/release/drill_isolated_env.py
 
 `610fe59` 之后 Evaluation V2 的 schema 是 `evaluation-v2.3`。第 1 节的 `evaluation-v2.2` 只属于 `3bd2585`。检索默认仍是 top_k 10、candidate 20、lexical 0、rewrite false；这次拣入没有改 `config.py`。
 
-RELEASE_READY 仍是 false。sources 目录外读取的修复已经在 `78edfbe`。第 7 节和 `infra/release/drill-evidence.json` 记录的是产品快照 `3bd2585` 上的演练，不是本候选的复跑。本环境的 `16/main` 正在监听，没有启动 55432。验收候选包含这些脚本，但不是 merge、tag 或部署许可，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。复用只读也不是专用角色，库属主可以关掉会话只读。`binding=database` 不核对 `package.sha256`。
+RELEASE_READY 仍是 false。sources 目录外读取的修复已经在 `78edfbe`。第 7 节描述的是产品快照 `3bd2585` 上的演练；那份 JSON 留在提交 `ac8d8bf` 里，不能当作下面这次候选复跑。验收候选包含这些脚本，但不是 merge、tag 或部署许可，也没有付费调用。标题和正文里的 `[S#]` 只在提示词展示时改成 `(S#)`，这不是完整的提示词注入防护。复用只读也不是专用角色，库属主可以关掉会话只读。`binding=database` 不核对 `package.sha256`。
+
+## 10. 候选 `ac8d8bf` 的隔离复跑
+
+被测产品树是 `ac8d8bf6079834c4a9d6c28e407f38a546a659fb`。证据提交是另一次提交，不移动 `cursor/deep-testing-prep-9b8e`。`backend` 与 `frontend` 相对这个产品树没有改动。演练在原有 `16/releasegate` 上执行，`listen_addresses=127.0.0.1`，端口 55432；`16/main` 保持 down。没有重建集群，也没有对已有数据的 gate 库做 downgrade。
+
+`2026-11-24T05:53:59Z` 运行 `infra/release/drill_isolated_env.py`，`drill=pass`，`release_ready=false`。那次 JSON 在证据提交 `a0b290c33b9e533bda8322a067eefc12ffcbfe1d`，`product_tree_sha` 是 `ac8d8bf`。它不是 `3bd2585`，也不是第 11 节的新产品候选。
+
+- 空库 `study_release_migrate_test`：`upgrade head` → `downgrade base` → `upgrade head`，用户 0 行，revision 回到 `0016_rerank_and_kb_retrieval`。
+- gate 与 restore 的 revision 都是 `0016_rerank_and_kb_retrieval`，与代码 head 一致。`study` 与 `study_graph` 各 48 张表，两边表名集合相同。
+- 合成用户 `release-gate-user@example.test`、知识库 `Release Gate Synthetic`、checkpoint `release-gate-synthetic` 在源库和恢复库都是 1。图角色能读 marker。
+- 存储内容 SHA-256 仍是 `0507d090bef861772b8bb25303edabe24481d3d45f7bf5a474cae3e9fd7e3845`，恢复后的文件哈希与之相同。
+- API `127.0.0.1:18000` 启动、停止、再启动时 `/health/live` 与 `/health/ready` 都是 200。worker 单独运行时有 1 条 `study_release_app` 会话。结束后 API 与 worker 已退出。把 API 指到恢复库时 `/health/ready` 也是 200。
+- 没有模型调用。密码没有写入证据。
+
+同一次读取的候选 CI，不再轮询：
+
+| 运行 | 事件 | 结论 |
+| --- | --- | --- |
+| [45336065785](https://github.com/ggwenling/Study_Platform/actions/runs/45336065785) | push `ac8d8bf` | success。Frontend `138248319497` 05:50:08–05:50:48；Backend `138248319777` 05:50:07–05:51:56 |
+| [45336071099](https://github.com/ggwenling/Study_Platform/actions/runs/45336071099) | pull_request `ac8d8bf` | success。Backend `138248337583` 05:50:10–05:51:48；Frontend `138248337889` 05:50:11–05:50:56 |
+
+这两次 CI 只说明该候选的 Backend 与 Frontend 作业通过。D review、真实 50Q 和浏览器 UX 仍是 NOT_VERIFIED。RELEASE_READY 保持 false，不代替父主放行。
+
+## 11. 候选 `783e680` 的隔离复跑
+
+被测产品树是 `783e680b3682058786a4f6511ea6010b01a42584`。证据提交是另一次提交，父级包含该产品树，但不移动 `cursor/deep-testing-prep-9b8e`。`backend` 与 `frontend` 相对这个产品树没有改动。`ac8d8bf` 上的演练仍然有效，只属于那个 SHA；不要把第 7 节的 `3bd2585` 或第 10 节的 `ac8d8bf` 写成这次结果。
+
+相对 `ac8d8bf`，产品只增加了 worker 冷导入修复和相关测试。gold、retrieval 与默认配置文件没有差异，真实 50Q 不在这个 SHA 上重建，G6 对 `783e680` 仍是 NOT_VERIFIED。
+
+`2026-11-24T06:22:49Z` 在原有 `16/releasegate` 上运行 `infra/release/drill_isolated_env.py`。`drill=pass`，`release_ready=false`。当前 `infra/release/drill-evidence.json` 的 `product_tree_sha` 是 `783e680`。没有重建集群，没有 downgrade 已有数据的 gate 库，`16/main` 保持 down，55432 只在 `127.0.0.1`。
+
+| 项 | 结果 |
+| --- | --- |
+| 空库迁移往返 | PASS。`study_release_migrate_test` 为 upgrade → downgrade base → upgrade，用户 0 行，head `0016_rerank_and_kb_retrieval` |
+| gate / restore revision | PASS。两边都是这个 head，48 张 `study`/`study_graph` 表集合一致 |
+| 合成数据 | PASS。用户、知识库、checkpoint marker 两边都在，图角色能读 marker |
+| storage | PASS。内容 SHA-256 `0507d090bef861772b8bb25303edabe24481d3d45f7bf5a474cae3e9fd7e3845` |
+| API 健康 | PASS。`127.0.0.1:18000` 启动、停止、再启动，以及指向恢复库时 `/health/ready` 都是 200 |
+| 正式 worker | PASS。直接执行 `.venv/bin/study-worker`，入口 `study_platform.cli.worker:main`，没有 `PYTHONSTARTUP`，也不是预加载 API 的 wrapper。进程保持连接并有 1 条应用会话，日志没有 ImportError |
+
+`2026-11-24T06:23:19Z` 到 `2026-11-24T06:23:26Z`，用同一产品树的正式控制台脚本再跑 `tests/unit/test_worker_cold_start.py` 和 `tests/integration/test_worker_process.py`。干净环境里 2 passed。合成任务走本地 stub，没有付费 API；临时库已删除，gate 仍是 1 个用户、revision `0016`。第一次尝试继承了演练 env 的 `ALLOWED_ORIGINS`，在启动 worker 前失败，这不是产品失败。
+
+同一次读取的候选 CI，没有循环轮询：
+
+| 运行 | 读取到的状态 |
+| --- | --- |
+| [45339464288](https://github.com/ggwenling/Study_Platform/actions/runs/45339464288) | push，completed/success。Backend `138259344583` 06:18:24–06:19:58；Frontend `138259345018` 06:18:25–06:19:02 |
+| [45339470519](https://github.com/ggwenling/Study_Platform/actions/runs/45339470519) | pull_request。运行对象当时是 in_progress。同一次作业页上 Frontend `138259366387` 与 Backend `138259366615` 都已 success，Backend 结束于 06:20:19。没有再读运行对象 |
+
+D review、真实 50Q 和浏览器 UX 仍是 NOT_VERIFIED。RELEASE_READY 保持 false，不代替父主放行。
